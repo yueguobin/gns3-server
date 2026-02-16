@@ -87,7 +87,6 @@ def create_shutdown_handler(app: FastAPI) -> Callable:
 
     async def shutdown_handler() -> None:
 
-        global auto_discover_images_task_handle
         if auto_discover_images_task_handle is not None and not auto_discover_images_task_handle.cancelled():
             auto_discover_images_task_handle.cancel()
         await HTTPClient.close_session()
