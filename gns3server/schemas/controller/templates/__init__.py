@@ -48,6 +48,9 @@ class TemplateBase(BaseModel):
     template_type: Optional[NodeType] = None
     compute_id: Optional[str] = None
     usage: Optional[str] = ""
+    vendor: Optional[str] = Field(None, description="Device vendor (e.g., Cisco, Juniper, Huawei)")
+    model: Optional[str] = Field(None, description="Device model (e.g., ISR4451-X, MX204, NE40E)")
+    netmiko_device_type: Optional[str] = Field(None, description="Netmiko device type for automation (e.g., cisco_ios, juniper_junos, huawei)")
 
 
 class TemplateCreate(TemplateBase):

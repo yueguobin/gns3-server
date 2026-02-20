@@ -36,6 +36,9 @@ class Template(BaseTable):
     builtin = Column(Boolean, default=False)
     usage = Column(String)
     template_type = Column(String)
+    vendor = Column(String)
+    model = Column(String)
+    netmiko_device_type = Column(String)
     compute_id = Column(String)
     images = relationship("Image", secondary=image_template_map, back_populates="templates")
 
