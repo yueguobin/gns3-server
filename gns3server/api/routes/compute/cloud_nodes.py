@@ -176,6 +176,7 @@ async def update_cloud_nio(
     """
 
     nio = node.get_nio(port_number)
+    nio.filters.clear()
     if nio_data.filters:
         nio.filters = nio_data.filters
     await node.update_nio(port_number, nio)

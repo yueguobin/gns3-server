@@ -235,6 +235,7 @@ async def update_vpcs_node_nio(
     """
 
     nio = node.get_nio(port_number)
+    nio.filters.clear()
     if nio_data.filters:
         nio.filters = nio_data.filters
     await node.port_update_nio_binding(port_number, nio)
