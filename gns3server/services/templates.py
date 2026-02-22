@@ -197,7 +197,7 @@ class TemplatesService:
 
         images_to_add_to_template = []
         if template_type == "dynamips":
-            if settings["image"]:
+            if settings.get("image"):
                 image = await self._find_image(settings["image"])
                 if image.image_type != "ios":
                     raise ControllerBadRequestError(
@@ -205,7 +205,7 @@ class TemplatesService:
                     )
                 images_to_add_to_template.append(image)
         elif template_type == "iou":
-            if settings["path"]:
+            if settings.get("path"):
                 image = await self._find_image(settings["path"])
                 if image.image_type != "iou":
                     raise ControllerBadRequestError(
