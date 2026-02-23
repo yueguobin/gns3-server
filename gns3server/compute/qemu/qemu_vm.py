@@ -1744,11 +1744,14 @@ class QemuVM(BaseNode):
         :param extend: new size
         """
 
+        if self.is_running():
+            raise QemuError(f"Cannot resize '{disk_name}' while the VM is running")
+
         try:
             qemu_img_path = self._get_qemu_img()
             disk_path = os.path.join(self.working_dir, disk_name)
             if not os.path.exists(disk_path):
-                raise QemuError(f"Qemu disk image '{disk_name}' does not exist")
+                raise QemuError(f"Qemu disk image '{disk_name}' does not exist in the working directory")
 
             command = [qemu_img_path, "resize", disk_path, f"+{extend}M"]
             retcode = await self._qemu_img_exec(command)
@@ -1770,7 +1773,7 @@ class QemuVM(BaseNode):
 
         disk_path = os.path.join(self.working_dir, disk_name)
         if not os.path.exists(disk_path):
-            raise QemuError(f"Qemu disk image '{disk_name}' does not exist")
+            raise QemuError(f"Qemu disk image '{disk_name}' does not exist in the working directory")
 
         try:
             os.remove(disk_path)
@@ -2258,24 +2261,6 @@ class QemuVM(BaseNode):
 
         return options
 
-    async def resize_disk(self, drive_name, extend):
-
-        if self.is_running():
-            raise QemuError(f"Cannot resize {drive_name} while the VM is running")
-
-        if self.linked_clone:
-            disk_image_path = os.path.join(self.working_dir, f"{drive_name}_disk.qcow2")
-            if not os.path.exists(disk_image_path):
-                disk_image = getattr(self, f"_{drive_name}_disk_image")
-                await self._create_linked_clone(drive_name, disk_image, disk_image_path)
-        else:
-            disk_image_path = getattr(self, f"{drive_name}_disk_image")
-
-        if not os.path.exists(disk_image_path):
-            raise QemuError(f"Disk path '{disk_image_path}' does not exist")
-        qemu_img_path = self._get_qemu_img()
-        await self.manager.resize_disk(qemu_img_path, disk_image_path, extend)
-
     def _cdrom_option(self):
 
         options = []
@@ -2716,13 +2701,14 @@ class QemuVM(BaseNode):
                 continue
             answer[f"hd{drive}_disk_image"] = self.manager.get_relative_image_path(disk_image, self.working_dir)
             answer[f"hd{drive}_disk_image_md5sum"] = md5sum(disk_image, self.working_dir)
-
             local_disk = os.path.join(self.working_dir, f"hd{drive}_disk.qcow2")
             if os.path.exists(local_disk):
                 try:
                     qcow2 = Qcow2(local_disk)
                     if qcow2.backing_file:
-                        answer[f"hd{drive}_disk_image_backed"] = os.path.basename(local_disk)
+                        answer[f"hd{drive}_disk_image"] = os.path.basename(local_disk)
+                        answer[f"hd{drive}_disk_image_md5sum"] = md5sum(local_disk, self.working_dir)
+                        answer[f"hd{drive}_disk_image_backing_file"] = os.path.basename(qcow2.backing_file)
                 except (Qcow2Error, OSError) as e:
                     log.error(f"Could not read qcow2 disk image '{local_disk}': {e}")
                     continue
