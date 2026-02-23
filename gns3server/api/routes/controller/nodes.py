@@ -137,7 +137,7 @@ async def create_node(node_data: schemas.NodeCreate, project: Project = Depends(
 )
 def get_nodes(
     project: Project = Depends(dep_project),
-    tags: Optional[List[str]] = Query(None, description="Filter by tags (e.g., tags=vendor:cisco&tags=model:7200)")
+    tags: Optional[List[str]] = Query(None, description="Filter by tags (e.g. tags=vendor:cisco&tags=model:7200)")
 ) -> List[schemas.Node]:
     """
     Return all nodes belonging to a given project.
@@ -145,7 +145,7 @@ def get_nodes(
     Required privilege: Node.Audit
 
     Query Parameters:
-    - tags: Filter by tags in format "key:value". Multiple tags are ANDed together.
+    - tags: Filter by tags. Multiple tags are ANDed together.
             Example: ?tags=vendor:cisco&tags=model:7200
     """
 
@@ -155,29 +155,19 @@ def get_nodes(
     else:
         nodes = [v.asdict() for v in project.nodes.values()]
 
-    # Filter by tags if provided
+    # Filter by tags if provided (all filter tags have to match the node tags)
     if tags:
         filtered_nodes = []
         for node in nodes:
-            node_dict = node.asdict() if hasattr(node, 'asdict') else node
-            node_tags = node_dict.get("tags") or {}
-            # Check if all tag filters match
+            node_tags = node.get("tags") or []
             match = True
             for tag_filter in tags:
-                if ":" in tag_filter:
-                    key, value = tag_filter.split(":", 1)
-                    if node_tags.get(key) != value:
-                        match = False
-                        break
-                else:
-                    # Check if key exists
-                    if tag_filter not in node_tags:
-                        match = False
-                        break
+                if tag_filter not in node_tags:
+                    match = False
+                    break
             if match:
                 filtered_nodes.append(node)
-        nodes = filtered_nodes
-
+        return filtered_nodes
     return nodes
 
 

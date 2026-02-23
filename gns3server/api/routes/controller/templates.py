@@ -170,7 +170,7 @@ async def get_templates(
         templates_repo: TemplatesRepository = Depends(get_repository(TemplatesRepository)),
         current_user: schemas.User = Depends(get_current_active_user),
         rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
-        tags: Optional[List[str]] = Query(None, description="Filter by tags (e.g., tags=vendor:cisco&tags=model:7200)")
+        tags: Optional[List[str]] = Query(None, description="Filter by tags (e.g. tags=vendor:cisco&tags=model:7200)")
 ) -> List[schemas.Template]:
     """
     Return all templates.
@@ -178,30 +178,22 @@ async def get_templates(
     Required privilege: Template.Audit
 
     Query Parameters:
-    - tags: Filter by tags in format "key:value". Multiple tags are ANDed together.
+    - tags: Filter by tags. Multiple tags are ANDed together.
             Example: ?tags=vendor:cisco&tags=model:7200
     """
 
     templates = await TemplatesService(templates_repo).get_templates()
 
-    # Filter by tags if provided
+    # Filter by tags if provided (all filter tags have to match the node tags)
     if tags:
         filtered_templates = []
         for template in templates:
-            template_tags = template.get("tags") or {}
-            # Check if all tag filters match
+            template_tags = template.get("tags") or []
             match = True
             for tag_filter in tags:
-                if ":" in tag_filter:
-                    key, value = tag_filter.split(":", 1)
-                    if template_tags.get(key) != value:
-                        match = False
-                        break
-                else:
-                    # Check if key exists
-                    if tag_filter not in template_tags:
-                        match = False
-                        break
+                if tag_filter not in template_tags:
+                    match = False
+                    break
             if match:
                 filtered_templates.append(template)
         templates = filtered_templates

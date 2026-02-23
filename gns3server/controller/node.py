@@ -97,7 +97,7 @@ class Node:
         self._y = 0
         self._z = 1  # default z value is 1
         self._locked = False
-        self._tags = {}
+        self._tags = []
         self._ports = None
         self._symbol = None
         self._custom_adapters = []
@@ -225,10 +225,7 @@ class Node:
 
     @tags.setter
     def tags(self, val):
-        if isinstance(val, dict):
-            self._tags = val
-        else:
-            self._tags = {}
+        self._tags = val
 
     def _base_config_file_content(self, path):
         if not os.path.isabs(path):
