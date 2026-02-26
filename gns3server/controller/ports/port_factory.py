@@ -75,13 +75,13 @@ class StandardPortFactory:
 
             for port_number in range(0, port_by_adapter):
                 if first_port_name and adapter_number == 0:
-                    port_name = custom_adapter_settings.get("port_name") or first_port_name
+                    port_name = custom_adapter_settings.get("port_name", first_port_name)
                     port = PortFactory(
                         port_name, segment_number, adapter_number, port_number, "ethernet", short_name=port_name
                     )
                 else:
                     try:
-                        default_port_name = port_name_format.format(
+                        port_name = port_name_format.format(
                             interface_number,
                             segment_number,
                             adapter=adapter_number,
@@ -90,7 +90,7 @@ class StandardPortFactory:
                     except (IndexError, ValueError, KeyError) as e:
                         raise ControllerError(f"Invalid port name format {port_name_format}: {str(e)}")
 
-                    port_name = custom_adapter_settings.get("port_name") or default_port_name
+                    port_name = custom_adapter_settings.get("port_name", port_name)
                     port = PortFactory(port_name, segment_number, adapter_number, port_number, "ethernet")
                     interface_number += 1
                     if port_segment_size:

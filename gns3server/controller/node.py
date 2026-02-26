@@ -761,7 +761,8 @@ class Node:
                     if custom_adapter["adapter_number"] == adapter_number:
                         custom_adapter_settings = custom_adapter
                         break
-                port_name = custom_adapter_settings.get("port_name") or f"eth{adapter_number}"
+                port_name = f"eth{adapter_number}"
+                port_name = custom_adapter_settings.get("port_name", port_name)
                 mac_address = custom_adapter_settings.get("mac_address")
                 if not mac_address and "mac_address" in self._properties:
                     mac_address = int_to_macaddress(macaddress_to_int(self._properties["mac_address"]) + adapter_number)
