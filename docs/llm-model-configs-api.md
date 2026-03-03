@@ -161,8 +161,13 @@ The `model_type` field accepts the following values:
 | Field | Type | Description |
 |-------|------|-------------|
 | `configs` | list[LLMModelConfigWithSource] | Effective configurations |
-| `default_config` | LLMModelConfigWithSource (nullable) | Default configuration |
+| `default_config` | LLMModelConfigWithSource (nullable) | Default configuration (never null if configs list is not empty) |
 | `total` | integer | Total count |
+
+**Default Configuration Selection Logic:**
+1. User's config marked with `is_default: true`
+2. Group's config marked with `is_default: true` (if user has no default)
+3. First config in the list (fallback if no default is marked)
 
 ### LLMModelConfigWithSource
 
@@ -368,6 +373,8 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/de
   -H "Authorization: Bearer <token>"
 ```
 
+**Note:** This endpoint only returns configurations explicitly marked with `is_default: true`. If no configuration is marked as default, it returns 404.
+
 **Response:**
 ```json
 {
@@ -407,6 +414,12 @@ curl -X GET http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs/
 ```
 
 The response format is the same as for users.
+
+---
+
+**Important Note:** This dedicated `/default` endpoint is different from the `default_config` field in the list response:
+- `/default` endpoint: Requires explicit `is_default: true` flag, returns 404 if not found
+- `default_config` field in list: Falls back to first config if no explicit default is marked
 
 ### 8. Delete a configuration
 

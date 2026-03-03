@@ -496,6 +496,10 @@ class LLMModelConfigsRepository(BaseRepository):
                 if config.is_default and default_config is None:
                     default_config = configs_with_source[-1]
 
+        # Fallback: if no config is marked as default, use the first one
+        if default_config is None and configs_with_source:
+            default_config = configs_with_source[0]
+
         return {
             "configs": configs_with_source,
             "default_config": default_config
