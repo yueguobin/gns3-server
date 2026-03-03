@@ -63,23 +63,12 @@ from gns3_copilot.tools_v2 import (
     LinuxTelnetBatchTool,
     VPCSMultiCommands,
 )
-from gns3_copilot.utils import get_config
 
 # Set up logger for FlowNet-Lab
 logger = logging.getLogger(__name__)
 
-# Log loaded LLM model information
-model_name = get_config("MODEL_NAME")
-model_provider = get_config("MODE_PROVIDER")
-base_url = get_config("BASE_URL", "")
-temperature = get_config("TEMPERATURE", "0")
-logger.info(
-    "LLM model configuration: name=%s, provider=%s, base_url=%s, temperature=%s",
-    model_name,
-    model_provider,
-    base_url,
-    temperature,
-)
+# Note: LLM model configuration is now managed by the new llm_model_configs system.
+# The model_factory module handles model creation with configuration from the database.
 
 # Define the available tools for the agent
 tools = [

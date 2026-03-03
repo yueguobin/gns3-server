@@ -12,14 +12,6 @@ Author: Guobin Yue
 """
 
 # Import main utility functions
-from .app_config import (
-    DEFAULT_CONFIG,
-    get_all_config,
-    get_config,
-    init_config,
-    reset_config,
-    set_config,
-)
 from .get_gns3_device_port import get_device_ports_from_topology
 from .parse_tool_content import format_tool_response, parse_tool_content
 
@@ -38,12 +30,6 @@ __url__ = "https://github.com/yueguobin/gns3-copilot"
 
 # Export main utility functions
 __all__ = [
-    "DEFAULT_CONFIG",
-    "get_config",
-    "set_config",
-    "get_all_config",
-    "init_config",
-    "reset_config",
     "get_device_ports_from_topology",
     "parse_tool_content",
     "format_tool_response",

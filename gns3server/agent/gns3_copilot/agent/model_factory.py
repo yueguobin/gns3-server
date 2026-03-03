@@ -1,35 +1,50 @@
 """
 Model Factory for FlowNet-Lab Agent
 
-This module provides factory functions to create fresh LLM model instances
-on-demand from SQLite configuration. This allows configuration changes
-to take effect without restarting the application.
+This module provides factory functions to create fresh LLM model instances.
+Configuration can be loaded from:
+1. Passed llm_config dictionary (from new llm_model_configs system)
+2. Environment variables (fallback for backward compatibility)
 """
 
 import logging
-from typing import Any
+import os
+from typing import Any, Optional
 
 from langchain.chat_models import init_chat_model
-
-from gns3_copilot.utils import get_config
 
 logger = logging.getLogger(__name__)
 
 
-def _load_env_variables() -> dict[str, str]:
+def _load_llm_config(llm_config: Optional[dict[str, Any]] = None) -> dict[str, str]:
     """
-    Load model configuration from SQLite database.
+    Load model configuration from llm_config dict or environment variables.
+
+    Args:
+        llm_config: Optional configuration dictionary from llm_model_configs system.
+                    If not provided, will load from environment variables.
 
     Returns:
         Dictionary containing model configuration.
     """
-    return {
-        "model_name": get_config("MODEL_NAME", ""),
-        "model_provider": get_config("MODE_PROVIDER", ""),
-        "api_key": get_config("MODEL_API_KEY", ""),
-        "base_url": get_config("BASE_URL", ""),
-        "temperature": get_config("TEMPERATURE", "0"),
-    }
+    if llm_config:
+        # Use provided configuration (from llm_model_configs system)
+        return {
+            "model_name": llm_config.get("model", ""),
+            "model_provider": llm_config.get("provider", ""),
+            "api_key": llm_config.get("api_key", ""),
+            "base_url": llm_config.get("base_url", ""),
+            "temperature": str(llm_config.get("temperature", "0")),
+        }
+    else:
+        # Fallback to environment variables
+        return {
+            "model_name": os.getenv("MODEL_NAME", ""),
+            "model_provider": os.getenv("MODE_PROVIDER", ""),
+            "api_key": os.getenv("MODEL_API_KEY", ""),
+            "base_url": os.getenv("BASE_URL", ""),
+            "temperature": os.getenv("TEMPERATURE", "0"),
+        }
 
 
 def create_base_model() -> Any:
@@ -46,7 +61,7 @@ def create_base_model() -> Any:
     Raises:
         ValueError: If required environment variables are missing or invalid.
     """
-    env_vars = _load_env_variables()
+    env_vars = _load_llm_config()
 
     # Log the loaded configuration (mask sensitive data)
     logger.info(
@@ -98,7 +113,7 @@ def create_title_model() -> Any:
     Raises:
         ValueError: If required environment variables are missing or invalid.
     """
-    env_vars = _load_env_variables()
+    env_vars = _load_llm_config()
 
     logger.info(
         "Creating title model: name=%s, provider=%s, base_url=%s, temperature=1.0",
@@ -174,7 +189,7 @@ def create_note_organizer_model() -> Any:
     Raises:
         ValueError: If required environment variables are missing or invalid.
     """
-    env_vars = _load_env_variables()
+    env_vars = _load_llm_config()
 
     logger.info(
         "Creating note organizer model: name=%s, provider=%s, base_url=%s, temperature=0.3",
@@ -245,7 +260,7 @@ def create_window_agent_base_model() -> Any:
         ValueError: If required environment variables are missing.
         RuntimeError: If model creation fails.
     """
-    env_vars = _load_env_variables()
+    env_vars = _load_llm_config()
 
     logger.info(
         "Creating Window Agent base model: name=%s, provider=%s, base_url=%s, temperature=0",
@@ -298,7 +313,7 @@ def create_window_agent_model_with_tools(tools: list[Any]) -> Any:
         ValueError: If required environment variables are missing.
         RuntimeError: If model creation or tool binding fails.
     """
-    env_vars = _load_env_variables()
+    env_vars = _load_llm_config()
 
     logger.info(
         "Creating Window Agent model: name=%s, provider=%s, base_url=%s, temperature=0",
@@ -351,7 +366,7 @@ def create_experiment_planner_model() -> Any:
     Raises:
         ValueError: If required environment variables are missing or invalid.
     """
-    env_vars = _load_env_variables()
+    env_vars = _load_llm_config()
 
     logger.info(
         "Creating experiment planner model: name=%s, provider=%s, base_url=%s, temperature=0.7",
@@ -428,7 +443,7 @@ def create_presentation_eval_model() -> Any:
         ValueError: If required environment variables are missing.
         RuntimeError: If model creation fails.
     """
-    env_vars = _load_env_variables()
+    env_vars = _load_llm_config()
 
     logger.info(
         "Creating presentation evaluator model: name=%s, provider=%s, base_url=%s, temperature=0.5",

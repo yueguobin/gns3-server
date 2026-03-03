@@ -5,6 +5,7 @@ This module provides a tool to execute configuration commands on multiple device
 
 import json
 import logging
+import os
 from typing import Any
 
 from langchain.tools import BaseTool
@@ -15,10 +16,7 @@ from nornir.core import Nornir
 from nornir.core.task import AggregatedResult, Result, Task
 from nornir_netmiko.tasks import netmiko_send_config
 
-from gns3_copilot.utils import (
-    get_config,
-    get_device_ports_from_topology,
-)
+from gns3_copilot.utils import get_device_ports_from_topology
 
 # config log
 logger = logging.getLogger(__name__)
@@ -35,10 +33,10 @@ def _get_nornir_groups_config() -> dict[str, dict[str, Any]]:
     return {
         "cisco_IOSv_telnet": {
             "platform": "cisco_ios",
-            "hostname": get_config("GNS3_SERVER_HOST"),
+            "hostname": os.getenv("GNS3_SERVER_HOST", "127.0.0.1"),
             "timeout": 120,
-            "username": get_config("GNS3_SERVER_USERNAME"),
-            "password": get_config("GNS3_SERVER_PASSWORD"),
+            "username": os.getenv("GNS3_SERVER_USERNAME", ""),
+            "password": os.getenv("GNS3_SERVER_PASSWORD", ""),
             "connection_options": {
                 "netmiko": {"extras": {"device_type": "cisco_ios_telnet"}}
             },
@@ -373,7 +371,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             defaults = _get_nornir_defaults()
 
             # Log nornir account information
-            gns3_host = get_config("GNS3_SERVER_HOST")
+            gns3_host = os.getenv("GNS3_SERVER_HOST", "127.0.0.1")
 
             logger.info(
                 "Initializing Nornir with account: host=%s, platform=%s, timeout=%d",

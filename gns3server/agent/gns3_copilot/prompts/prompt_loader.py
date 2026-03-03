@@ -125,11 +125,11 @@ def load_system_prompt(level: str | None = None) -> str:
     Load system prompt based on English proficiency level.
 
     This function loads the appropriate system prompt based on the ENGLISH_LEVEL
-    configuration from SQLite database or the provided level parameter.
+    environment variable or the provided level parameter.
 
     Args:
         level (str, optional): English proficiency level (A1, A2, B1, B2, C1, C2).
-                              If not provided, will read from ENGLISH_LEVEL config in database.
+                              If not provided, will read from ENGLISH_LEVEL environment variable.
 
     Returns:
         str: The system prompt content for the specified English level.
@@ -140,15 +140,9 @@ def load_system_prompt(level: str | None = None) -> str:
     """
     # Determine the English level to use
     if not level:
-        # Try to get ENGLISH_LEVEL from database config first
-        try:
-            from gns3_copilot.utils import get_config
-            level = get_config("ENGLISH_LEVEL", "")
-            logger.debug("Retrieved ENGLISH_LEVEL from database: '%s'", level)
-        except Exception as e:
-            # Fallback to environment variable if get_config fails
-            logger.debug("Failed to get ENGLISH_LEVEL from config: %s, using env var", e)
-            level = os.getenv("ENGLISH_LEVEL", "")
+        # Get ENGLISH_LEVEL from environment variable
+        level = os.getenv("ENGLISH_LEVEL", "")
+        logger.debug("Retrieved ENGLISH_LEVEL from environment: '%s'", level)
 
     # Return regular level prompt
     return _load_regular_level_prompt(level)

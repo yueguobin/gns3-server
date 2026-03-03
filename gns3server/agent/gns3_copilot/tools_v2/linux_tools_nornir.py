@@ -5,6 +5,7 @@ via Telnet console.
 
 import json
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -16,10 +17,7 @@ from nornir.core import Nornir
 from nornir.core.task import AggregatedResult, Result, Task
 from nornir_netmiko.tasks import netmiko_send_command
 
-from gns3_copilot.utils import (
-    get_config,
-    get_device_ports_from_topology,
-)
+from gns3_copilot.utils import get_device_ports_from_topology
 
 # config log
 logger = logging.getLogger(__name__)
@@ -36,10 +34,10 @@ def _get_nornir_groups_config() -> dict[str, dict[str, Any]]:
     return {
         "linux_telnet": {
             "platform": "linux",
-            "hostname": get_config("GNS3_SERVER_HOST"),
+            "hostname": os.getenv("GNS3_SERVER_HOST", "127.0.0.1"),
             "timeout": 120,
-            "username": get_config("LINUX_TELNET_USERNAME"),
-            "password": get_config("LINUX_TELNET_PASSWORD"),
+            "username": os.getenv("LINUX_TELNET_USERNAME", ""),
+            "password": os.getenv("LINUX_TELNET_PASSWORD", ""),
             "connection_options": {
                 "netmiko": {
                     "platform": "linux",
@@ -172,8 +170,8 @@ class LinuxTelnetBatchTool(BaseTool):
             return device_configs_list
 
         # Check credentials only for valid inputs
-        linux_username = get_config("LINUX_TELNET_USERNAME")
-        linux_password = get_config("LINUX_TELNET_PASSWORD")
+        linux_username = os.getenv("LINUX_TELNET_USERNAME", "")
+        linux_password = os.getenv("LINUX_TELNET_PASSWORD", "")
 
         if not linux_username or not linux_password:
             user_message = (

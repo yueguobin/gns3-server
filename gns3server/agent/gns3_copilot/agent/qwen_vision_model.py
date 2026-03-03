@@ -7,6 +7,7 @@ through DashScope SDK to identify network topology diagrams from images.
 
 import base64
 import json
+import os
 from typing import Any, Dict, Optional
 from pathlib import Path
 
@@ -16,8 +17,6 @@ except ImportError:
     dashscope = None
 
 import logging
-
-from gns3_copilot.utils import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -161,13 +160,13 @@ class QwenVisionModel:
                 "Please install it: pip install dashscope"
             )
 
-        # Load API key from config if not provided
+        # Load API key from environment variable if not provided
         if api_key is None:
-            api_key = get_config("QWEN_API_KEY", "")
+            api_key = os.getenv("QWEN_API_KEY", "")
 
         if not api_key:
             raise ValueError(
-                "Qwen API key is required. Please set QWEN_API_KEY in configuration "
+                "Qwen API key is required. Please set QWEN_API_KEY environment variable "
                 "or pass it to the constructor."
             )
 
@@ -389,19 +388,19 @@ def create_qwen_vision_model(
     """
     Factory function to create a Qwen-VL vision model instance.
 
-    This function loads configuration from the database and creates
+    This function loads configuration from environment variables and creates
     a QwenVisionModel instance with appropriate settings.
 
     Args:
-        api_key: DashScope API key (if None, will load from config)
-        model_name: Model name to use (if None, will load from config, default: qwen3-vl-plus)
+        api_key: DashScope API key (if None, will load from QWEN_API_KEY env var)
+        model_name: Model name to use (if None, will load from QWEN_MODEL_NAME env var, default: qwen3-vl-plus)
 
     Returns:
         QwenVisionModel instance
 
     Raises:
         ImportError: If dashscope is not installed
-        ValueError: If API key is not provided or found in config
+        ValueError: If API key is not provided or found in environment
 
     Example:
         >>> model = create_qwen_vision_model()
@@ -409,8 +408,8 @@ def create_qwen_vision_model(
         >>> print(topology["topology_name"])
         >>> print(f"Found {len(topology['devices'])} devices")
     """
-    # Load model name from config if not provided
+    # Load model name from environment variable if not provided
     if model_name is None:
-        model_name = get_config("QWEN_MODEL_NAME", "qwen3-vl-plus")
+        model_name = os.getenv("QWEN_MODEL_NAME", "qwen3-vl-plus")
 
     return QwenVisionModel(api_key=api_key, model_name=model_name)
