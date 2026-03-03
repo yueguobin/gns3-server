@@ -17,9 +17,11 @@ This API provides LLM model configuration management for users and user groups w
 
 ```
 User requests configs:
-  ├─ If user has own configs → return user's configs
-  └─ If user has NO configs → return inherited group configs
+  ├─ Always return user's own configs (if any)
+  └─ Always return inherited group configs (if any)
 ```
+
+**Note:** Users can see both their own configurations AND configurations inherited from their groups. The `source` field in the response indicates the origin of each configuration.
 
 ### Configuration Priority
 
@@ -78,6 +80,7 @@ The `model_type` field accepts the following values:
 |--------|------|-------------|-----------|
 | GET | `/v3/access/users/{user_id}/llm-model-configs` | Get user's effective configs (own + inherited) | User.Audit |
 | GET | `/v3/access/users/{user_id}/llm-model-configs/own` | Get user's own configs only | User.Audit |
+| GET | `/v3/access/users/{user_id}/llm-model-configs/default` | Get user's default configuration | User.Audit |
 | POST | `/v3/access/users/{user_id}/llm-model-configs` | Create a new configuration | User.Modify |
 | PUT | `/v3/access/users/{user_id}/llm-model-configs/{config_id}` | Update a configuration | User.Modify |
 | DELETE | `/v3/access/users/{user_id}/llm-model-configs/{config_id}` | Delete a configuration | User.Modify |
@@ -88,6 +91,7 @@ The `model_type` field accepts the following values:
 | Method | Path | Description | Privilege |
 |--------|------|-------------|-----------|
 | GET | `/v3/access/groups/{group_id}/llm-model-configs` | Get all group configurations | Group.Audit |
+| GET | `/v3/access/groups/{group_id}/llm-model-configs/default` | Get group's default configuration | Group.Audit |
 | POST | `/v3/access/groups/{group_id}/llm-model-configs` | Create a new configuration | Group.Modify |
 | PUT | `/v3/access/groups/{group_id}/llm-model-configs/{config_id}` | Update a configuration | Group.Modify |
 | DELETE | `/v3/access/groups/{group_id}/llm-model-configs/{config_id}` | Delete a configuration | Group.Modify |
@@ -246,7 +250,7 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
   -H "Authorization: Bearer <token>"
 ```
 
-**Response (user has own configs):**
+**Response (user has both own configs and inherited group configs):**
 ```json
 {
   "configs": [
@@ -262,6 +266,19 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
       "base_url": "https://api.openai.com/v1",
       "temperature": 0.7,
       "api_key": "sk-xxx"
+    },
+    {
+      "config_id": "uuid-2",
+      "name": "Claude-3",
+      "model_type": "text",
+      "source": "group",
+      "group_name": "Developers",
+      "is_default": true,
+      "provider": "anthropic",
+      "model": "claude-3-opus-20240229",
+      "base_url": "https://api.anthropic.com",
+      "temperature": 0.7,
+      "api_key": null
     }
   ],
   "default_config": {
@@ -274,40 +291,15 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
     "provider": "openai",
     ...
   },
-  "total": 1
+  "total": 2
 }
 ```
 
-**Response (user inherits from group):**
-```json
-{
-  "configs": [
-    {
-      "config_id": "uuid-2",
-      "name": "Claude-3",
-      "model_type": "text",
-      "source": "group",
-      "group_name": "Developers",
-      "is_default": true,
-      "provider": "anthropic",
-      "model": "claude-3-opus-20240229",
-      "base_url": "https://api.anthropic.com",
-      "temperature": 0.7,
-      "api_key": "sk-ant-xxx"
-    }
-  ],
-  "default_config": {
-    "config_id": "uuid-2",
-    "name": "Claude-3",
-    "model_type": "text",
-    "source": "group",
-    "group_name": "Developers",
-    "is_default": true,
-    ...
-  },
-  "total": 1
-}
-```
+**Note:**
+- User's own config shows `api_key: "sk-xxx"` (visible to owner)
+- Inherited group config shows `api_key: null` (hidden from users)
+- `source: "user"` indicates the config belongs to the user
+- `source: "group"` indicates the config is inherited from a group
 
 ### 4. Update a configuration (without optimistic locking)
 
@@ -367,7 +359,56 @@ curl -X PUT http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/de
   -H "Authorization: Bearer <token>"
 ```
 
-### 7. Delete a configuration
+### 7. Get default configuration
+
+Get the user's default configuration:
+
+```bash
+curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/default \
+  -H "Authorization: Bearer <token>"
+```
+
+**Response:**
+```json
+{
+  "config_id": "uuid-1",
+  "name": "GPT-4",
+  "model_type": "text",
+  "config": {
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4",
+    "temperature": 0.7,
+    "api_key": "sk-xxx"
+  },
+  "user_id": "uuid-user",
+  "group_id": null,
+  "is_default": true,
+  "version": 0,
+  "created_at": "2026-03-03T18:15:00Z",
+  "updated_at": "2026-03-03T18:15:00Z"
+}
+```
+
+**If no default configuration is set:**
+
+```json
+HTTP 404 Not Found
+{
+  "detail": "No default LLM model configuration found for user '{user_id}'"
+}
+```
+
+Get the group's default configuration:
+
+```bash
+curl -X GET http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs/default \
+  -H "Authorization: Bearer <token>"
+```
+
+The response format is the same as for users.
+
+### 8. Delete a configuration
 
 ```bash
 curl -X DELETE http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/{config_id} \
@@ -420,55 +461,68 @@ This API uses **optimistic locking** to prevent concurrent modification conflict
 - You're sure no one else is modifying the config
 - Performance is more important than data integrity (not recommended)
 
-### Example Workflow
 
-```python
-# Client-side example (Python)
-import requests
-
-def update_config_safely(config_id, updates):
-    max_retries = 3
-    for attempt in range(max_retries):
-        # 1. Fetch current config
-        response = requests.get(
-            f"/users/{user_id}/llm-model-configs/own",
-            headers={"Authorization": f"Bearer {token}"}
-        )
-        configs = response.json()
-        config = next(c for c in configs if c["config_id"] == config_id)
-        current_version = config["version"]
-
-        # 2. Try update with expected_version
-        try:
-            response = requests.put(
-                f"/users/{user_id}/llm-model-configs/{config_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                json={
-                    **updates,
-                    "expected_version": current_version
-                }
-            )
-            response.raise_for_status()
-            return response.json()  # Success
-
-        except requests.HTTPError as e:
-            if e.response.status_code == 409:
-                # Conflict: someone else modified it
-                if attempt < max_retries - 1:
-                    continue  # Retry
-                raise Exception("Max retries exceeded for concurrent update")
-            raise
-```
 
 ---
 
 ## Security Notes
 
-1. **API Key Encryption**: All API keys are encrypted using Fernet symmetric encryption (AES-128-CBC)
-2. **Access Control**: All endpoints require appropriate privileges (User.Audit, User.Modify, Group.Audit, Group.Modify)
-3. **User Isolation**: Users can only access their own configurations
-4. **Group Access**: Group configurations can only be modified by users with Group.Modify privilege
-5. **Encryption Key Storage**: Encryption keys are stored in `{secrets_dir}/gns3_encryption_key` with 0600 permissions
+### API Key Encryption
+
+All API keys are encrypted using Fernet symmetric encryption (AES-128-CBC). Encryption keys are stored in `{secrets_dir}/gns3_encryption_key` with 0600 permissions.
+
+### Access Control
+
+All endpoints require appropriate privileges:
+- **User.Audit**: View user configurations
+- **User.Modify**: Create, update, delete user configurations
+- **Group.Audit**: View group configurations
+- **Group.Modify**: Create, update, delete group configurations
+
+### API Key Visibility
+
+The API implements strict API key visibility controls to protect sensitive credentials:
+
+| Scenario | User Configs | Group Configs |
+|----------|-------------|---------------|
+| User viewing own configs | **Visible** | **Hidden** |
+| Admin viewing other users' configs | **Hidden** | **Hidden** |
+| Viewing group configs directly | N/A | **Visible** |
+
+**Rules:**
+1. **Users viewing their own configs**: Can see API keys in their own configurations, but NOT in inherited group configurations
+2. **Admins viewing other users' configs**: Cannot see API keys in any user configurations (user privacy)
+3. **Viewing group configs**: Users with `Group.Audit` privilege can see API keys in group configurations
+
+**Example:**
+```json
+// User viewing their own configs
+{
+  "configs": [
+    {
+      "config_id": "uuid-1",
+      "source": "user",
+      "api_key": "sk-xxx"  // Visible (own config)
+    },
+    {
+      "config_id": "uuid-2",
+      "source": "group",
+      "api_key": null      // Hidden (inherited from group)
+    }
+  ]
+}
+
+// Admin viewing another user's configs
+{
+  "configs": [
+    {
+      "config_id": "uuid-1",
+      "source": "user",
+      "api_key": null      // Hidden (another user's config)
+    }
+  ]
+}
+```
 
 ---
 

@@ -49,11 +49,11 @@ router = APIRouter()
 
 @router.get(
     "/users/{user_id}/llm-model-configs",
-    response_model=schemas.LLMModelConfigInheritedResponse,
-    dependencies=[Depends(has_privilege("User.Audit"))]
+    response_model=schemas.LLMModelConfigInheritedResponse
 )
 async def get_user_llm_model_configs(
         user_id: UUID,
+        current_user: schemas.User = Depends(has_privilege("User.Audit")),
         llm_repo: LLMModelConfigsRepository = Depends(get_repository(LLMModelConfigsRepository))
 ) -> schemas.LLMModelConfigInheritedResponse:
     """
@@ -63,7 +63,11 @@ async def get_user_llm_model_configs(
     """
 
     try:
-        result = await llm_repo.get_user_effective_configs(user_id)
+        result = await llm_repo.get_user_effective_configs(
+            user_id,
+            current_user_id=current_user.user_id,
+            current_user_is_superadmin=current_user.is_superadmin
+        )
         return schemas.LLMModelConfigInheritedResponse(
             configs=result["configs"],
             default_config=result.get("default_config"),
@@ -114,6 +118,51 @@ async def get_user_own_llm_model_configs(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve LLM model configurations"
+        )
+
+
+@router.get(
+    "/users/{user_id}/llm-model-configs/default",
+    response_model=schemas.LLMModelConfigResponse,
+    dependencies=[Depends(has_privilege("User.Audit"))]
+)
+async def get_user_default_llm_model_config(
+        user_id: UUID,
+        llm_repo: LLMModelConfigsRepository = Depends(get_repository(LLMModelConfigsRepository))
+) -> schemas.LLMModelConfigResponse:
+    """
+    Get user's default LLM model configuration.
+
+    Required privilege: User.Audit
+    """
+
+    try:
+        config = await llm_repo.get_user_default_config(user_id)
+        if not config:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No default LLM model configuration found for user '{user_id}'"
+            )
+
+        return schemas.LLMModelConfigResponse(
+            config_id=config.config_id,
+            name=config.name,
+            model_type=config.model_type,
+            config=config.config,
+            user_id=config.user_id,
+            group_id=config.group_id,
+            is_default=config.is_default,
+            version=config.version,
+            created_at=config.created_at,
+            updated_at=config.updated_at
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Failed to retrieve user's default LLM model config: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve LLM model configuration"
         )
 
 
@@ -363,6 +412,51 @@ async def get_group_llm_model_configs(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve LLM model configurations"
+        )
+
+
+@router.get(
+    "/groups/{group_id}/llm-model-configs/default",
+    response_model=schemas.LLMModelConfigResponse,
+    dependencies=[Depends(has_privilege("Group.Audit"))]
+)
+async def get_group_default_llm_model_config(
+        group_id: UUID,
+        llm_repo: LLMModelConfigsRepository = Depends(get_repository(LLMModelConfigsRepository))
+) -> schemas.LLMModelConfigResponse:
+    """
+    Get group's default LLM model configuration.
+
+    Required privilege: Group.Audit
+    """
+
+    try:
+        config = await llm_repo.get_group_default_config(group_id)
+        if not config:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No default LLM model configuration found for group '{group_id}'"
+            )
+
+        return schemas.LLMModelConfigResponse(
+            config_id=config.config_id,
+            name=config.name,
+            model_type=config.model_type,
+            config=config.config,
+            user_id=config.user_id,
+            group_id=config.group_id,
+            is_default=config.is_default,
+            version=config.version,
+            created_at=config.created_at,
+            updated_at=config.updated_at
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Failed to retrieve group's default LLM model config: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve LLM model configuration"
         )
 
 

@@ -402,12 +402,24 @@ class LLMModelConfigsRepository(BaseRepository):
 
     # Inheritance methods
 
-    async def get_user_effective_configs(self, user_id: UUID) -> Dict[str, Any]:
+    async def get_user_effective_configs(
+        self,
+        user_id: UUID,
+        current_user_id: Optional[UUID] = None,
+        current_user_is_superadmin: bool = False
+    ) -> Dict[str, Any]:
         """
         Get user's effective configurations (own + inherited from groups).
         Returns a dict with 'configs' list and 'default_config'.
+
+        API key visibility rules:
+        - Users viewing own configs: CAN see API keys in user configs, CANNOT see API keys in group configs
+        - Admins viewing other users' configs: CANNOT see ANY API keys
         """
         from gns3server.utils.encryption import decrypt, is_encrypted
+
+        # Determine if current user is viewing their own configs
+        is_viewing_own = current_user_id == user_id if current_user_id else False
 
         # Get user's own configs
         user_configs = await self.get_user_configs(user_id)
@@ -435,12 +447,18 @@ class LLMModelConfigsRepository(BaseRepository):
         # Add user's configs
         for config in user_configs:
             config_dict = config.config.copy()
+
+            # API key visibility: only show if viewing own configs
             if "api_key" in config_dict and config_dict["api_key"]:
-                try:
-                    if is_encrypted(config_dict["api_key"]):
-                        config_dict["api_key"] = decrypt(config_dict["api_key"])
-                except Exception as e:
-                    log.warning(f"Failed to decrypt API key for config {config.config_id}: {e}")
+                if is_viewing_own:
+                    try:
+                        if is_encrypted(config_dict["api_key"]):
+                            config_dict["api_key"] = decrypt(config_dict["api_key"])
+                    except Exception as e:
+                        log.warning(f"Failed to decrypt API key for config {config.config_id}: {e}")
+                        config_dict["api_key"] = None
+                else:
+                    # Hide API key for admins viewing other users' configs
                     config_dict["api_key"] = None
 
             configs_with_source.append({
@@ -456,31 +474,27 @@ class LLMModelConfigsRepository(BaseRepository):
             if config.is_default and default_config is None:
                 default_config = configs_with_source[-1]
 
-        # Add inherited group configs (only if user has no configs)
-        if not user_configs:
-            for group_id, configs in group_configs_map.items():
-                for config in configs:
-                    config_dict = config.config.copy()
-                    if "api_key" in config_dict and config_dict["api_key"]:
-                        try:
-                            if is_encrypted(config_dict["api_key"]):
-                                config_dict["api_key"] = decrypt(config_dict["api_key"])
-                        except Exception as e:
-                            log.warning(f"Failed to decrypt API key for config {config.config_id}: {e}")
-                            config_dict["api_key"] = None
+        # Add inherited group configs (always shown, regardless of user configs)
+        for group_id, configs in group_configs_map.items():
+            for config in configs:
+                config_dict = config.config.copy()
 
-                    configs_with_source.append({
-                        "config_id": config.config_id,
-                        "name": config.name,
-                        "model_type": config.model_type,
-                        "source": "group",
-                        "group_name": group_names_map[group_id],
-                        "is_default": config.is_default,
-                        **config_dict
-                    })
+                # API key visibility: NEVER show API keys from inherited group configs
+                if "api_key" in config_dict and config_dict["api_key"]:
+                    config_dict["api_key"] = None
 
-                    if config.is_default and default_config is None:
-                        default_config = configs_with_source[-1]
+                configs_with_source.append({
+                    "config_id": config.config_id,
+                    "name": config.name,
+                    "model_type": config.model_type,
+                    "source": "group",
+                    "group_name": group_names_map[group_id],
+                    "is_default": config.is_default,
+                    **config_dict
+                })
+
+                if config.is_default and default_config is None:
+                    default_config = configs_with_source[-1]
 
         return {
             "configs": configs_with_source,
