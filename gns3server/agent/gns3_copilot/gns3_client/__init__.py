@@ -36,7 +36,6 @@ from .custom_gns3fy import (
     Project,
 )
 from .gns3_topology_reader import GNS3TopologyTool
-from .gns3_update_drawing import GNS3UpdateDrawingTool
 
 # Dynamic version management
 try:
@@ -59,7 +58,6 @@ __all__ = [
     "CONSOLE_TYPES",
     "LINK_TYPES",
     "GNS3TopologyTool",
-    "GNS3UpdateDrawingTool",
     "get_gns3_connector",
     "get_gns3_connector_with_llm_config",
     "get_gns3_server_host",
