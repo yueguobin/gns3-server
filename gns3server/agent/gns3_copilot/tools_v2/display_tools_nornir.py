@@ -36,8 +36,8 @@ def _get_nornir_groups_config() -> dict[str, dict[str, Any]]:
             "platform": "cisco_ios",
             "hostname": os.getenv("GNS3_SERVER_HOST", "127.0.0.1"),
             "timeout": 120,
-            "username": os.getenv("GNS3_SERVER_USERNAME", ""),
-            "password": os.getenv("GNS3_SERVER_PASSWORD", ""),
+            "username": "",
+            "password": "",
             "connection_options": {
                 "netmiko": {"extras": {"device_type": "cisco_ios_telnet"}}
             },
