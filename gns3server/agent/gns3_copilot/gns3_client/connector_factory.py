@@ -184,3 +184,117 @@ def get_gns3_connector(jwt_token: str, url: Optional[str] = None) -> Optional[Gn
     except Exception as e:
         logger.error("Failed to create Gns3Connector: %s", str(e), exc_info=True)
         return None
+
+
+async def get_gns3_connector_with_llm_config(
+    user_id,
+    jwt_token: str,
+    url: Optional[str] = None
+) -> Optional[dict]:
+    """
+    Create Gns3Connector and retrieve LLM model configuration for the user.
+
+    This is a convenience function that combines:
+    1. get_gns3_connector() - Create GNS3 API connector
+    2. get_user_llm_config() - Retrieve user's default LLM config with API key
+
+    Args:
+        user_id: User UUID (can be string or UUID object)
+        jwt_token: JWT token for authentication
+        url: GNS3 server URL (optional, auto-detected if not provided)
+
+    Returns:
+        Dictionary with keys:
+        - connector: Gns3Connector instance
+        - llm_config: Dict with provider, api_key, model, etc.
+        Or None if failed
+
+    Example:
+        result = await get_gns3_connector_with_llm_config(user_id, jwt_token)
+        if result:
+            connector = result["connector"]
+            llm_config = result["llm_config"]
+
+            # Use connector for GNS3 operations
+            projects = connector.projects
+
+            # Use LLM config for AI operations
+            provider = llm_config["provider"]
+            api_key = llm_config["api_key"]
+            model = llm_config["model"]
+        else:
+            logger.error("Failed to initialize GNS3 connector or LLM config")
+    """
+    try:
+        # Convert user_id to UUID if it's a string
+        if isinstance(user_id, str):
+            user_id = UUID(user_id)
+
+        # Step 1: Create GNS3 connector
+        connector = get_gns3_connector(jwt_token=jwt_token, url=url)
+        if not connector:
+            logger.error("Failed to create GNS3 connector")
+            return None
+
+        # Step 2: Detect URL if not provided
+        if url is None:
+            url = _detect_url_for_api()
+
+        # Step 3: Get LLM config
+        from gns3_copilot.utils.llm_config_helper import get_user_llm_config
+
+        llm_config = await get_user_llm_config(
+            user_id=user_id,
+            jwt_token=jwt_token,
+            gns3_url=url
+        )
+
+        if not llm_config:
+            logger.warning(f"No LLM config found for user {user_id}")
+            # Still return result with connector only
+            return {
+                "connector": connector,
+                "llm_config": None
+            }
+
+        logger.info(
+            f"Successfully initialized GNS3 connector and LLM config for user {user_id}: "
+            f"connector_url={connector.url}, "
+            f"llm_provider={llm_config.get('provider')}, "
+            f"llm_model={llm_config.get('model')}"
+        )
+
+        return {
+            "connector": connector,
+            "llm_config": llm_config
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get GNS3 connector with LLM config: {e}", exc_info=True)
+        return None
+
+
+def _detect_url_for_api() -> Optional[str]:
+    """
+    Detect GNS3 server URL for API calls.
+
+    Uses the same priority order as get_gns3_connector:
+    1. Controller.instance().compute("local")
+    2. Config.instance().settings.Server
+    3. Fallback to DEFAULT_GNS3_URL
+
+    Returns:
+        URL string, or None if detection failed
+    """
+    # Try Controller first
+    url = _get_url_from_controller()
+    if url:
+        return url
+
+    # Try Config
+    url = _get_url_from_config()
+    if url:
+        return url
+
+    # Fallback
+    return DEFAULT_GNS3_URL

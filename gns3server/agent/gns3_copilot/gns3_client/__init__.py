@@ -24,9 +24,10 @@ File Manager Modules:
 
 Main functions:
 - get_gns3_connector: Factory function to create Gns3Connector from environment
+- get_gns3_connector_with_llm_config: Factory function to create connector AND retrieve LLM config
 """
 
-from .connector_factory import get_gns3_connector
+from .connector_factory import get_gns3_connector, get_gns3_connector_with_llm_config
 from .custom_gns3fy import (
     CONSOLE_TYPES,
     LINK_TYPES,
@@ -91,6 +92,7 @@ __all__ = [
     "GNS3GetNodesTool",
     "GNS3UpdateDrawingTool",
     "get_gns3_connector",
+    "get_gns3_connector_with_llm_config",
     "add_file_to_index",
     "get_file_list",
 ]
