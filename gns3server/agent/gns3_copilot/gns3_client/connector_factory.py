@@ -298,3 +298,40 @@ def _detect_url_for_api() -> Optional[str]:
 
     # Fallback
     return DEFAULT_GNS3_URL
+
+
+def get_gns3_server_host() -> str:
+    """
+    Get GNS3 server hostname from Controller or Config.
+
+    This is a convenience function for extracting the hostname only,
+    useful for Nornir tools that need the GNS3 server address.
+
+    Uses the same priority order as get_gns3_connector:
+    1. Controller.instance().compute("local")
+    2. Config.instance().settings.Server
+    3. Fallback to DEFAULT_GNS3_URL host
+
+    Returns:
+        Hostname/IP address string
+
+    Example:
+        from gns3_copilot.gns3_client import get_gns3_server_host
+
+        host = get_gns3_server_host()
+        print(f"GNS3 server host: {host}")
+    """
+    url = _detect_url_for_api()
+
+    # Extract host from URL
+    # URL format: protocol://host:port
+    try:
+        # Remove protocol prefix
+        host_part = url.split("://")[1]
+        # Extract host (before the port)
+        host = host_part.split(":")[0]
+        logger.debug("Extracted GNS3 server host: %s from URL: %s", host, url)
+        return host
+    except Exception as e:
+        logger.warning("Failed to extract host from URL %s: %s, using fallback", url, e)
+        return DEFAULT_GNS3_URL.split("://")[1].split(":")[0]

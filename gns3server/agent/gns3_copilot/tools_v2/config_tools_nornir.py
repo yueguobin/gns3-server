@@ -8,6 +8,8 @@ import logging
 import os
 from typing import Any
 
+from gns3_copilot.gns3_client import get_gns3_server_host
+
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from netmiko.exceptions import ReadTimeout
@@ -33,7 +35,7 @@ def _get_nornir_groups_config() -> dict[str, dict[str, Any]]:
     return {
         "cisco_IOSv_telnet": {
             "platform": "cisco_ios",
-            "hostname": os.getenv("GNS3_SERVER_HOST", "127.0.0.1"),
+            "hostname": get_gns3_server_host(),
             "timeout": 120,
             "username": "",
             "password": "",
@@ -371,7 +373,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             defaults = _get_nornir_defaults()
 
             # Log nornir account information
-            gns3_host = os.getenv("GNS3_SERVER_HOST", "127.0.0.1")
+            gns3_host = get_gns3_server_host()
 
             logger.info(
                 "Initializing Nornir with account: host=%s, platform=%s, timeout=%d",

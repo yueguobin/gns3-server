@@ -27,7 +27,11 @@ Main functions:
 - get_gns3_connector_with_llm_config: Factory function to create connector AND retrieve LLM config
 """
 
-from .connector_factory import get_gns3_connector, get_gns3_connector_with_llm_config
+from .connector_factory import (
+    get_gns3_connector,
+    get_gns3_connector_with_llm_config,
+    get_gns3_server_host,
+)
 from .custom_gns3fy import (
     CONSOLE_TYPES,
     LINK_TYPES,
@@ -93,6 +97,7 @@ __all__ = [
     "GNS3UpdateDrawingTool",
     "get_gns3_connector",
     "get_gns3_connector_with_llm_config",
+    "get_gns3_server_host",
     "add_file_to_index",
     "get_file_list",
 ]

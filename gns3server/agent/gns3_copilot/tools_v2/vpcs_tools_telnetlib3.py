@@ -15,6 +15,7 @@ from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from telnetlib3 import Telnet
 
+from gns3_copilot.gns3_client import get_gns3_server_host
 from gns3_copilot.utils import get_device_ports_from_topology
 
 logger = logging.getLogger(__name__)
@@ -358,8 +359,8 @@ class VPCSMultiCommands(BaseTool):
             list(device_ports.keys()),
         )
 
-        # Get host IP from environment variable
-        gns3_host = os.getenv("GNS3_SERVER_HOST", "127.0.0.1")
+        # Get GNS3 server host from connector factory
+        gns3_host = get_gns3_server_host()
         logger.info("Using GNS3 server host: %s", gns3_host)
 
         # Initialize results list (pre-allocate space for concurrent writes)
