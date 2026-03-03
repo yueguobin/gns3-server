@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from sqlalchemy import Column, Boolean, ForeignKey, CheckConstraint, UniqueConstraint, Index, Integer, String
+from sqlalchemy import Column, Boolean, ForeignKey, CheckConstraint, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -65,14 +65,12 @@ class LLMModelConfig(BaseTable):
             "model_type IN ('text', 'vision', 'stt', 'tts', 'multimodal', 'embedding', 'reranking', 'other')",
             name="valid_model_type_check"
         ),
-        # Each user can have at most one default config
-        UniqueConstraint("user_id", "is_default", name="unique_user_default",
-                         deferrable=True, initially="deferred",
-                         postgresql_where="is_default = TRUE AND user_id IS NOT NULL"),
-        # Each group can have at most one default config
-        UniqueConstraint("group_id", "is_default", name="unique_group_default",
-                         deferrable=True, initially="deferred",
-                         postgresql_where="is_default = TRUE AND group_id IS NOT NULL"),
+        # Each user can have at most one default config (partial unique index)
+        Index("unique_user_default", "user_id", unique=True,
+              postgresql_where=text("is_default = TRUE AND user_id IS NOT NULL")),
+        # Each group can have at most one default config (partial unique index)
+        Index("unique_group_default", "group_id", unique=True,
+              postgresql_where=text("is_default = TRUE AND group_id IS NOT NULL")),
         # Indexes for efficient queries
         Index("idx_llm_model_configs_user_id", "user_id"),
         Index("idx_llm_model_configs_group_id", "group_id"),

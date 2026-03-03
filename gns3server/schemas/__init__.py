@@ -35,7 +35,6 @@ from .controller.llm_model_configs import (
     LLMModelConfigCreate,
     LLMModelConfigUpdate,
     LLMModelConfigResponse,
-    LLMModelConfigListResponse,
     LLMModelConfigWithSource,
     LLMModelConfigInheritedResponse
 )

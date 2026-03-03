@@ -54,18 +54,6 @@ def upgrade() -> None:
             "model_type IN ('text', 'vision', 'stt', 'tts', 'multimodal', 'embedding', 'reranking', 'other')",
             name='valid_model_type_check'
         ),
-        sa.UniqueConstraint(
-            'user_id', 'is_default',
-            name='unique_user_default',
-            deferrable=True, initially='deferred',
-            postgresql_where=sa.text("is_default = TRUE AND user_id IS NOT NULL")
-        ),
-        sa.UniqueConstraint(
-            'group_id', 'is_default',
-            name='unique_group_default',
-            deferrable=True, initially='deferred',
-            postgresql_where=sa.text("is_default = TRUE AND group_id IS NOT NULL")
-        ),
     )
 
     # Create indexes for efficient queries
@@ -74,6 +62,20 @@ def upgrade() -> None:
     op.create_index('idx_llm_model_configs_model_type', 'llm_model_configs', ['model_type'])
     op.create_index('idx_llm_model_configs_config', 'llm_model_configs', ['config'], postgresql_using='gin')
 
+    # Create partial unique indexes for default configs
+    # Each user can have at most one default config
+    op.execute("""
+        CREATE UNIQUE INDEX unique_user_default
+        ON llm_model_configs (user_id)
+        WHERE is_default = TRUE AND user_id IS NOT NULL
+    """)
+    # Each group can have at most one default config
+    op.execute("""
+        CREATE UNIQUE INDEX unique_group_default
+        ON llm_model_configs (group_id)
+        WHERE is_default = TRUE AND group_id IS NOT NULL
+    """)
+
 
 def downgrade() -> None:
     # Drop indexes
@@ -81,6 +83,8 @@ def downgrade() -> None:
     op.drop_index('idx_llm_model_configs_model_type', table_name='llm_model_configs')
     op.drop_index('idx_llm_model_configs_group_id', table_name='llm_model_configs')
     op.drop_index('idx_llm_model_configs_user_id', table_name='llm_model_configs')
+    op.drop_index('unique_user_default', table_name='llm_model_configs')
+    op.drop_index('unique_group_default', table_name='llm_model_configs')
 
     # Drop table
     op.drop_table('llm_model_configs')
