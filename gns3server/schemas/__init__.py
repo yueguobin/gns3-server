@@ -30,6 +30,15 @@ from .controller.gns3vm import GNS3VM
 from .controller.nodes import NodeCreate, NodeUpdate, NodeDuplicate, NodeCapture, Node
 from .controller.projects import ProjectCreate, ProjectUpdate, ProjectDuplicate, Project, ProjectFile, ProjectCompression
 from .controller.users import UserCreate, UserUpdate, LoggedInUserUpdate, User, Credentials, UserGroupCreate, UserGroupUpdate, UserGroup
+from .controller.llm_model_configs import (
+    LLMModelConfigData,
+    LLMModelConfigCreate,
+    LLMModelConfigUpdate,
+    LLMModelConfigResponse,
+    LLMModelConfigListResponse,
+    LLMModelConfigWithSource,
+    LLMModelConfigInheritedResponse
+)
 from .controller.rbac import RoleCreate, RoleUpdate, Role, Privilege, ACECreate, ACEUpdate, ACE
 from .controller.pools import Resource, ResourceCreate, ResourcePoolCreate, ResourcePoolUpdate, ResourcePool
 from .controller.tokens import Token

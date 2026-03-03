@@ -22,6 +22,7 @@ from . import computes
 from . import drawings
 from . import gns3vm
 from . import links
+from . import llm_model_configs
 from . import nodes
 from . import projects
 from . import snapshots
@@ -144,4 +145,10 @@ router.include_router(
     deprecated=True,
     prefix="/gns3vm",
     tags=["GNS3 VM"]
+)
+
+router.include_router(
+    llm_model_configs.router,
+    prefix="/access",
+    tags=["LLM Model Configurations"]
 )
