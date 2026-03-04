@@ -7,8 +7,10 @@ in the project directory.
 """
 
 import asyncio
+import json
 import logging
 import os
+from datetime import datetime
 from typing import AsyncGenerator, Dict, Any, Optional
 from uuid import uuid4
 
@@ -17,6 +19,7 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from gns3server.agent.gns3_copilot.agent.gns3_copilot import agent_builder
+from gns3server.agent.gns3_copilot.chat_sessions_repository import ChatSessionsRepository
 
 log = logging.getLogger(__name__)
 
@@ -84,11 +87,54 @@ class AgentService:
             # CRITICAL: Initialize database schema
             await self._checkpointer.setup()
 
+            # Create chat_sessions table in the same database
+            await self._create_chat_sessions_table(conn)
+
             self._checkpointer_path = checkpointer_path
             self._initialized = True
 
             log.info("Project checkpointer created at: %s", checkpointer_path)
             return self._checkpointer
+
+    async def _create_chat_sessions_table(self, conn: aiosqlite.Connection):
+        """
+        Create the chat_sessions table in the checkpoint database.
+
+        Args:
+            conn: aiosqlite connection
+        """
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id TEXT UNIQUE NOT NULL,
+                user_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                title TEXT DEFAULT 'New Conversation',
+
+                -- Statistics
+                message_count INTEGER DEFAULT 0,
+                llm_calls_count INTEGER DEFAULT 0,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+
+                -- Timestamps
+                last_message_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                -- Reserved fields (JSON strings)
+                metadata TEXT DEFAULT '{}',
+                stats TEXT DEFAULT '{}'
+            )
+        """)
+
+        # Create indexes
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_thread_id ON chat_sessions(thread_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_project ON chat_sessions(user_id, project_id)")
+
+        await conn.commit()
+        log.debug("chat_sessions table created in checkpoint database")
 
     async def _get_graph(self):
         """Get or compile the LangGraph agent."""
@@ -131,6 +177,21 @@ class AgentService:
             mode,
         )
 
+        # Get or create chat session
+        repo = ChatSessionsRepository(self._checkpointer_conn)
+        session = await repo.get_session_by_thread(session_id)
+        is_new_session = session is None
+
+        if is_new_session:
+            # Create new session
+            session = await repo.create_session(
+                thread_id=session_id,
+                user_id=user_id or "",
+                project_id=project_id or "",
+                title="New Conversation"
+            )
+            log.debug("Created new chat session: thread_id=%s", session_id)
+
         # Set request-scoped context variables (memory-only, not persisted)
         if jwt_token:
             from gns3server.agent.gns3_copilot.gns3_client import set_current_jwt_token
@@ -165,13 +226,58 @@ class AgentService:
         graph = await self._get_graph()
         log.debug("LangGraph graph obtained, starting stream")
 
+        # Track statistics for session update
+        message_count = 1  # User message
+        llm_calls_count = 0
+        tool_calls_count = 0
+        input_tokens = 0
+        output_tokens = 0
+        last_message_at = datetime.utcnow().isoformat()
+
         # Stream events
         try:
             async for event in graph.astream_events(inputs, config=config, version="v2"):
                 chunk = self._convert_event_to_chunk(event, session_id)
                 if chunk:
+                    # Track statistics
+                    if chunk.get("type") == "content":
+                        message_count += 1  # AI response
+                    elif chunk.get("type") == "tool_start":
+                        tool_calls_count += 1
+                    elif chunk.get("type") == "tool_end":
+                        message_count += 1  # Tool message
+
+                    # Track tokens if available
+                    if chunk.get("type") == "content" and "input_tokens" in chunk:
+                        input_tokens += chunk.get("input_tokens", 0)
+                    if chunk.get("type") == "content" and "output_tokens" in chunk:
+                        output_tokens += chunk.get("output_tokens", 0)
+
                     log.debug("Yielding chunk: type=%s", chunk.get("type"))
                     yield chunk
+
+            # Update session statistics after successful stream
+            await repo.update_session(
+                thread_id=session_id,
+                message_count=message_count,
+                llm_calls_count=llm_calls_count,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=input_tokens + output_tokens,
+                last_message_at=last_message_at
+            )
+            log.debug("Updated session statistics: thread_id=%s, messages=%d, tokens=%d",
+                     session_id, message_count, input_tokens + output_tokens)
+
+            # Sync auto-generated title from checkpoint state
+            final_state = await graph.aget_state(config)
+            if final_state and "conversation_title" in final_state.values:
+                generated_title = final_state.values["conversation_title"]
+                current_session = await repo.get_session_by_thread(session_id)
+                if current_session and current_session.title != generated_title:
+                    await repo.update_session(thread_id=session_id, title=generated_title)
+                    log.info("Auto-generated title synced: thread_id=%s, title=%s",
+                            session_id, generated_title)
 
         except Exception as e:
             log.error("Error in stream_chat: %s", e, exc_info=True)
@@ -287,6 +393,58 @@ class AgentService:
             result["role"] = "system"
 
         return result
+
+    async def list_sessions(self, user_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        List chat sessions for this project.
+
+        Args:
+            user_id: Filter by user ID (optional)
+            limit: Maximum number of sessions to return
+
+        Returns:
+            List of session dictionaries
+        """
+        if not self._checkpointer_conn:
+            await self._get_checkpointer()
+
+        repo = ChatSessionsRepository(self._checkpointer_conn)
+        sessions = await repo.list_sessions(user_id=user_id, limit=limit)
+        return [s.to_dict() for s in sessions]
+
+    async def delete_session(self, session_id: str) -> bool:
+        """
+        Delete a chat session and its checkpoints.
+
+        Args:
+            session_id: Thread ID to delete
+
+        Returns:
+            True if deleted, False if not found
+        """
+        if not self._checkpointer_conn:
+            await self._get_checkpointer()
+
+        repo = ChatSessionsRepository(self._checkpointer_conn)
+        return await repo.delete_session(session_id)
+
+    async def rename_session(self, session_id: str, new_title: str) -> Optional[Dict[str, Any]]:
+        """
+        Rename a chat session.
+
+        Args:
+            session_id: Thread ID
+            new_title: New title
+
+        Returns:
+            Updated session dictionary or None
+        """
+        if not self._checkpointer_conn:
+            await self._get_checkpointer()
+
+        repo = ChatSessionsRepository(self._checkpointer_conn)
+        session = await repo.update_session(thread_id=session_id, title=new_title)
+        return session.to_dict() if session else None
 
     async def close(self):
         """

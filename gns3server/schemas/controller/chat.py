@@ -88,8 +88,24 @@ class ConversationHistory(BaseModel):
 class ChatSession(BaseModel):
     """Chat session model."""
 
-    session_id: str = Field(..., description="Session ID")
+    id: Optional[int] = Field(None, description="Database ID")
+    thread_id: str = Field(..., description="Thread/session ID")
+    user_id: str = Field(..., description="User ID")
+    project_id: str = Field(..., description="Associated GNS3 project ID")
     title: str = Field(..., description="Session title")
-    project_id: Optional[str] = Field(None, description="Associated GNS3 project ID")
+    message_count: int = Field(default=0, description="Number of messages")
+    llm_calls_count: int = Field(default=0, description="Number of LLM calls")
+    input_tokens: int = Field(default=0, description="Input tokens used")
+    output_tokens: int = Field(default=0, description="Output tokens generated")
+    total_tokens: int = Field(default=0, description="Total tokens used")
+    last_message_at: Optional[str] = Field(None, description="Last message timestamp (ISO 8601)")
     created_at: Optional[str] = Field(None, description="Creation timestamp (ISO 8601)")
     updated_at: Optional[str] = Field(None, description="Last update timestamp (ISO 8601)")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Session metadata")
+    stats: Dict[str, Any] = Field(default_factory=dict, description="Session statistics")
+
+
+class RenameSession(BaseModel):
+    """Rename session request model."""
+
+    title: str = Field(..., description="New session title", min_length=1, max_length=255)

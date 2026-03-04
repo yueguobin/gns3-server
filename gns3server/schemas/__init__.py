@@ -45,7 +45,8 @@ from .controller.chat import (
     ChatResponse,
     OpenAIMessage,
     ConversationHistory,
-    ChatSession
+    ChatSession,
+    RenameSession
 )
 from .controller.rbac import RoleCreate, RoleUpdate, Role, Privilege, ACECreate, ACEUpdate, ACE
 from .controller.pools import Resource, ResourceCreate, ResourcePoolCreate, ResourcePoolUpdate, ResourcePool

@@ -189,7 +189,7 @@ async def stream_chat(
     "/sessions",
     response_model=List[schemas.ChatSession],
     summary="List chat sessions",
-    description="List all chat sessions for a project (not yet implemented)."
+    description="List all chat sessions for a project."
 )
 async def list_sessions(
     project: Project = Depends(dep_project),
@@ -197,9 +197,6 @@ async def list_sessions(
 ) -> list[schemas.ChatSession]:
     """
     List chat sessions for a project.
-
-    Note: This endpoint is a placeholder. Full session listing functionality
-    requires checkpoint metadata inspection which is not yet implemented.
     """
 
     # Check if project is opened
@@ -209,8 +206,15 @@ async def list_sessions(
             detail=f"Project must be opened to access chat sessions. Current status: {project.status}"
         )
 
-    # TODO: Implement session listing from checkpoint metadata
-    return []
+    # Get AgentService for this project
+    agent_manager = await get_project_agent_manager()
+    agent_service = await agent_manager.get_agent(str(project.id), project.path)
+
+    # List sessions
+    sessions = await agent_service.list_sessions(user_id=str(current_user.user_id))
+
+    # Convert to schemas
+    return [schemas.ChatSession(**s) for s in sessions]
 
 
 @router.get(
@@ -250,7 +254,7 @@ async def get_history(
     "/sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a chat session",
-    description="Delete a specific chat session (not yet implemented)."
+    description="Delete a specific chat session and its checkpoints."
 )
 async def delete_session(
     session_id: str,
@@ -259,9 +263,6 @@ async def delete_session(
 ):
     """
     Delete a chat session.
-
-    Note: This endpoint is a placeholder. Full session deletion functionality
-    requires checkpoint manipulation which is not yet implemented.
     """
 
     # Check if project is opened
@@ -271,8 +272,54 @@ async def delete_session(
             detail=f"Project must be opened to delete chat sessions. Current status: {project.status}"
         )
 
-    # TODO: Implement session deletion from checkpoint
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Session deletion not yet implemented"
-    )
+    # Get AgentService for this project
+    agent_manager = await get_project_agent_manager()
+    agent_service = await agent_manager.get_agent(str(project.id), project.path)
+
+    # Delete session
+    deleted = await agent_service.delete_session(session_id)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' not found"
+        )
+
+
+@router.patch(
+    "/sessions/{session_id}",
+    response_model=schemas.ChatSession,
+    summary="Rename a chat session",
+    description="Rename a specific chat session."
+)
+async def rename_session(
+    session_id: str,
+    request: schemas.RenameSession,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+) -> schemas.ChatSession:
+    """
+    Rename a chat session.
+    """
+
+    # Check if project is opened
+    if project.status != "opened":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Project must be opened to rename chat sessions. Current status: {project.status}"
+        )
+
+    # Get AgentService for this project
+    agent_manager = await get_project_agent_manager()
+    agent_service = await agent_manager.get_agent(str(project.id), project.path)
+
+    # Rename session
+    session = await agent_service.rename_session(session_id, request.title)
+
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' not found"
+        )
+
+    return schemas.ChatSession(**session)
