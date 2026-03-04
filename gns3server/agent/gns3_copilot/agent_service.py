@@ -11,7 +11,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, Any, Optional, List
 from uuid import uuid4
 
 import aiosqlite
@@ -176,6 +176,10 @@ class AgentService:
             session_id,
             mode,
         )
+
+        # Ensure checkpointer is initialized
+        if not self._checkpointer_conn:
+            await self._get_checkpointer()
 
         # Get or create chat session
         repo = ChatSessionsRepository(self._checkpointer_conn)
