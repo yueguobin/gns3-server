@@ -849,6 +849,9 @@ class Project:
         if not ignore_notification:
             self.emit_controller_notification("project.closed", self.asdict())
 
+        # Cleanup GNS3 Copilot AgentService for this project
+        await self._cleanup_copilot_agent()
+
         self.reset()
         self._closing = False
 
@@ -884,6 +887,23 @@ class Project:
                 os.remove(path)
         except OSError as e:
             log.warning(f"Could not delete unused pictures: {e}")
+
+    async def _cleanup_copilot_agent(self):
+        """
+        Cleanup GNS3 Copilot AgentService for this project.
+
+        This should be called when the project is closed to free resources.
+        """
+        try:
+            from gns3server.agent.gns3_copilot.project_agent_manager import get_project_agent_manager
+
+            agent_manager = await get_project_agent_manager()
+            if agent_manager.has_agent(self._id):
+                log.info(f"Cleaning up AgentService for project '{self.name}' ({self._id})")
+                await agent_manager.remove_agent(self._id)
+        except Exception as e:
+            # Don't fail project close if agent cleanup fails
+            log.warning(f"Failed to cleanup AgentService for project '{self.name}': {e}")
 
     async def delete(self):
 

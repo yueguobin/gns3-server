@@ -124,8 +124,13 @@ class MessagesState(TypedDict):
 
 
 # Define llm call  node
-def llm_call(state: dict):
+def llm_call(state: dict, config: dict = None):
     """LLM decides whether to call a tool or not"""
+
+    # Extract user authentication info from LangGraph config
+    configurable = config.get("configurable", {}) if config else {}
+    user_id = configurable.get("user_id")
+    jwt_token = configurable.get("jwt_token")
 
     # Defensive check: skip LLM call if no user messages
     messages = state.get("messages", [])
@@ -203,22 +208,34 @@ def llm_call(state: dict):
     # print(full_messages)
 
     # Create fresh model with tools for each LLM call
-    # This ensures configuration changes in .env take effect immediately
-    model_with_tools = create_base_model_with_tools(tools)
+    # This ensures configuration changes take effect immediately
+    # Pass user_id and jwt_token for per-user LLM config and API authentication
+    model_with_tools = create_base_model_with_tools(
+        tools,
+        user_id=user_id,
+        jwt_token=jwt_token
+    )
 
+    # Store jwt_token in state for Tools to use when calling GNS3 API
     return {
         "messages": [model_with_tools.invoke(full_messages)],
         "llm_calls": state.get("llm_calls", 0) + 1,
         "topology_info": topology_info,
+        "jwt_token": jwt_token,
     }
 
 
 # Define generate title node
-def generate_title(state: MessagesState) -> dict:
+def generate_title(state: MessagesState, config: dict = None) -> dict:
     """
     Generate a conversation title using a lightweight assistant LLM (title_model).
     This node is only executed when no title has been set yet (first round only).
     """
+
+    # Extract user authentication info from LangGraph config
+    configurable = config.get("configurable", {}) if config else {}
+    user_id = configurable.get("user_id")
+    jwt_token = configurable.get("jwt_token")
 
     # Only generate a title if it hasn't been set yet
     current_title = state.get("conversation_title")
@@ -236,7 +253,8 @@ def generate_title(state: MessagesState) -> dict:
         # Call the title generation model (create fresh instance for each call)
         try:
             # Create fresh title model instance from current env configuration
-            title_model = create_title_model()
+            # Pass user_id and jwt_token for per-user LLM config
+            title_model = create_title_model(user_id=user_id, jwt_token=jwt_token)
             response = title_model.invoke(
                 title_prompt_messages, config={"configurable": {"foo_temperature": 1.0}}
             )

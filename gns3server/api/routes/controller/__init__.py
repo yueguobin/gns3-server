@@ -16,6 +16,7 @@
 
 from fastapi import APIRouter, Depends
 
+from . import chat
 from . import controller
 from . import appliances
 from . import computes
@@ -151,4 +152,10 @@ router.include_router(
     llm_model_configs.router,
     prefix="/access",
     tags=["LLM Model Configurations"]
+)
+
+router.include_router(
+    chat.router,
+    prefix="/chat",
+    tags=["Chat"]
 )
