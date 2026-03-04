@@ -90,7 +90,12 @@ class GNS3TopologyTool(BaseTool):
             }
 
             # Log topology result
-            logger.info("Topology retrieved: %s", topology)
+            logger.info("Topology retrieved: project_id=%s, name=%s, nodes=%d, links=%d",
+                        topology.get("project_id"),
+                        topology.get("name"),
+                        len(topology.get("nodes", {})),
+                        len(topology.get("links", [])))
+            logger.debug("Topology details: %s", topology)
 
             return topology
 
