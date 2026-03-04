@@ -71,7 +71,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
     Input should be a JSON object containing project_id and device configurations.
     Example input:
         {
-            "project_id": "f32ebf3d-ef8c-4910-b0d6-566ed828cd24",
+            "project_id": "<PROJECT_UUID>",
             "device_configs": [
                 {
                     "device_name": "R-1",
@@ -463,7 +463,7 @@ if __name__ == "__main__":
     # example tool_input with project_id
     input_paras = json.dumps(
         {
-            "project_id": "f32ebf3d-ef8c-4910-b0d6-566ed828cd24",
+            "project_id": "<PROJECT_UUID>",
             "device_configs": [
                 {
                     "device_name": "R-1",

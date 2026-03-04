@@ -95,7 +95,7 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
     **Input Format:**
         {
-            "project_id": "f32ebf3d-ef8c-4910-b0d6-566ed828cd24",
+            "project_id": "<PROJECT_UUID>",
             "device_configs": [
                 {
                     "device_name": "R-1",
@@ -476,7 +476,7 @@ if __name__ == "__main__":
     # Example usage with new format
     device_commands = json.dumps(
         {
-            "project_id": "f32ebf3d-ef8c-4910-b0d6-566ed828cd24",
+            "project_id": "<PROJECT_UUID>",
             "device_configs": [
                 {
                     "device_name": "R-2",

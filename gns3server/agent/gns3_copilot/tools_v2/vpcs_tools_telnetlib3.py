@@ -65,7 +65,7 @@ class VPCSMultiCommands(BaseTool):
 
     **Input Format:**
         {
-            "project_id": "f32ebf3d-ef8c-4910-b0d6-566ed828cd24",
+            "project_id": "<PROJECT_UUID>",
             "device_configs": [
                 {
                     "device_name": "PC1",
@@ -407,7 +407,7 @@ if __name__ == "__main__":
     # Example usage
     command_groups = json.dumps(
         {
-            "project_id": "f32ebf3d-ef8c-4910-b0d6-566ed828cd24",
+            "project_id": "<PROJECT_UUID>",
             "device_configs": [
                 {
                     "device_name": "PC1",

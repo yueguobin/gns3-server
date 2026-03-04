@@ -281,13 +281,17 @@ def trim_messages_for_context(
     llm_config: dict[str, Any] | None = None,
     strategy: Literal["conservative", "balanced", "aggressive"] = "balanced",
     preserve_system: bool = True,
+    tool_tokens: int = 0,
 ) -> list[Any]:
     """
     Trim messages to fit within model's context window.
 
-    This function uses tiktoken for accurate token counting and LangChain's
-    trim_messages utility to intelligently reduce message history while
-    preserving conversation flow.
+    This function uses tiktoken for accurate token counting and intelligently
+    reduces message history while preserving conversation flow.
+
+    IMPORTANT: Tool definitions are sent separately by LangChain and count towards
+    the context limit. This function accounts for tool tokens when making
+    trimming decisions.
 
     Args:
         messages: List of LangChain messages (HumanMessage, AIMessage, etc.)
@@ -295,13 +299,14 @@ def trim_messages_for_context(
         llm_config: Optional LLM config dict from database (may contain context_limit)
         strategy: How aggressively to use the context window
         preserve_system: Whether to always preserve system messages
+        tool_tokens: Token count for tool definitions (these are sent separately by LangChain)
 
     Returns:
         list: Trimmed list of messages that fit within context limit
 
     Examples:
         >>> messages = [HumanMessage("Hello"), AIMessage("Hi there!")]
-        >>> trimmed = trim_messages_for_context(messages, "gpt-4o")
+        >>> trimmed = trim_messages_for_context(messages, "gpt-4o", tool_tokens=1000)
         >>> len(trimmed) <= len(messages)
         True
     """
@@ -314,58 +319,99 @@ def trim_messages_for_context(
     # Calculate usable tokens (reserve space for output)
     max_tokens = calculate_max_tokens(model_limit, strategy)
 
+    # Account for tool tokens - these are sent separately by LangChain
+    # and count towards the context limit
+    available_for_messages = max_tokens - tool_tokens
+
+    if available_for_messages < 0:
+        logger.warning(
+            "Tool definitions (%d tokens) exceed input budget (%d tokens). "
+            "Consider reducing context_limit or using fewer tools.",
+            tool_tokens, max_tokens
+        )
+        available_for_messages = 0
+
     # Check if trimming is needed
     current_tokens = count_messages_tokens(messages)
 
-    if current_tokens <= max_tokens:
+    if current_tokens <= available_for_messages:
         logger.debug(
-            "Messages fit in context: %d / %d tokens",
-            current_tokens, max_tokens
+            "Messages fit in context: %d / %d tokens (available: %d, tools: %d)",
+            current_tokens, max_tokens, available_for_messages, tool_tokens
         )
         return messages
 
     logger.info(
-        "Trimming messages: %d → %d tokens (model: %s)",
-        current_tokens, max_tokens, model_name
+        "Trimming messages: %d → %d tokens (budget: %d, tools: %d)",
+        current_tokens, available_for_messages, max_tokens, tool_tokens
     )
 
-    # Trim messages using LangChain's utility
-    try:
-        from langchain_core.messages.utils import count_tokens_approximately
-        trimmed = trim_messages(
-            messages,
-            strategy="last",  # Keep most recent messages
-            max_tokens=max_tokens,
-            token_counter=count_tokens_approximately,  # Required: token counting function
-            include_system=preserve_system,  # Keep system messages if requested
-            start_on="human",  # Ensure we start with a human message
-            end_on=("human", "tool", "ai"),  # End on human/tool/ai messages
-        )
+    # Manually separate and trim to ensure system messages are preserved
+    # This is more reliable than using trim_messages with include_system
+    system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
+    other_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
 
-        logger.info(
-            "Trimmed %d → %d messages",
-            len(messages), len(trimmed)
-        )
+    # Calculate tokens for system messages (these will always be preserved)
+    system_tokens = count_messages_tokens(system_msgs)
 
-        return trimmed
+    # Calculate available tokens for non-system messages (after tools and system)
+    available_for_other = available_for_messages - system_tokens
 
-    except Exception as e:
-        logger.error("Failed to trim messages: %s", e, exc_info=True)
-
-        # Fallback: simple slicing (keep last N messages)
-        # Estimate average tokens per message (~100 tokens)
-        fallback_msg_count = max(1, max_tokens // 100)
-
+    if available_for_other <= 0:
+        # Not enough space for system messages - keep only system messages
         logger.warning(
-            "Using fallback trimming: keeping last %d messages",
-            fallback_msg_count
+            "System messages (%d tokens) exceed available space (%d tokens), truncating to system only",
+            system_tokens, available_for_messages
         )
+        return system_msgs[:1] if system_msgs else messages[-1:]
 
-        # Always preserve system messages
-        system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
-        other_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
+    # Trim non-system messages to fit available space
+    trimmed_other = _trim_to_token_limit(other_msgs, available_for_other)
 
-        return system_msgs + other_msgs[-fallback_msg_count:]
+    # Combine system messages with trimmed conversation
+    trimmed = system_msgs + trimmed_other
+
+    logger.info(
+        "Trimmed %d → %d messages (system: %d, history: %d → %d)",
+        len(messages), len(trimmed),
+        len(system_msgs), len(other_msgs), len(trimmed_other)
+    )
+
+    return trimmed
+
+
+def _trim_to_token_limit(messages: list[Any], max_tokens: int) -> list[Any]:
+    """
+    Trim messages to fit within token limit using tiktoken.
+
+    Iteratively removes oldest messages until under token limit.
+    Always keeps at least the most recent message.
+
+    Args:
+        messages: List of messages to trim
+        max_tokens: Maximum tokens allowed
+
+    Returns:
+        Trimmed list of messages
+    """
+    if not messages:
+        return messages
+
+    current_tokens = count_messages_tokens(messages)
+
+    if current_tokens <= max_tokens:
+        return messages
+
+    # Iteratively remove oldest messages
+    trimmed = list(messages)
+    while trimmed and count_messages_tokens(trimmed) > max_tokens:
+        trimmed.pop(0)
+
+    # Ensure at least one message remains
+    if not trimmed and messages:
+        trimmed = [messages[-1]]
+
+    return trimmed
 
 
 def get_token_usage_summary(
@@ -472,10 +518,20 @@ def prepare_context_messages(
     # Build base context (system + topology)
     context_messages = [SystemMessage(content=system_prompt)]
 
+    # Calculate token breakdown
+    system_prompt_tokens = count_tokens_accurately(system_prompt)
+    topology_tokens = 0
+
     if topology_context:
+        topology_context_full = f"Current Topology:\n{topology_context}"
+        topology_tokens = count_tokens_accurately(topology_context_full)
         context_messages.append(
-            SystemMessage(content=f"Current Topology:\n{topology_context}")
+            SystemMessage(content=topology_context_full)
         )
+
+    # Calculate conversation history tokens
+    history_tokens = count_messages_tokens(state_messages)
+    total_context_tokens = system_prompt_tokens + topology_tokens + history_tokens
 
     # Combine with conversation history
     full_messages = context_messages + state_messages
@@ -487,20 +543,43 @@ def prepare_context_messages(
         llm_config=llm_config,
         strategy=trim_strategy,
         preserve_system=True,  # Always keep system prompts
+        tool_tokens=tool_tokens,  # Account for tool definitions
     )
 
-    # Log summary (including tool tokens)
-    summary = get_token_usage_summary(trimmed_messages, model_name, llm_config, tool_tokens)
-    logger.info(
-        "Context prepared: %d msgs, ~%d tokens (messages) + %d tokens (tools) = %d total / %dK limit (%.1f%%), strategy=%s",
-        summary["message_count"],
-        summary["estimated_tokens"],
-        summary["tool_tokens"],
-        summary["total_tokens"],
-        summary["model_limit_k"],
-        summary["total_usage_percentage"],
-        trim_strategy
-    )
+    # Recalculate after trimming
+    trimmed_history_tokens = count_messages_tokens([m for m in trimmed_messages if not isinstance(m, SystemMessage)])
+    trimmed_total_tokens = system_prompt_tokens + topology_tokens + trimmed_history_tokens
+
+    # Log summary with detailed breakdown
+    model_limit_k = get_model_context_limit(model_name, llm_config) // 1000
+
+    if trimmed_history_tokens < history_tokens:
+        # Trimming happened
+        logger.info(
+            "Context prepared (trimmed): system=%d + topology=%d + history=%d→%d + tools=%d = %d total / %dK limit (%.1f%%), strategy=%s",
+            system_prompt_tokens,
+            topology_tokens,
+            history_tokens,
+            trimmed_history_tokens,
+            tool_tokens,
+            trimmed_total_tokens,
+            model_limit_k,
+            (trimmed_total_tokens / (model_limit_k * 1000)) * 100,
+            trim_strategy
+        )
+    else:
+        # No trimming
+        logger.info(
+            "Context prepared: system=%d + topology=%d + history=%d + tools=%d = %d total / %dK limit (%.1f%%), strategy=%s",
+            system_prompt_tokens,
+            topology_tokens,
+            history_tokens,
+            tool_tokens,
+            total_context_tokens,
+            model_limit_k,
+            (total_context_tokens / (model_limit_k * 1000)) * 100,
+            trim_strategy
+        )
 
     return trimmed_messages
 

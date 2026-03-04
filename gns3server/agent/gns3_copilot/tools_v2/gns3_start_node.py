@@ -355,7 +355,7 @@ if __name__ == "__main__":
     print("=== Testing single node startup ===")
     test_input_single = json.dumps(
         {
-            "project_id": "f32ebf3d-ef8c-4910-b0d6-566ed828cd24",  # Replace with actual project UUID
+            "project_id": "<PROJECT_UUID>",  # Replace with actual project UUID
             "node_ids": [
                 "fbeda109-9a74-4d8c-a749-cc3847911a90"
             ],  # Replace with actual node UUID
@@ -369,7 +369,7 @@ if __name__ == "__main__":
     print("\n=== Testing multiple nodes startup ===")
     test_input_multiple = json.dumps(
         {
-            "project_id": "f32ebf3d-ef8c-4910-b0d6-566ed828cd24",  # Replace with actual project UUID
+            "project_id": "<PROJECT_UUID>",  # Replace with actual project UUID
             "node_ids": [
                 "fbeda109-9a74-4d8c-a749-cc3847911a90",  # Replace with actual node UUIDs
                 "another-node-uuid-here",
