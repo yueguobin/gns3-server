@@ -179,6 +179,8 @@ GNS3 Copilot Agent 需要以下信息才能正常工作：
 - Token 数据依赖 LLM 返回的 `usage_metadata`，某些模型可能不支持
 - 统计数据在流结束后通过 `update_session` 方法增量更新到数据库
 - LangGraph 已自动处理 input 和 output 的历史累加，代码使用最后一次 LLM 调用的值
+- **消息 ID 处理**：创建初始消息时分配 ID（`HumanMessage(id=str(uuid4()))`），从 checkpoint 读取的消息如果没有 ID 也会自动生成
+- **格式转换**：使用 `message_converters.py` 模块处理 LangChain 和 OpenAI 格式之间的转换，确保 tool_calls 格式符合 OpenAI 规范
 
 ### Title 自动同步
 
@@ -348,15 +350,54 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
 
 ### OpenAIMessage
 
-- id: str - 消息 ID
-- role: Literal["user", "assistant", "system", "tool"] - 角色
-- content: str - 消息内容
-- name: Optional[str] - 工具消息名称
-- tool_call_id: Optional[str] - 关联的工具调用 ID
-- tool_calls: Optional[List] - 工具调用列表（assistant 消息）
-- created_at: str - 创建时间
+OpenAI 兼容的消息模型。
+
+**基础字段**：
+- id: str - 消息唯一标识符（自动生成或从 LangChain 消息继承）
+- role: Literal["user", "assistant", "system", "tool"] - 消息角色
+- content: str - 消息内容（支持文本、JSON 字符串）
+- created_at: str - 创建时间（ISO 8601）
+
+**工具相关字段**：
+- name: Optional[str] - 工具消息名称（tool 消息）
+- tool_call_id: Optional[str] - 关联的工具调用 ID（tool 消息）
+- tool_calls: Optional[List[OpenAIToolCall]] - 工具调用列表（assistant 消息）
+  - id: str - 工具调用 ID
+  - type: Literal["function"] - 固定为 "function"
+  - function: Dict - 包含 name 和 arguments（dict 或 JSON 字符串）
+
+**元数据**：
+- metadata: Optional[Dict] - 额外的消息元数据
 
 ## 核心组件
+
+### Message Converters（消息格式转换）
+
+**文件**：`gns3server/agent/gns3_copilot/utils/message_converters.py`
+
+**职责**：在 LangChain 消息格式和 OpenAI 兼容格式之间进行转换
+
+**主要函数**：
+- `convert_langchain_to_openai()`：LangChain → OpenAI 格式
+- `convert_openai_to_langchain()`：OpenAI → LangChain 格式
+- `convert_stream_event_to_openai()`：流事件 → OpenAI SSE 格式
+
+**关键转换逻辑**：
+
+1. **消息 ID 处理**
+   - 如果消息没有 ID，自动生成 UUID
+   - 确保所有返回的消息都有唯一标识符
+
+2. **Tool Calls 格式转换**
+   - LangChain 格式：`{'name': 'xxx', 'args': {...}, 'id': 'yyy', 'type': 'tool_call'}`
+   - OpenAI 格式：`{'id': 'yyy', 'type': 'function', 'function': {'name': 'xxx', 'arguments': '{...}'}}`
+   - 自动将 `args` 对象转换为 JSON 字符串（如需要）
+
+3. **Content 类型处理**
+   - 支持 string、dict、list 类型
+   - 非 string 类型自动转换为 JSON 字符串
+
+**实现位置**：`utils/message_converters.py`
 
 ### AgentService
 
@@ -375,9 +416,10 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
 2. 获取或创建 chat session（从 `chat_sessions` 表）
 3. 设置 ContextVars（JWT token、LLM config）
 4. 构建 LangGraph config
-5. 流式执行 Agent，同时收集统计信息
-6. 流结束后更新会话统计到数据库
-7. 同步 auto-generated title
+5. 创建带 ID 的初始消息：`HumanMessage(content=message, id=str(uuid4()))`
+6. 流式执行 Agent，同时收集统计信息
+7. 流结束后更新会话统计到数据库
+8. 同步 auto-generated title
 
 **统计收集机制**（在 `stream_chat` 中）：
 
@@ -387,10 +429,10 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
 
 **关键事件处理**：
 - `on_chat_model_start`：LLM 调用次数 +1
-- `on_chat_model_end`：提取 token 使用量，AI 消息计数 +1
+- `on_chat_model_end`：提取 token 使用量（从 `output.usage_metadata`），AI 消息计数 +1
 - `on_tool_end`：工具消息计数 +1
 
-**实现位置**：`agent_service.py` 第 233-294 行
+**实现位置**：`agent_service.py`
 
 ### ProjectAgentManager
 

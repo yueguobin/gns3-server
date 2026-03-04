@@ -20,6 +20,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from gns3server.agent.gns3_copilot.agent.gns3_copilot import agent_builder
 from gns3server.agent.gns3_copilot.chat_sessions_repository import ChatSessionsRepository
+from gns3server.agent.gns3_copilot.utils.message_converters import convert_langchain_to_openai
 
 log = logging.getLogger(__name__)
 
@@ -220,7 +221,7 @@ class AgentService:
 
         # Build inputs
         inputs = {
-            "messages": [HumanMessage(content=message)],
+            "messages": [HumanMessage(content=message, id=str(uuid4()))],
             "llm_calls": 0,
             "remaining_steps": 20,
             "mode": mode,
@@ -413,32 +414,8 @@ class AgentService:
         }
 
     def _convert_message_to_dict(self, msg) -> Dict[str, Any]:
-        """Convert a LangChain message to dict format."""
-        from datetime import datetime
-
-        msg_type = type(msg).__name__
-
-        result = {
-            "id": getattr(msg, "id", str(uuid4())),
-            "role": "user",
-            "content": getattr(msg, "content", str(msg)),
-            "created_at": datetime.utcnow().isoformat() + "Z",
-        }
-
-        if msg_type == "HumanMessage":
-            result["role"] = "user"
-        elif msg_type == "AIMessage":
-            result["role"] = "assistant"
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                result["tool_calls"] = msg.tool_calls
-        elif msg_type == "ToolMessage":
-            result["role"] = "tool"
-            result["tool_call_id"] = getattr(msg, "tool_call_id", None)
-            result["name"] = getattr(msg, "name", None)
-        elif msg_type == "SystemMessage":
-            result["role"] = "system"
-
-        return result
+        """Convert a LangChain message to OpenAI-compatible dict format."""
+        return convert_langchain_to_openai(msg)
 
     async def list_sessions(self, user_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         """
