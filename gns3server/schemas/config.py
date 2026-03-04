@@ -114,6 +114,7 @@ class BuiltinSymbolTheme(str, Enum):
 class ServerSettings(BaseModel):
 
     local: bool = False
+    enable_http_auth: bool = True
     name: str = f"{socket.gethostname()} (controller)"
     protocol: ServerProtocol = ServerProtocol.http
     host: str = "0.0.0.0"
