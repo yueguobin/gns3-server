@@ -204,6 +204,7 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         topology_context=topology_context,
         model_name=llm_config.get("model", "default"),
         llm_config=llm_config,
+        tools=tools,  # Pass tools for accurate token estimation
     )
 
     # Create fresh model with tools for each LLM call

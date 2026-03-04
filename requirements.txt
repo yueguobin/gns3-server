@@ -49,6 +49,9 @@ langchain-ollama>=1.0.1
 langchain-deepseek>=1.0.1
 langchain-xai>=1.2.1
 
+# Token Counting
+tiktoken>=0.8.0
+
 # Network Automation
 netmiko>=4.6.0
 nornir>=3.5.0
