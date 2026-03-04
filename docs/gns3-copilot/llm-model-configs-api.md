@@ -115,6 +115,7 @@ The `model_type` field accepts the following values:
 | `base_url` | string | API base URL |
 | `model` | string | Model name |
 | `temperature` | float | Temperature (0.0-2.0, default: 0.7) |
+| `context_limit` | integer | **Model context window limit in K tokens** (e.g., 128 = 128K = 128,000 tokens) |
 
 **Optional Fields:**
 
@@ -122,7 +123,16 @@ The `model_type` field accepts the following values:
 |-------|------|-------------|
 | `api_key` | string | API key (auto-encrypted) |
 | `max_tokens` | integer | Max tokens for generation |
+| `context_strategy` | string | Context trimming strategy: "conservative" (60%), "balanced" (75%), "aggressive" (85%). Default: "balanced" |
 | `is_default` | boolean | Set as default (default: false) |
+
+**Important Notes:**
+
+- **`context_limit` is required**: You must specify the model's context window limit. Refer to the model provider's official documentation for the current value.
+- **Unit is K tokens**: The value is in thousands of tokens (1 K = 1,000 tokens). For example:
+  - GPT-4o: 128,000 tokens → configure as `"context_limit": 128`
+  - Claude 3.5 Sonnet: 200,000 tokens → configure as `"context_limit": 200`
+  - Gemini 1.5 Pro: 2,800,000 tokens → configure as `"context_limit": 2800`
 
 **Extra Fields:** Any custom fields are supported for future extensibility.
 
@@ -138,6 +148,8 @@ The `model_type` field accepts the following values:
 | `temperature` | float (optional) | Temperature |
 | `api_key` | string (optional) | API key |
 | `max_tokens` | integer (optional) | Max tokens |
+| `context_limit` | integer (optional) | Model context window limit in K tokens |
+| `context_strategy` | string (optional) | Context trimming strategy |
 | `is_default` | boolean (optional) | Default flag |
 | `expected_version` | integer (optional) | **Optimistic locking version** |
 
@@ -213,28 +225,36 @@ curl -X POST http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "GPT-4",
+    "name": "GPT-4o",
     "model_type": "text",
     "provider": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4",
+    "model": "gpt-4o",
     "temperature": 0.7,
+    "context_limit": 128,
+    "context_strategy": "balanced",
     "api_key": "sk-xxx",
     "is_default": true
   }'
 ```
 
+**Important:**
+- `context_limit` is **required** and specified in K tokens (e.g., 128 = 128K = 128,000 tokens)
+- Refer to the model provider's official documentation for the current context window size
+
 **Response:**
 ```json
 {
   "config_id": "uuid-1",
-  "name": "GPT-4",
+  "name": "GPT-4o",
   "model_type": "text",
   "config": {
     "provider": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4",
+    "model": "gpt-4o",
     "temperature": 0.7,
+    "context_limit": 128,
+    "context_strategy": "balanced",
     "api_key": "sk-xxx"
   },
   "user_id": "uuid-user",
@@ -253,12 +273,14 @@ curl -X POST http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Claude-3",
+    "name": "Claude-3.5 Sonnet",
     "model_type": "text",
     "provider": "anthropic",
     "base_url": "https://api.anthropic.com",
-    "model": "claude-3-opus-20240229",
+    "model": "claude-3-5-sonnet-20241022",
     "temperature": 0.7,
+    "context_limit": 200,
+    "context_strategy": "balanced",
     "api_key": "sk-ant-xxx",
     "is_default": true
   }'
@@ -277,13 +299,15 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
   "configs": [
     {
       "config_id": "uuid-1",
-      "name": "GPT-4",
+      "name": "GPT-4o",
       "model_type": "text",
       "config": {
         "provider": "openai",
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-4",
+        "model": "gpt-4o",
         "temperature": 0.7,
+        "context_limit": 128,
+        "context_strategy": "balanced",
         "api_key": "sk-xxx"
       },
       "user_id": "uuid-user",
@@ -297,13 +321,15 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
     },
     {
       "config_id": "uuid-2",
-      "name": "Claude-3",
+      "name": "Claude-3.5 Sonnet",
       "model_type": "text",
       "config": {
         "provider": "anthropic",
         "base_url": "https://api.anthropic.com",
-        "model": "claude-3-opus-20240229",
+        "model": "claude-3-5-sonnet-20241022",
         "temperature": 0.7,
+        "context_limit": 200,
+        "context_strategy": "balanced",
         "api_key": null
       },
       "user_id": null,
@@ -318,11 +344,16 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
   ],
   "default_config": {
     "config_id": "uuid-1",
-    "name": "GPT-4",
+    "name": "GPT-4o",
     "model_type": "text",
     "config": {
       "provider": "openai",
-      ...
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o",
+      "temperature": 0.7,
+      "context_limit": 128,
+      "context_strategy": "balanced",
+      "api_key": "sk-xxx"
     },
     "user_id": "uuid-user",
     "group_id": null,
@@ -340,6 +371,7 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
 - `source: "user"` indicates the config belongs to the user
 - `source: "group"` indicates the config is inherited from a group
 - Configuration fields are nested in the `config` object (same structure as group endpoints)
+- `context_limit` is in K tokens (128 = 128K = 128,000 tokens)
 
 ### 4. Get group configurations
 
@@ -417,7 +449,8 @@ curl -X PUT http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/{c
   -H "Content-Type: application/json" \
   -d '{
     "temperature": 0.9,
-    "max_tokens": 4000
+    "max_tokens": 4000,
+    "context_strategy": "aggressive"
   }'
 ```
 
@@ -482,13 +515,15 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/de
 ```json
 {
   "config_id": "uuid-1",
-  "name": "GPT-4",
+  "name": "GPT-4o",
   "model_type": "text",
   "config": {
     "provider": "openai",
     "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4",
+    "model": "gpt-4o",
     "temperature": 0.7,
+    "context_limit": 128,
+    "context_strategy": "balanced",
     "api_key": "sk-xxx"
   },
   "user_id": "uuid-user",
@@ -723,3 +758,82 @@ The `llm_model_configs` table includes three reserved JSONB fields for future ex
 - Caching computed values
 
 **Note:** These fields are not exposed in the current API schemas and are reserved for internal use.
+
+---
+
+## Context Limit Configuration
+
+### What is `context_limit`?
+
+The `context_limit` field specifies the maximum context window size for an LLM model. This is a **required field** for all model configurations.
+
+### Why is it required?
+
+Model providers frequently update their models and change context window sizes:
+- OpenAI GPT-4o: 128K tokens (may change)
+- Anthropic Claude 3.5: 200K tokens (may change)
+- Google Gemini 1.5: 2.8M tokens (may change)
+
+Hardcoding these values in the system would quickly become outdated. Requiring users to configure this field ensures that the system always uses the correct, up-to-date values.
+
+### Unit: K tokens
+
+The `context_limit` value is specified in **K tokens** (thousands of tokens) to make it easier to read and write:
+
+| Official Documentation | API Configuration |
+|---------------------|-------------------|
+| 128,000 tokens | `"context_limit": 128` |
+| 200,000 tokens | `"context_limit": 200` |
+| 2,800,000 tokens | `"context_limit": 2800` |
+
+### How to find the correct value
+
+1. **Check the official documentation** for your model:
+   - OpenAI: https://platform.openai.com/docs/models
+   - Anthropic: https://docs.anthropic.com/claude/docs/models-overview
+   - Google: https://ai.google.dev/gemini-api/docs/models
+   - DeepSeek: https://platform.deepseek.com/api-docs/
+
+2. **Convert from tokens to K**:
+   ```
+   context_limit = official_value_in_tokens / 1000
+
+   Example:
+   GPT-4o: 128,000 tokens / 1000 = 128
+   ```
+
+3. **Use the reference tool**:
+   ```bash
+   python scripts/show_model_context_limits.py
+   ```
+
+### Example: Common Models
+
+| Model | Official Value | Configuration |
+|-------|---------------|--------------|
+| GPT-4o | 128,000 | `"context_limit": 128` |
+| GPT-3.5 Turbo | 16,385 | `"context_limit": 17` |
+| Claude 3.5 Sonnet | 200,000 | `"context_limit": 200` |
+| Gemini 1.5 Pro | 2,800,000 | `"context_limit": 2800` |
+| DeepSeek Chat | 128,000 | `"context_limit": 128` |
+
+### Context Strategy
+
+The optional `context_strategy` field controls how aggressively the system uses the available context window:
+
+| Strategy | Usage | Best For |
+|----------|-------|----------|
+| `conservative` | 60% of limit | Long outputs, complex tasks, uncertain output size |
+| `balanced` (default) | 75% of limit | Most conversations, general use |
+| `aggressive` | 85% of limit | Short outputs, analysis tasks, predictable output size |
+
+### Error Handling
+
+If `context_limit` is missing or invalid, the API will return:
+
+```json
+HTTP 400 Bad Request
+{
+  "detail": "context_limit is required (unit: K tokens, e.g., 128 = 128K = 128,000 tokens). Please check your model provider's documentation for the current context window size and specify it in the configuration."
+}
+```

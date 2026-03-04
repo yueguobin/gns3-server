@@ -48,6 +48,9 @@ from gns3server.agent.gns3_copilot.agent.model_factory import (
     create_base_model_with_tools,
     create_title_model,
 )
+from gns3server.agent.gns3_copilot.agent.context_manager import (
+    prepare_context_messages,
+)
 from gns3server.agent.gns3_copilot.gns3_client import GNS3TopologyTool
 from gns3server.agent.gns3_copilot.prompts import TITLE_PROMPT, load_system_prompt
 import sys
@@ -164,8 +167,8 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     if config and config.get("configurable"):
         project_id = config["configurable"].get("project_id")
 
-    # Construct context messages
-    context_messages = []
+    # Retrieve topology information if available
+    topology_context = None
     topology_info = None
 
     if project_id:
@@ -180,12 +183,8 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
                     "Successfully retrieved topology for project_id: %s, name: %s",
                     project_id, topology.get("name")
                 )
-
                 # Convert topology dict to string for LLM consumption
                 topology_context = str(topology)
-                context_messages.append(
-                    SystemMessage(content=f"Current Topology:\n{topology_context}")
-                )
             else:
                 logger.warning(
                     "Failed to retrieve topology for project_id %s: %s",
@@ -194,11 +193,18 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         except Exception as e:
             logger.warning("Error retrieving topology for project_id %s: %s", project_id, e)
 
-    # Merge message lists
-    full_messages = (
-        [SystemMessage(content=current_prompt)] + context_messages + state["messages"]
+    # Prepare context messages with automatic trimming based on model's context window
+    # This ensures we don't exceed the model's context limit
+    # llm_config may contain:
+    # - context_limit: Override built-in context window limit
+    # - context_strategy: Trimming strategy (conservative/balanced/aggressive)
+    full_messages = prepare_context_messages(
+        state_messages=state["messages"],
+        system_prompt=current_prompt,
+        topology_context=topology_context,
+        model_name=llm_config.get("model", "default"),
+        llm_config=llm_config,
     )
-    # print(full_messages)
 
     # Create fresh model with tools for each LLM call
     logger.debug("Creating model with tools: provider=%s, model=%s",

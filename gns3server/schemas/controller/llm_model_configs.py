@@ -30,6 +30,12 @@ class LLMModelConfigData(BaseModel):
     """
     LLM model configuration data.
     Stored in the config JSONB column (provider, base_url, model, etc.).
+
+    IMPORTANT: context_limit is REQUIRED to ensure proper context window management.
+    Model providers frequently update context limits, so users must configure this value.
+
+    NOTE: context_limit unit is K tokens (1 K = 1000 tokens).
+    Example: 128 means 128K tokens (128,000 tokens).
     """
 
     provider: str = Field(..., description="LLM provider (e.g., 'openai', 'anthropic', 'ollama')")
@@ -38,6 +44,10 @@ class LLMModelConfigData(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Temperature parameter")
     api_key: Optional[str] = Field(None, description="API key (will be encrypted)")
     max_tokens: Optional[int] = Field(None, gt=0, description="Max tokens for generation")
+    context_limit: int = Field(..., gt=0, description="Model context window limit in K tokens (REQUIRED, e.g., 128 = 128K = 128,000 tokens)")
+    context_strategy: Literal["conservative", "balanced", "aggressive"] = Field(
+        "balanced", description="Context trimming strategy: conservative (60%), balanced (75%), aggressive (85%)"
+    )
 
     # Allow extra fields for extensibility
     model_config = ConfigDict(extra="allow")
@@ -57,6 +67,10 @@ class LLMModelConfigCreate(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     api_key: Optional[str] = None
     max_tokens: Optional[int] = Field(None, gt=0)
+    context_limit: int = Field(..., gt=0, description="Model context window limit in K tokens (REQUIRED, e.g., 128 = 128K tokens)")
+    context_strategy: Literal["conservative", "balanced", "aggressive"] = Field(
+        "balanced", description="Context trimming strategy"
+    )
 
     # Allow extra config fields
     model_config = ConfigDict(extra="allow")
@@ -78,6 +92,10 @@ class LLMModelConfigUpdate(BaseModel):
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     api_key: Optional[str] = None
     max_tokens: Optional[int] = Field(None, gt=0)
+    context_limit: Optional[int] = Field(None, gt=0, description="Model context window limit in K tokens (e.g., 128 = 128K tokens)")
+    context_strategy: Optional[Literal["conservative", "balanced", "aggressive"]] = Field(
+        None, description="Context trimming strategy"
+    )
 
     # Allow extra config fields
     model_config = ConfigDict(extra="allow")

@@ -182,12 +182,23 @@ async def create_user_llm_model_config(
     Create a new LLM model configuration for a user.
 
     Required privilege: User.Modify
+
+    IMPORTANT: context_limit is REQUIRED. Unit is K tokens (e.g., 128 = 128K = 128,000 tokens).
+    Please check your model provider's documentation for the current context window size.
     """
 
     # Verify user exists
     user = await users_repo.get_user(user_id)
     if not user:
         raise ControllerNotFoundError(f"User '{user_id}' not found")
+
+    # Validate context_limit is provided
+    if not hasattr(config_create, 'context_limit') or config_create.context_limit is None:
+        raise ControllerBadRequestError(
+            "context_limit is required (unit: K tokens, e.g., 128 = 128K = 128,000 tokens). "
+            "Please check your model provider's documentation for the current context window size "
+            "and specify it in the configuration."
+        )
 
     try:
         # Extract config fields (excluding table-level fields)
@@ -493,12 +504,23 @@ async def create_group_llm_model_config(
     Create a new LLM model configuration for a user group.
 
     Required privilege: Group.Modify
+
+    IMPORTANT: context_limit is REQUIRED. Unit is K tokens (e.g., 128 = 128K = 128,000 tokens).
+    Please check your model provider's documentation for the current context window size.
     """
 
     # Verify group exists
     group = await users_repo.get_user_group(group_id)
     if not group:
         raise ControllerNotFoundError(f"User group '{group_id}' not found")
+
+    # Validate context_limit is provided
+    if not hasattr(config_create, 'context_limit') or config_create.context_limit is None:
+        raise ControllerBadRequestError(
+            "context_limit is required (unit: K tokens, e.g., 128 = 128K = 128,000 tokens). "
+            "Please check your model provider's documentation for the current context window size "
+            "and specify it in the configuration."
+        )
 
     try:
         # Extract config fields (excluding table-level fields)
