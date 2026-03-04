@@ -144,7 +144,6 @@ class TestQemuNodesRoutes:
         assert response.json()["project_id"] == compute_project.id
         assert response.json()["ram"] == 1024
         assert response.json()["hda_disk_image"] == "linux载.img"
-        assert response.json()["hda_disk_image_md5sum"] == "fcea920f7412b5da7be0cf42b8c93759"
     
     
     @pytest.mark.parametrize(

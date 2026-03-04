@@ -259,14 +259,15 @@ def md5sum(path, working_dir=None, stopped_event=None, cache_to_md5file=True):
     else:
         md5sum_file = path + ".md5sum"
 
-    try:
-        with open(md5sum_file) as f:
-            md5 = f.read().strip()
-            if len(md5) == 32:
-                return md5
-    # Unicode error is when user rename an image to .md5sum ....
-    except (OSError, UnicodeDecodeError):
-        pass
+    if os.path.exists(md5sum_file):
+        try:
+            with open(md5sum_file) as f:
+                md5 = f.read().strip()
+                if len(md5) == 32:
+                    return md5
+        # Unicode error is when user rename an image to .md5sum ....
+        except (OSError, UnicodeDecodeError):
+            pass
 
     try:
         m = hashlib.md5()

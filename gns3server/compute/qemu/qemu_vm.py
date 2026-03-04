@@ -1131,7 +1131,6 @@ class QemuVM(BaseNode):
         await cancellable_wait_run_in_executor(md5sum, self._hdb_disk_image, self.working_dir)
         await cancellable_wait_run_in_executor(md5sum, self._hdc_disk_image, self.working_dir)
         await cancellable_wait_run_in_executor(md5sum, self._hdd_disk_image, self.working_dir)
-
         super().create()
 
     async def start(self):
@@ -2700,18 +2699,19 @@ class QemuVM(BaseNode):
             if not disk_image:
                 continue
             answer[f"hd{drive}_disk_image"] = self.manager.get_relative_image_path(disk_image, self.working_dir)
-            answer[f"hd{drive}_disk_image_md5sum"] = md5sum(disk_image, self.working_dir)
             local_disk = os.path.join(self.working_dir, f"hd{drive}_disk.qcow2")
             if os.path.exists(local_disk):
                 try:
                     qcow2 = Qcow2(local_disk)
                     if qcow2.backing_file:
-                        answer[f"hd{drive}_disk_image"] = os.path.basename(local_disk)
-                        answer[f"hd{drive}_disk_image_md5sum"] = md5sum(local_disk, self.working_dir)
+                        # update disk image path to the local disk image and add the backing file name in the answer
                         answer[f"hd{drive}_disk_image_backing_file"] = os.path.basename(qcow2.backing_file)
+                        answer[f"hd{drive}_disk_image"] = os.path.basename(local_disk)
                 except (Qcow2Error, OSError) as e:
                     log.error(f"Could not read qcow2 disk image '{local_disk}': {e}")
                     continue
+                # only compute the md5sum if the disk exists to avoid computing one for a backing file
+                answer[f"hd{drive}_disk_image_md5sum"] = md5sum(local_disk, self.working_dir)
 
         answer["cdrom_image"] = self.manager.get_relative_image_path(self._cdrom_image, self.working_dir)
         answer["cdrom_image_md5sum"] = md5sum(self._cdrom_image, self.working_dir)
