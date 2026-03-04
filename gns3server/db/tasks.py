@@ -21,7 +21,7 @@ import os
 
 from fastapi import FastAPI
 from pydantic import ValidationError
-from typing import List
+from typing import List, Optional
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -309,3 +309,99 @@ async def monitor_images_on_filesystem(app: FastAPI):
                 log.info(f"Discovered image '{image_path}' has been added to the database")
             except SQLAlchemyError as e:
                 log.warning(f"Error while adding image '{image_path}' to the database: {e}")
+
+
+async def get_user_llm_config_full(user_id: str, app: FastAPI) -> Optional[dict]:
+    """
+    Get user's full LLM configuration with decrypted API key for Copilot.
+
+    This is a system-level function that bypasses API security restrictions.
+    It retrieves the complete configuration including decrypted API keys,
+    even for inherited group configurations.
+
+    Args:
+        user_id: User UUID
+        app: FastAPI application instance
+
+    Returns:
+        Dictionary with LLM configuration (provider, model, api_key, etc.)
+        or None if not found.
+    """
+    from uuid import UUID
+    from gns3server.db.repositories.llm_model_configs import LLMModelConfigsRepository
+    from gns3server.utils.encryption import decrypt, is_encrypted
+
+    try:
+        user_uuid = UUID(user_id) if isinstance(user_id, str) else user_id
+
+        async with AsyncSession(app.state._db_engine, expire_on_commit=False) as session:
+            repo = LLMModelConfigsRepository(session)
+
+            # Get effective configs (own + inherited from groups)
+            result = await repo.get_user_effective_configs(
+                user_uuid,
+                current_user_id=user_uuid,  # Viewing own config
+                current_user_is_superadmin=False
+            )
+
+            if not result or not result.get("default_config"):
+                log.warning(f"No default LLM configuration found for user {user_id}")
+                return None
+
+            default_config = result["default_config"]
+            config_id = default_config["config_id"]
+            source = default_config["source"]  # "user" or "group"
+
+            # Get full config from database
+            if source == "user":
+                full_config = await repo.get_user_config(config_id)
+            else:
+                full_config = await repo.get_group_config(config_id)
+
+            if not full_config:
+                log.error(f"Failed to retrieve full config from database: config_id={config_id}")
+                return None
+
+            # Decrypt API key
+            config_data = full_config.config.copy()
+            if "api_key" in config_data and config_data["api_key"]:
+                try:
+                    if is_encrypted(config_data["api_key"]):
+                        config_data["api_key"] = decrypt(config_data["api_key"])
+                        log.debug(f"Successfully decrypted API key for user {user_id}")
+                except Exception as e:
+                    log.error(f"Failed to decrypt API key: {e}")
+                    config_data["api_key"] = None
+
+            # Build configuration dict
+            llm_config = {
+                "config_id": str(full_config.config_id),
+                "name": full_config.name,
+                "model_type": str(full_config.model_type),
+                "source": source,
+                "group_name": default_config.get("group_name"),
+                "user_id": str(full_config.user_id) if full_config.user_id else None,
+                "group_id": str(full_config.group_id) if full_config.group_id else None,
+                **config_data  # provider, api_key, model, temperature, etc.
+            }
+
+            # Validate required fields
+            if not llm_config.get("provider"):
+                log.error(f"LLM config missing 'provider' field: {config_id}")
+                return None
+
+            if not llm_config.get("model"):
+                log.error(f"LLM config missing 'model' field: {config_id}")
+                return None
+
+            log.info(
+                f"Retrieved LLM config for user {user_id}: "
+                f"provider={llm_config.get('provider')}, model={llm_config.get('model')}, source={source}"
+            )
+
+            return llm_config
+
+    except Exception as e:
+        log.error(f"Failed to retrieve LLM config for user {user_id}: {e}", exc_info=True)
+        return None
+

@@ -2,98 +2,58 @@
 Model Factory for GNS3-Copilot Agent
 
 This module provides factory functions to create fresh LLM model instances.
-Configuration is loaded from the llm_model_configs system via connector_factory.
+Configuration is passed directly from the API layer.
 """
 
 import logging
 from typing import Any, Optional
-from uuid import UUID
 
 from langchain.chat_models import init_chat_model
-
-from gns3server.agent.gns3_copilot.gns3_client import get_llm_config
 
 logger = logging.getLogger(__name__)
 
 
 def _load_llm_config(
-    user_id: Optional[UUID] = None,
-    jwt_token: Optional[str] = None,
     llm_config: Optional[dict[str, Any]] = None,
 ) -> dict[str, str]:
     """
-    Load model configuration from llm_config dict or fetch from llm_model_configs system.
-
-    Priority order:
-    1. Provided llm_config dictionary (highest priority)
-    2. Fetch from llm_model_configs system via connector_factory (requires user_id and jwt_token)
+    Convert llm_config dict to model factory format.
 
     Args:
-        user_id: User UUID for fetching config from database
-        jwt_token: JWT token for API authentication
-        llm_config: Optional configuration dictionary to use directly
+        llm_config: Configuration dictionary from database
 
     Returns:
         Dictionary containing model configuration.
 
     Raises:
-        ValueError: If no configuration can be found.
+        ValueError: If configuration is missing or invalid.
     """
-    # Priority 1: Use provided llm_config dictionary
-    if llm_config:
-        logger.info("Using provided llm_config dictionary")
-        return {
-            "model_name": llm_config.get("model", ""),
-            "model_provider": llm_config.get("provider", ""),
-            "api_key": llm_config.get("api_key", ""),
-            "base_url": llm_config.get("base_url", ""),
-            "temperature": str(llm_config.get("temperature", "0")),
-        }
-
-    # Priority 2: Fetch from llm_model_configs system via connector_factory
-    if user_id and jwt_token:
-        logger.info(f"Fetching LLM config from database for user {user_id}")
-        config = get_llm_config(user_id=user_id, jwt_token=jwt_token)
-
-        if config:
-            logger.info(
-                f"Successfully loaded LLM config from database: "
-                f"provider={config.get('provider')}, model={config.get('model')}"
-            )
-            return {
-                "model_name": config.get("model", ""),
-                "model_provider": config.get("provider", ""),
-                "api_key": config.get("api_key", ""),
-                "base_url": config.get("base_url", ""),
-                "temperature": str(config.get("temperature", "0")),
-            }
-
-    # No configuration found
-    error_msg = "LLM configuration not found"
     if not llm_config:
-        if not user_id or not jwt_token:
-            error_msg += ": user_id and jwt_token are required for fetching LLM configuration"
-        else:
-            error_msg += f": no LLM configuration found for user {user_id}"
-    raise ValueError(error_msg)
+        raise ValueError("LLM configuration is required")
+
+    logger.info(
+        "Using LLM config: provider=%s, model=%s",
+        llm_config.get("provider"),
+        llm_config.get("model")
+    )
+
+    return {
+        "model_name": llm_config.get("model", ""),
+        "model_provider": llm_config.get("provider", ""),
+        "api_key": llm_config.get("api_key", ""),
+        "base_url": llm_config.get("base_url", ""),
+        "temperature": str(llm_config.get("temperature", "0")),
+    }
 
 
 def create_base_model(
-    user_id: Optional[UUID] = None,
-    jwt_token: Optional[str] = None,
     llm_config: Optional[dict[str, Any]] = None,
 ) -> Any:
     """
     Create a fresh base LLM model instance.
 
-    Configuration priority:
-    1. llm_config dictionary (if provided)
-    2. Fetch from llm_model_configs system via connector_factory (requires user_id and jwt_token)
-
     Args:
-        user_id: User UUID for fetching config from database
-        jwt_token: JWT token for API authentication
-        llm_config: Optional configuration dictionary to use directly
+        llm_config: Configuration dictionary from database
 
     Returns:
         Any: A new LLM model instance configured with current settings.
@@ -103,7 +63,7 @@ def create_base_model(
         ValueError: If required configuration fields are missing or invalid.
         RuntimeError: If model creation fails.
     """
-    config_vars = _load_llm_config(user_id, jwt_token, llm_config)
+    config_vars = _load_llm_config(llm_config)
 
     # Log the loaded configuration (mask sensitive data)
     logger.info(
@@ -141,8 +101,6 @@ def create_base_model(
 
 
 def create_title_model(
-    user_id: Optional[UUID] = None,
-    jwt_token: Optional[str] = None,
     llm_config: Optional[dict[str, Any]] = None,
 ) -> Any:
     """
@@ -152,14 +110,8 @@ def create_title_model(
     It uses the same configuration as the base model but with a higher temperature
     for more creative output.
 
-    Configuration priority:
-    1. llm_config dictionary (if provided)
-    2. Fetch from llm_model_configs system via connector_factory (requires user_id and jwt_token)
-
     Args:
-        user_id: User UUID for fetching config from database
-        jwt_token: JWT token for API authentication
-        llm_config: Optional configuration dictionary to use directly
+        llm_config: Configuration dictionary from database
 
     Returns:
         Any: A new LLM model instance for title generation.
@@ -169,7 +121,7 @@ def create_title_model(
         ValueError: If required configuration fields are missing or invalid.
         RuntimeError: If model creation fails.
     """
-    config_vars = _load_llm_config(user_id, jwt_token, llm_config)
+    config_vars = _load_llm_config(llm_config)
 
     logger.info(
         "Creating title model: name=%s, provider=%s, base_url=%s, temperature=1.0",
@@ -232,8 +184,6 @@ def create_model_with_tools(
 
 def create_base_model_with_tools(
     tools: list[Any],
-    user_id: Optional[UUID] = None,
-    jwt_token: Optional[str] = None,
     llm_config: Optional[dict[str, Any]] = None,
 ) -> Any:
     """
@@ -242,15 +192,9 @@ def create_base_model_with_tools(
     This is a convenience function that combines creating the base model
     and binding tools to it.
 
-    Configuration priority:
-    1. llm_config dictionary (if provided)
-    2. Fetch from llm_model_configs system via connector_factory (requires user_id and jwt_token)
-
     Args:
         tools: List of tools to bind to the model.
-        user_id: User UUID for fetching config from database
-        jwt_token: JWT token for API authentication
-        llm_config: Optional configuration dictionary to use directly
+        llm_config: Configuration dictionary from database
 
     Returns:
         Any: A new model instance with tools bound (type varies by provider).
@@ -259,5 +203,5 @@ def create_base_model_with_tools(
         ValueError: If required configuration fields are missing.
         RuntimeError: If model creation or tool binding fails.
     """
-    base_model = create_base_model(user_id, jwt_token, llm_config)
+    base_model = create_base_model(llm_config)
     return create_model_with_tools(base_model, tools)

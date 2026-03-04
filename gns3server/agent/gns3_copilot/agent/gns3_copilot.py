@@ -128,10 +128,10 @@ class MessagesState(TypedDict):
 def llm_call(state: dict, config: RunnableConfig | None = None):
     """LLM decides whether to call a tool or not"""
 
-    # Extract user authentication info from LangGraph config
+    # Extract config from LangGraph config
     configurable = config.get("configurable", {}) if config else {}
-    user_id = configurable.get("user_id")
     jwt_token = configurable.get("jwt_token")
+    llm_config = configurable.get("llm_config")
 
     # Defensive check: skip LLM call if no user messages
     messages = state.get("messages", [])
@@ -209,12 +209,9 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     # print(full_messages)
 
     # Create fresh model with tools for each LLM call
-    # This ensures configuration changes take effect immediately
-    # Pass user_id and jwt_token for per-user LLM config and API authentication
     model_with_tools = create_base_model_with_tools(
         tools,
-        user_id=user_id,
-        jwt_token=jwt_token
+        llm_config=llm_config
     )
 
     # Store jwt_token in state for Tools to use when calling GNS3 API
@@ -233,10 +230,9 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
     This node is only executed when no title has been set yet (first round only).
     """
 
-    # Extract user authentication info from LangGraph config
+    # Extract config from LangGraph config
     configurable = config.get("configurable", {}) if config else {}
-    user_id = configurable.get("user_id")
-    jwt_token = configurable.get("jwt_token")
+    llm_config = configurable.get("llm_config")
 
     # Only generate a title if it hasn't been set yet
     current_title = state.get("conversation_title")
@@ -253,9 +249,7 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
 
         # Call the title generation model (create fresh instance for each call)
         try:
-            # Create fresh title model instance from current env configuration
-            # Pass user_id and jwt_token for per-user LLM config
-            title_model = create_title_model(user_id=user_id, jwt_token=jwt_token)
+            title_model = create_title_model(llm_config=llm_config)
             response = title_model.invoke(
                 title_prompt_messages, config={"configurable": {"foo_temperature": 1.0}}
             )

@@ -103,9 +103,9 @@ class AgentService:
         message: str,
         session_id: str,
         project_id: Optional[str] = None,
-        user_id: Optional[str] = None,
         jwt_token: Optional[str] = None,
-        mode: str = "text"
+        mode: str = "text",
+        llm_config: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream chat responses from the agent.
@@ -114,19 +114,19 @@ class AgentService:
             message: User message
             session_id: Session/thread ID for conversation continuity
             project_id: GNS3 project ID (optional, for context)
-            user_id: User ID for LLM config lookup (optional)
             jwt_token: JWT token for API authentication (optional)
             mode: Interaction mode (default: "text")
+            llm_config: LLM configuration dict (provider, model, api_key, etc.)
 
         Yields:
             Dict containing SSE-compatible response chunks
         """
-        # Build config with user authentication info
+        # Build config with LLM configuration
         config = {
             "configurable": {
                 "thread_id": session_id,
-                "user_id": user_id,
                 "jwt_token": jwt_token,
+                "llm_config": llm_config,
             }
         }
 

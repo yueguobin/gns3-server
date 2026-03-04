@@ -91,6 +91,18 @@ async def stream_chat(
     auth_header = http_request.headers.get("Authorization", "")
     jwt_token = auth_header.replace("Bearer ", "") if auth_header else None
 
+    # Get FastAPI app reference (for database access)
+    app = http_request.app
+
+    # Get user's LLM config (with decrypted API key)
+    from gns3server.db.tasks import get_user_llm_config_full
+    llm_config = await get_user_llm_config_full(user_id, app)
+    if not llm_config:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="LLM configuration not found. Please configure your LLM settings first."
+        )
+
     # Get or create AgentService for this project
     agent_manager = await get_project_agent_manager()
     agent_service = await agent_manager.get_agent(str(project.id), project.path)
@@ -105,9 +117,9 @@ async def stream_chat(
                 message=request.message,
                 session_id=session_id,
                 project_id=str(project.id),
-                user_id=user_id,
                 jwt_token=jwt_token,
-                mode=request.mode
+                mode=request.mode,
+                llm_config=llm_config
             ):
                 try:
                     # Validate and serialize chunk
