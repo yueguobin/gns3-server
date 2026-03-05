@@ -33,6 +33,8 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any
 
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
 def _ensure_string(content: Any) -> str:
     """Ensure content is a string, converting dicts/lists to JSON if needed."""
     if isinstance(content, str):
@@ -52,8 +54,6 @@ def convert_langchain_to_openai(lc_message) -> Dict[str, Any]:
     Returns:
         Dictionary in OpenAI-compatible format
     """
-    from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
-
     # Generate message ID
     msg_id = getattr(lc_message, 'id', None)
     if msg_id is None:
@@ -140,8 +140,6 @@ def convert_openai_to_langchain(msg: Dict[str, Any]):
     Returns:
         LangChain message
     """
-    from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
-
     role = msg.get("role", "user")
     content = msg.get("content", "")
 

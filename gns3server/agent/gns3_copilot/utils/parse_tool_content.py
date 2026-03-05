@@ -66,6 +66,7 @@ Author: Guobin Yue
 import ast
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -309,8 +310,6 @@ def normalize_tool_response(
         >>> normalize_tool_response([{"device_name": "R1", "status": "success"}])
         {'success': True, 'total': 1, 'successful': 1, 'failed': 0, 'data': [...], 'metadata': {}}
     """
-    from datetime import datetime
-
     metadata = {
         "tool_name": tool_name,
         "normalized_at": datetime.utcnow().isoformat()

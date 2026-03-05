@@ -31,9 +31,8 @@ This module provides a tool to execute configuration commands on multiple device
 import json
 import logging
 import os
+import re
 from typing import Any
-
-from gns3server.agent.gns3_copilot.gns3_client import get_gns3_server_host
 
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
@@ -43,6 +42,7 @@ from nornir.core import Nornir
 from nornir.core.task import AggregatedResult, Result, Task
 from nornir_netmiko.tasks import netmiko_send_config
 
+from gns3server.agent.gns3_copilot.gns3_client import get_gns3_server_host
 from gns3server.agent.gns3_copilot.utils import get_device_ports_from_topology
 
 # config log
@@ -366,8 +366,6 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
         Returns:
             True if valid UUID format, False otherwise
         """
-        import re
-
         uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         return bool(re.match(uuid_pattern, project_id, re.IGNORECASE))
 

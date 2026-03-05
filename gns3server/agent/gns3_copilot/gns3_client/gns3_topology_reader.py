@@ -33,6 +33,7 @@ specific GNS3 project by project ID. Returns nodes, links, and project metadata.
 
 import copy
 import logging
+from pprint import pprint
 from typing import Any
 
 from langchain.tools import BaseTool
@@ -144,8 +145,6 @@ class GNS3TopologyTool(BaseTool):
         return data
 
 if __name__ == "__main__":
-    from pprint import pprint
-
     # Test the tool
     tool = GNS3TopologyTool()
 

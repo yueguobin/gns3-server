@@ -37,9 +37,17 @@ Features:
 
 """
 
+# Standard library imports
+import asyncio
+import concurrent.futures
 import logging
-from typing import Optional
+import threading
 from contextvars import ContextVar
+from typing import Optional
+from uuid import UUID
+
+# Local imports
+from gns3server.agent.gns3_copilot.gns3_client.custom_gns3fy import Gns3Connector
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +85,6 @@ def get_current_llm_config() -> Optional[dict]:
     else:
         logger.warning("LLM config not found in context")
     return config
-from uuid import UUID
-
-from gns3server.agent.gns3_copilot.gns3_client.custom_gns3fy import Gns3Connector
 
 # Fallback default URL
 DEFAULT_GNS3_URL = "http://127.0.0.1:3080"
@@ -412,9 +417,6 @@ def get_llm_config(user_id, jwt_token: str, app=None) -> Optional[dict]:
             model = config['model']
             api_key = config['api_key']
     """
-    import asyncio
-    import threading
-
     try:
         # Convert user_id to UUID if it's a string
         if isinstance(user_id, str):
@@ -429,7 +431,6 @@ def get_llm_config(user_id, jwt_token: str, app=None) -> Optional[dict]:
                 loop = asyncio.get_running_loop()
                 # We're in an async context with a running loop
                 # This shouldn't happen since this is a sync function
-                import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
                         asyncio.run,
@@ -445,7 +446,6 @@ def get_llm_config(user_id, jwt_token: str, app=None) -> Optional[dict]:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # Loop is running but not the running loop (edge case)
-                    import concurrent.futures
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future = executor.submit(
                             asyncio.run,

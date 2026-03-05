@@ -40,30 +40,33 @@ The agent provides:
 
 """
 
+# Standard library imports
+import logging
 import operator
+import sys
+from pathlib import Path
 from typing import Annotated, Literal
 
+# Third-party imports
 from langchain.messages import AnyMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.managed.is_last_step import RemainingSteps
 from typing_extensions import TypedDict
 
-import logging
+# Add backend to path for prompt_manager
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "backend"))
 
+# Local imports
+from gns3server.agent.gns3_copilot.agent.context_manager import (
+    create_pre_model_hook,
+)
 from gns3server.agent.gns3_copilot.agent.model_factory import (
     create_base_model_with_tools,
     create_title_model,
 )
-from gns3server.agent.gns3_copilot.agent.context_manager import (
-    create_pre_model_hook,
-)
 from gns3server.agent.gns3_copilot.gns3_client import GNS3TopologyTool
 from gns3server.agent.gns3_copilot.prompts import TITLE_PROMPT, load_system_prompt
-import sys
-from pathlib import Path
-# Add backend to path for prompt_manager
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "backend"))
 from gns3server.agent.gns3_copilot.tools_v2 import (
     ExecuteMultipleDeviceConfigCommands,
     ExecuteMultipleDeviceCommands,

@@ -33,6 +33,7 @@ and link count.
 """
 
 import logging
+from pprint import pprint
 from typing import Any
 
 from langchain.tools import BaseTool
@@ -134,8 +135,6 @@ class GNS3ProjectInfoTool(BaseTool):
             return {"error": f"Failed to retrieve project info: {str(e)}"}
 
 if __name__ == "__main__":
-    from pprint import pprint
-
     # Test the tool
     tool = GNS3ProjectInfoTool()
 
