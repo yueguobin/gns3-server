@@ -1,152 +1,152 @@
-# LLM 上下文窗口管理实现文档
+# LLM Context Window Management Implementation Document
 
-## 概述
+## Overview
 
-本文档说明 GNS3 Copilot 的上下文窗口管理实现机制，包括消息裁剪、Token 计数和配置验证。
+This document explains the context window management implementation mechanism for GNS3 Copilot, including message trimming, token counting, and configuration validation.
 
-## 实现架构
+## Implementation Architecture
 
-### 1. 核心模块
+### 1. Core Modules
 
-**文件位置**: `gns3server/agent/gns3_copilot/agent/context_manager.py`
+**File Location**: `gns3server/agent/gns3_copilot/agent/context_manager.py`
 
-#### Token 计数策略
+#### Token Counting Strategy
 
-系统使用 **tiktoken** 进行 Token 计数（context_manager.py:60）：
+The system uses **tiktoken** for token counting (context_manager.py:60):
 
 ```python
 _tiktoken_encoding = tiktoken.get_encoding("cl100k_base")
 ```
 
-**必需依赖**：
+**Required Dependency**:
 ```bash
 pip install tiktoken>=0.8.0
 ```
 
-如果未安装 tiktoken，系统将在启动时抛出 `ModuleNotFoundError`。
+If tiktoken is not installed, the system will throw a `ModuleNotFoundError` at startup.
 
-#### 关键函数
+#### Key Functions
 
 **`count_tokens(text: str) -> int`** (context_manager.py:84-100)
-- 使用 tiktoken 准确计数文本的 token 数
-- 使用 `cl100k_base` 编码
-- 返回精确的 token 数
+- Uses tiktoken to accurately count tokens in text
+- Uses `cl100k_base` encoding
+- Returns the exact token count
 
 **`estimate_tool_tokens(tools: list) -> int`** (context_manager.py:103-169)
-- 序列化工具 schema 为 JSON
-- 使用 tiktoken 计数工具定义的 token 消耗
-- 支持 Pydantic v1/v2 兼容性
-- 失败时使用 1000 tokens 的回退值
+- Serializes tool schema to JSON
+- Uses tiktoken to count token consumption of tool definitions
+- Supports Pydantic v1/v2 compatibility
+- Falls back to 1000 tokens on failure
 
 **`create_pre_model_hook(...)`** (context_manager.py:195-402)
-- 创建预处理函数（pre_model_hook）
-- 在每次 LLM 调用前自动执行：
-  1. 注入 topology 信息到 system prompt
-  2. 估算工具定义的 token 消耗
-  3. 裁剪消息历史以适应上下文限制
-- 返回一个可调用的函数，用于准备消息
+- Creates a preprocessing function (pre_model_hook)
+- Automatically executes before each LLM call:
+  1. Injects topology information into system prompt
+  2. Estimates token consumption of tool definitions
+  3. Trims message history to fit context limits
+- Returns a callable function for preparing messages
 
-### 2. 裁剪逻辑详解
+### 2. Detailed Trimming Logic
 
-#### 2.1 Token 预算分配
+#### 2.1 Token Budget Allocation
 
-当调用 LLM 时，发送的内容包含两部分：
+When calling the LLM, the content sent consists of two parts:
 
 ```
-发送给 LLM 的完整请求:
+Complete request sent to LLM:
 ┌─────────────────────────────────────────────────────────────┐
-│ 1. Messages (我们管理的)                                     │
-│    ├─ SystemMessage: system prompt + topology (模板注入)     │
-│    └─ HumanMessage/AIMessage: 用户消息 / 历史消息             │
+│ 1. Messages (managed by us)                                  │
+│    ├─ SystemMessage: system prompt + topology (template injection) │
+│    └─ HumanMessage/AIMessage: user messages / history messages │
 ├─────────────────────────────────────────────────────────────┤
-│ 2. Tool Definitions (LangChain 自动添加，不在消息中)          │
+│ 2. Tool Definitions (LangChain adds automatically, not in messages) │
 │    ├─ Tool 1 schema (name, description, parameters)        │
 │    ├─ Tool 2 schema                                        │
-│    └─ ... (约 500-1500 tokens per tool)                   │
+│    └─ ... (about 500-1500 tokens per tool)                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**System Message 结构**：
-- 使用模板变量 `{{topology_info}}` 动态注入 topology
-- System prompt 包含占位符：`"### CURRENT TOPOLOGY\n{{topology_info}}"`
-- 如果有 topology，替换为实际内容
-- 如果没有 topology，替换为 `"(No topology information available)"`
+**System Message Structure**:
+- Uses template variable `{{topology_info}}` to dynamically inject topology
+- System prompt contains placeholder: `"### CURRENT TOPOLOGY\n{{topology_info}}"`
+- If topology exists, replaces with actual content
+- If no topology, replaces with `"(No topology information available)"`
 
-#### 2.2 裁剪流程
+#### 2.2 Trimming Process
 
 ```
-第一步：计算输入预算
+Step 1: Calculate Input Budget
 ┌─────────────────────────────────────────────────────────────┐
 │ context_limit: 128,000 tokens (128K)                        │
 │ strategy: balanced (75%)                                    │
 │                                                            │
-│ 输入预算 = 128 × 1000 × 0.75 = 96,000 tokens              │
+│ Input budget = 128 × 1000 × 0.75 = 96,000 tokens          │
 └─────────────────────────────────────────────────────────────┘
                             ↓
-第二步：减去工具定义
+Step 2: Subtract Tool Definitions
 ┌─────────────────────────────────────────────────────────────┐
-│ 输入预算: 96,000 tokens                                     │
-│ 工具定义: 1,725 tokens                                     │
+│ Input budget: 96,000 tokens                                │
+│ Tool definitions: 1,725 tokens                             │
 │                                                            │
-│ 可用于消息 = 96,000 - 1,725 = 94,275 tokens                │
+│ Available for messages = 96,000 - 1,725 = 94,275 tokens   │
 └─────────────────────────────────────────────────────────────┘
                             ↓
-第三步：trim_messages 处理
+Step 3: trim_messages Processing
 ┌─────────────────────────────────────────────────────────────┐
-│ 调用 LangChain 的 trim_messages:                            │
-│ - max_tokens = 94,275 (包含 system message)                │
-│ - strategy = "last" (保留最新消息)                          │
-│ - token_counter = tiktoken 计数函数                         │
-│ - include_system = True (始终保留 system)                   │
+│ Call LangChain's trim_messages:                            │
+│ - max_tokens = 94,275 (includes system message)           │
+│ - strategy = "last" (keep latest messages)                 │
+│ - token_counter = tiktoken counting function              │
+│ - include_system = True (always keep system)               │
 │                                                            │
-│ trim_messages 会:                                           │
-│ 1. 保留 SystemMessage (system + topology)                  │
-│ 2. 从最新消息开始，保留尽可能多的历史                        │
-│ 3. 超出限制时，丢弃最旧的消息                                │
+│ trim_messages will:                                        │
+│ 1. Keep SystemMessage (system + topology)                 │
+│ 2. Starting from latest messages, keep as much history     │
+│ 3. When exceeding limit, discard oldest messages          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-#### 2.3 裁剪优先级
+#### 2.3 Trimming Priority
 
-系统按以下优先级保留内容：
+The system preserves content in the following priority order:
 
-| 优先级 | 内容 | 说明 |
-|--------|------|------|
-| 1️⃣ | System Message (system prompt + topology) | 永远保留 |
-| 2️⃣ | 最新用户消息 | 至少保留最后1条 |
-| 3️⃣ | 旧对话历史 | 按时间顺序丢弃 |
+| Priority | Content | Description |
+|----------|---------|-------------|
+| 1️⃣ | System Message (system prompt + topology) | Never removed |
+| 2️⃣ | Latest user message | Keep at least the last 1 |
+| 3️⃣ | Old conversation history | Discarded in chronological order |
 
-**注意**：System prompt 和 topology info 通过模板变量合并为一个 SystemMessage，无法单独分离。
+**Note**: System prompt and topology info are merged into one SystemMessage via template variable and cannot be separated.
 
-#### 2.4 边界情况处理
+#### 2.4 Edge Case Handling
 
-| 情况 | 处理方式 |
-|------|----------|
-| System (包含 topology) > 预算 | 保留完整的 System Message（无法分离 system 和 topology） |
-| Tools > 预算 | ERROR 日志，建议增加 context_limit 或减少工具数量 |
-| 历史全被裁剪 | 保留最后1条用户消息 |
+| Scenario | Handling |
+|----------|----------|
+| System (including topology) > budget | Keep complete SystemMessage (cannot separate system and topology) |
+| Tools > budget | ERROR log, suggest increasing context_limit or reducing tool count |
+| All history trimmed | Keep last 1 user message |
 
-**重要提示**：
-- 当 system + topology 超出可用预算时，**两者都会被保留**
-- 无法只丢弃 topology 而保留 system prompt（因为已合并）
+**Important Notes**:
+- When system + topology exceed available budget, **both are preserved**
+- Cannot discard only topology while keeping system prompt (already merged)
 
-### 3. 集成到 GNS3 Copilot
+### 3. Integration with GNS3 Copilot
 
-**文件位置**: `gns3server/agent/gns3_copilot/agent/gns3_copilot.py`
+**File Location**: `gns3server/agent/gns3_copilot/agent/gns3_copilot.py`
 
-#### 实现方式
+#### Implementation Method
 
-**关键点**：系统使用**自定义 StateGraph**，不是 LangGraph 的预构建 agent。
+**Key Point**: The system uses a **custom StateGraph**, not LangGraph's pre-built agent.
 
-因此，`pre_model_hook` 不能通过 `model.invoke(config={"configurable": {"pre_model_hook": ...}})` 传递。
+Therefore, `pre_model_hook` cannot be passed via `model.invoke(config={"configurable": {"pre_model_hook": ...}})`.
 
-**正确的使用方式**：**直接调用** `pre_hook` 函数准备消息。
+**Correct Usage**: **Directly call** the `pre_hook` function to prepare messages.
 
 ```python
 def llm_call(state: dict, config: RunnableConfig | None = None):
     """LLM decides whether to call a tool or not."""
 
-    # 1. 获取 topology 信息
+    # 1. Get topology information
     project_id = config["configurable"].get("project_id")
     topology_info = None
     if project_id:
@@ -155,7 +155,7 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         if topology and "error" not in topology:
             topology_info = topology
 
-    # 2. 创建 pre_model_hook
+    # 2. Create pre_model_hook
     system_prompt = load_system_prompt()
     pre_hook = create_pre_model_hook(
         system_prompt=system_prompt,
@@ -164,65 +164,65 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         get_tools_func=lambda: tools,
     )
 
-    # 3. 创建 model with tools
+    # 3. Create model with tools
     model_with_tools = create_base_model_with_tools(tools, llm_config=llm_config)
 
-    # 4. ⭐ 关键：直接调用 pre_hook 准备消息
+    # 4. ⭐ Key: directly call pre_hook to prepare messages
     logger.info("Calling pre_hook to prepare %d messages", len(messages))
     prepared_state = pre_hook({"messages": messages, "topology_info": topology_info})
     prepared_messages = prepared_state["messages"]
 
-    # 5. 使用准备好的消息调用 LLM
+    # 5. Use prepared messages to call LLM
     response = model_with_tools.invoke(prepared_messages)
 
     return {"messages": [response], ...}
 ```
 
-#### 为什么不通过 config 传递？
+#### Why Not Pass via Config?
 
-LangGraph 的 `pre_model_hook` 参数仅适用于**预构建的 agent**，不适用于自定义 StateGraph。
+LangGraph's `pre_model_hook` parameter only applies to **pre-built agents**, not custom StateGraphs.
 
-| Agent 类型 | pre_model_hook 支持方式 |
+| Agent Type | pre_model_hook Support |
 |------------|------------------------|
-| `create_react_agent` | ✅ 通过 `pre_model_hook` 参数 |
-| `chat_agent_executor` | ✅ 通过 `pre_model_hook` 参数 |
-| **自定义 StateGraph** | ❌ **不支持**，需要直接调用 |
+| `create_react_agent` | ✅ Via `pre_model_hook` parameter |
+| `chat_agent_executor` | ✅ Via `pre_model_hook` parameter |
+| **Custom StateGraph** | ❌ **Not supported**, need to call directly |
 
-我们的实现使用的是自定义 StateGraph（`agent_builder = StateGraph(MessagesState)`），所以必须直接调用 `pre_hook`。
+Our implementation uses a custom StateGraph (`agent_builder = StateGraph(MessagesState)`), so we must call `pre_hook` directly.
 
-### 4. 执行流程
+### 4. Execution Flow
 
 ```
-用户发送消息
+User sends message
      ↓
-llm_call 节点被调用
+llm_call node is called
      ↓
-获取 project_id (从 config["configurable"])
+Get project_id (from config["configurable"])
      ↓
-调用 GNS3TopologyTool._run(project_id) 获取 topology
+Call GNS3TopologyTool._run(project_id) to get topology
      ↓
-存储 topology_info 到 state
+Store topology_info to state
      ↓
-创建 pre_model_hook (通过 create_pre_model_hook())
+Create pre_model_hook (via create_pre_model_hook())
      ↓
-【关键】直接调用 pre_hook({"messages": messages, "topology_info": topology_info})
-     ├─ 1. 注入 topology 到 system prompt
-     ├─ 2. 估算工具定义 tokens
-     ├─ 3. 调用 trim_messages() 裁剪消息
-     └─ 4. 返回准备好的消息列表
+[Key] Directly call pre_hook({"messages": messages, "topology_info": topology_info})
+     ├─ 1. Inject topology into system prompt
+     ├─ 2. Estimate tool definitions tokens
+     ├─ 3. Call trim_messages() to trim messages
+     └─ 4. Return prepared message list
      ↓
-使用准备好的消息调用 model.invoke()
+Call model.invoke() with prepared messages
      ↓
-返回 LLM 响应
+Return LLM response
 ```
 
 ---
 
-## 策略实现
+## Strategy Implementation
 
 ### Context Strategy Ratios
 
-**定义**（context_manager.py:68-72）：
+**Definition** (context_manager.py:68-72):
 
 ```python
 CONTEXT_STRATEGY_RATIOS = {
@@ -232,24 +232,24 @@ CONTEXT_STRATEGY_RATIOS = {
 }
 ```
 
-**默认值**（context_manager.py:74）：
+**Default Value** (context_manager.py:74):
 ```python
 DEFAULT_CONTEXT_STRATEGY = "balanced"
 ```
 
-### 策略对比
+### Strategy Comparison
 
-| 策略 | 输入比例 | 输出预留 | 计算公式 |
-|------|---------|---------|---------|
+| Strategy | Input Ratio | Output Reserved | Calculation Formula |
+|----------|-------------|-----------------|---------------------|
 | Conservative | 60% | 40% | `context_limit × 1000 × 0.60` |
 | Balanced | 75% | 25% | `context_limit × 1000 × 0.75` |
 | Aggressive | 85% | 15% | `context_limit × 1000 × 0.85` |
 
 ---
 
-## 日志输出
+## Log Output
 
-### 正常情况（topology 成功注入）
+### Normal Case (topology successfully injected)
 
 ```
 INFO: Calling pre_hook to prepare 1 messages
@@ -259,7 +259,7 @@ INFO: Messages prepared: 1 → 2
 INFO: LLM call completed: tool_calls=0
 ```
 
-### 发生裁剪时
+### When Trimming Occurs
 
 ```
 INFO: Calling pre_hook to prepare 50 messages
@@ -268,7 +268,7 @@ INFO: Messages trimmed: 50 → 25 msgs. Total: ~82000 tokens + 1725 tools = 8372
 INFO: Messages prepared: 50 → 25
 ```
 
-### topology 为 None 时
+### When topology is None
 
 ```
 INFO: Calling pre_hook to prepare 1 messages
@@ -278,24 +278,24 @@ INFO: Context ready: 2 msgs, ~800 tokens + 1725 tools = 2525 / 128K (2.0%), stra
 
 ---
 
-## 错误处理
+## Error Handling
 
-### tiktoken 未安装
+### tiktoken Not Installed
 
-如果 tiktoken 未安装，系统将在启动时抛出错误：
+If tiktoken is not installed, the system will throw an error at startup:
 
 ```python
 ModuleNotFoundError: No module named 'tiktoken'
 ```
 
-**解决方法**：
+**Solution**:
 ```bash
 pip install tiktoken>=0.8.0
 ```
 
-### context_limit 缺失或无效
+### context_limit Missing or Invalid
 
-如果 LLM 配置中没有 `context_limit` 或值无效（context_manager.py:285-295）：
+If there is no `context_limit` in the LLM configuration or the value is invalid (context_manager.py:285-295):
 
 ```python
 if "context_limit" not in llm_config:
@@ -306,7 +306,7 @@ if not isinstance(limit, int) or limit <= 0:
     raise ValueError(f"Invalid context_limit: {limit}")
 ```
 
-### 裁剪失败
+### Trimming Failure
 
 ```python
 try:
@@ -319,8 +319,8 @@ except Exception as e:
 
 ---
 
-## 相关源文件
+## Related Source Files
 
-- `gns3server/agent/gns3_copilot/agent/context_manager.py` - 上下文管理核心逻辑
-- `gns3server/agent/gns3_copilot/agent/gns3_copilot.py` - LLM 调用节点（StateGraph）
-- `gns3server/agent/gns3_copilot/agent/model_factory.py` - 模型创建和工具绑定
+- `gns3server/agent/gns3_copilot/agent/context_manager.py` - Context management core logic
+- `gns3server/agent/gns3_copilot/agent/gns3_copilot.py` - LLM call node (StateGraph)
+- `gns3server/agent/gns3_copilot/agent/model_factory.py` - Model creation and tool binding

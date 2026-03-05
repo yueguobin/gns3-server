@@ -1,69 +1,69 @@
 # GNS3 Copilot Tool Response Format Standard
 
-## 概述
+## Overview
 
-本文档定义了 GNS3 Copilot 工具的标准响应格式，确保所有工具返回统一的数据结构，便于前端处理和美化显示。
+This document defines the standard response format for GNS3 Copilot tools, ensuring all tools return a unified data structure for easy frontend processing and display.
 
-## 标准响应格式
+## Standard Response Format
 
-### 顶层结构
+### Top-level Structure
 
-所有工具应返回以下标准格式：
-
-```python
-{
-    "success": bool,           # 整体操作是否成功
-    "total": int,              # 总操作数量
-    "successful": int,         # 成功数量
-    "failed": int,             # 失败数量
-    "data": list[dict],       # 详细结果列表
-    "error": str,             # 全局错误信息（可选，操作完全失败时）
-    "metadata": dict          # 元数据（可选）
-}
-```
-
-**字段说明**：
-
-| 字段 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| `success` | `bool` | 是 | 整体操作是否成功（`failed == 0` 时为 `True`） |
-| `total` | `int` | 是 | 处理的项目总数 |
-| `successful` | `int` | 是 | 成功的项目数量 |
-| `failed` | `int` | 是 | 失败的项目数量 |
-| `data` | `list[dict]` | 是 | 每个项目的详细结果 |
-| `error` | `str` | 否 | 全局错误消息（当整个操作失败时） |
-| `metadata` | `dict` | 否 | 元数据（时间戳、执行时间等） |
-
-### 单个项目格式
-
-`data` 数组中的每个项目应遵循以下格式：
+All tools should return the following standard format:
 
 ```python
 {
-    "id": str,                 # 设备/节点/链接 ID
-    "name": str,               # 人类可读的名称
-    "status": "success" | "failed",  # 项目状态
-    "result": str,             # 成功时的结果或输出
-    "error": str               # 失败时的错误信息
+    "success": bool,           # Whether the overall operation succeeded
+    "total": int,              # Total number of operations
+    "successful": int,         # Number of successful operations
+    "failed": int,             # Number of failed operations
+    "data": list[dict],       # Detailed result list
+    "error": str,             # Global error message (optional, when operation completely fails)
+    "metadata": dict          # Metadata (optional)
 }
 ```
 
-**字段说明**：
+**Field Descriptions**:
 
-| 字段 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| `id` | `str` | 是 | 设备/节点/链接的唯一标识符 |
-| `name` | `str` | 是 | 人类可读的名称 |
-| `status` | `str` | 是 | `"success"` 或 `"failed"` |
-| `result` | `str` | 条件 | 状态为 `success` 时的输出 |
-| `error` | `str` | 条件 | 状态为 `failed` 时的错误信息 |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `success` | `bool` | Yes | Whether the overall operation succeeded (True when `failed == 0`) |
+| `total` | `int` | Yes | Total number of items processed |
+| `successful` | `int` | Yes | Number of successful items |
+| `failed` | `int` | Yes | Number of failed items |
+| `data` | `list[dict]` | Yes | Detailed results for each item |
+| `error` | `str` | No | Global error message (when entire operation fails) |
+| `metadata` | `dict` | No | Metadata (timestamp, execution time, etc.) |
 
-## 示例
+### Single Item Format
 
-### 成功响应示例
+Each item in the `data` array should follow this format:
 
 ```python
-# 执行多个设备的显示命令
+{
+    "id": str,                 # Device/node/link ID
+    "name": str,               # Human-readable name
+    "status": "success" | "failed",  # Item status
+    "result": str,             # Result or output on success
+    "error": str               # Error message on failure
+}
+```
+
+**Field Descriptions**:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | `str` | Yes | Unique identifier for device/node/link |
+| `name` | `str` | Yes | Human-readable name |
+| `status` | `str` | Yes | `"success"` or `"failed"` |
+| `result` | `str` | Conditional | Output when status is `success` |
+| `error` | `str` | Conditional | Error message when status is `failed` |
+
+## Examples
+
+### Success Response Example
+
+```python
+# Execute display commands on multiple devices
 {
     "success": True,
     "total": 3,
@@ -96,10 +96,10 @@
 }
 ```
 
-### 完全失败示例
+### Complete Failure Example
 
 ```python
-# 整个操作失败（如参数错误）
+# Entire operation failed (e.g., parameter error)
 {
     "success": False,
     "total": 0,
@@ -113,10 +113,10 @@
 }
 ```
 
-### 单个设备操作示例
+### Single Device Operation Example
 
 ```python
-# 操作单个设备
+# Operate on a single device
 {
     "success": True,
     "total": 1,
@@ -134,56 +134,56 @@
 }
 ```
 
-## 使用标准化函数
+## Using the Standardization Function
 
-在 `gns3server.agent.gns3_copilot.utils` 模块中提供了 `normalize_tool_response` 函数，用于将各种格式转换为标准格式：
+The `normalize_tool_response` function is provided in the `gns3server.agent.gns3_copilot.utils` module to convert various formats to the standard format:
 
 ```python
 from gns3server.agent.gns3_copilot.utils import normalize_tool_response
 
-# 标准化工具响应
+# Normalize tool response
 normalized = normalize_tool_response(raw_response, tool_name="my_tool")
 ```
 
-该函数支持：
-- 列表格式（`[{...}, {...}]`）
-- 字典格式（`{"nodes": [...]}`）
-- 字符串格式（自动解析 JSON/Python literal）
-- 混合格式（兼容旧工具）
+This function supports:
+- List format (`[{...}, {...}]`)
+- Dict format (`{"nodes": [...]}`)
+- String format (automatically parses JSON/Python literal)
+- Mixed format (compatible with legacy tools)
 
-## 兼容性
+## Compatibility
 
-### 向后兼容
+### Backward Compatibility
 
-`normalize_tool_response` 函数设计为向后兼容，可以处理现有工具的各种格式：
+The `normalize_tool_response` function is designed to be backward compatible and can handle various formats from existing tools:
 
-- `status` / `error` 字段
-- `output` / `result` 字段
-- `device_name` / `name` 字段
-- `total_nodes` / `total` 字段
+- `status` / `error` fields
+- `output` / `result` fields
+- `device_name` / `name` fields
+- `total_nodes` / `total` fields
 
-### 推荐的迁移策略
+### Recommended Migration Strategy
 
-1. **新工具**：直接返回标准格式
-2. **现有工具**：保持不变，使用 `normalize_tool_response` 标准化
-3. **前端**：依赖标准格式处理显示
+1. **New Tools**: Return standard format directly
+2. **Existing Tools**: Keep unchanged, use `normalize_tool_response` to standardize
+3. **Frontend**: Rely on standard format for display processing
 
-## 前端集成建议
+## Frontend Integration Recommendations
 
-### 渲染逻辑
+### Rendering Logic
 
 ```javascript
 function renderToolResponse(response) {
     if (!response.success) {
-        // 显示全局错误
+        // Show global error
         showError(response.error);
         return;
     }
 
-    // 显示统计摘要
+    // Show statistics summary
     showSummary(response.total, response.successful, response.failed);
 
-    // 渲染每个项目
+    // Render each item
     response.data.forEach(item => {
         if (item.status === 'success') {
             showSuccess(item.name, item.result);
@@ -194,22 +194,22 @@ function renderToolResponse(response) {
 }
 ```
 
-### 状态图标
+### Status Icons
 
-| 状态 | 图标建议 | 颜色 |
-|------|----------|------|
-| `success` | ✓ 绿色 | 绿色 |
-| `failed` | ✗ 红色 | 红色 |
-| `unknown` | ? 灰色 | 灰色 |
+| Status | Icon Suggestion | Color |
+|--------|----------------|-------|
+| `success` | ✓ Green | Green |
+| `failed` | ✗ Red | Red |
+| `unknown` | ? Gray | Gray |
 
-## 版本控制
+## Version Control
 
-当前标准版本：`v1.0`
+Current standard version: `v1.0`
 
-格式变更时，应更新 `metadata.version` 字段，前端据此适配。
+When the format changes, update the `metadata.version` field, and the frontend adapts accordingly.
 
-## 参考
+## References
 
-- 实现：`gns3server/agent/gns3_copilot/utils/parse_tool_content.py`
-- 消息转换：`gns3server/agent/gns3_copilot/utils/message_converters.py`
-- 工具示例：`gns3server/agent/gns3_copilot/tools_v2/`
+- Implementation: `gns3server/agent/gns3_copilot/utils/parse_tool_content.py`
+- Message conversion: `gns3server/agent/gns3_copilot/utils/message_converters.py`
+- Tool examples: `gns3server/agent/gns3_copilot/tools_v2/`

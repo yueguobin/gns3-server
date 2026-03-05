@@ -1,83 +1,83 @@
-# GNS3 Copilot HITL 功能实现方案
+# GNS3 Copilot HITL Feature Implementation Plan
 
-## 概述
+## Overview
 
-本文档详细描述了 GNS3 Copilot 中 Human-in-the-Loop (HITL) 功能的完整实现方案。HITL 功能允许在执行敏感操作（如设备配置）前要求用户确认，提高系统安全性。
+This document details the complete implementation plan for the Human-in-the-Loop (HITL) feature in GNS3 Copilot. The HITL feature allows requiring user confirmation before executing sensitive operations (such as device configuration), improving system security.
 
-## 目标
+## Goals
 
-- 在执行配置工具前要求用户确认
-- 支持单个和批量工具确认
-- 提供清晰的工具执行预览
-- 保持现有功能完全兼容
+- Require user confirmation before executing configuration tools
+- Support single and batch tool confirmation
+- Provide clear tool execution preview
+- Maintain complete compatibility with existing functionality
 
-## 核心设计
+## Core Design
 
-### 流程图
+### Flow Chart
 
 ```
-用户消息 → LLM → 工具调用决策
+User Message → LLM → Tool Call Decision
                       ↓
-              检测是否需要确认
+              Check if confirmation needed
               ↙              ↘
-         需要 HITL        直接执行
+         Need HITL        Direct Execution
               ↓                ↓
-         暂停，等待前端    执行工具
+         Pause, wait for frontend    Execute Tool
               ↓                ↓
-         用户确认/拒绝      返回结果
+         User Confirm/Reject      Return Result
               ↓
-         执行已确认的工具
+         Execute Confirmed Tools
               ↓
-         返回结果
+         Return Result
 ```
 
-### 架构分层
+### Architecture Layers
 
 ```
 ┌─────────────────────────────────────────┐
 │         Frontend (Web UI)                │
-│  - 显示确认对话框                          │
-│  - 列出待确认的工具                         │
-│  - 处理用户确认/拒绝操作                    │
+│  - Display confirmation dialog           │
+│  - List pending tools                    │
+│  - Handle user confirm/reject actions    │
 └─────────────────────────────────────────┘
                   ↕ SSE/HTTP
 ┌─────────────────────────────────────────┐
 │         API Layer (FastAPI)              │
-│  - /hitl/status: 获取待确认工具            │
-│  - /hitl/confirm: 确认执行                │
-│  - /hitl/reject: 拒绝执行                 │
+│  - /hitl/status: Get pending tools       │
+│  - /hitl/confirm: Confirm execution      │
+│  - /hitl/reject: Reject execution        │
 └─────────────────────────────────────────┘
                   ↕
 ┌─────────────────────────────────────────┐
-│      AgentService (状态管理)              │
-│  - 管理 HITL 状态                        │
-│  - 处理确认/拒绝逻辑                       │
-│  - checkpoint 持久化                      │
+│      AgentService (State Management)      │
+│  - Manage HITL state                     │
+│  - Handle confirm/reject logic           │
+│  - checkpoint persistence                │
 └─────────────────────────────────────────┘
                   ↕
 ┌─────────────────────────────────────────┐
-│      LangGraph Agent (工作流)            │
-│  - llm_call: LLM 调用                    │
-│  - check_hitl: 检查是否需要确认            │
-│  - hitl_confirmation: 等待确认            │
-│  - conditional_execution: 条件执行        │
+│      LangGraph Agent (Workflow)          │
+│  - llm_call: LLM invocation              │
+│  - check_hitl: Check if confirmation needed │
+│  - hitl_confirmation: Wait for confirmation │
+│  - conditional_execution: Conditional execution │
 └─────────────────────────────────────────┘
 ```
 
-## 实现改动
+## Implementation Changes
 
-### 1. LangGraph Agent 层
+### 1. LangGraph Agent Layer
 
-#### 文件：`gns3server/agent/gns3_copilot/agent/gns3_copilot.py`
+#### File: `gns3server/agent/gns3_copilot/agent/gns3_copilot.py`
 
-##### 改动 1.1：扩展 MessagesState
+##### Change 1.1: Extend MessagesState
 
-**位置**：第 98-124 行
+**Location**: Lines 98-124
 
 ```python
-# 扩展状态定义，添加 HITL 相关字段
+# Extend state definition, add HITL-related fields
 class MessagesState(TypedDict):
-    """GNS3-Copilot 对话状态管理类"""
+    """GNS3-Copilot Conversation State Management Class"""
 
     messages: Annotated[list[AnyMessage], operator.add]
     llm_calls: int
@@ -85,27 +85,27 @@ class MessagesState(TypedDict):
     conversation_title: str | None
     topology_info: dict | None
 
-    # 新增：HITL 相关字段
-    pending_tool_calls: list[dict]      # 等待确认的工具调用列表
-    hitl_confirmation_required: bool     # 是否需要用户确认
-    hitl_session_id: str | None          # HITL 会话唯一标识
-    confirmed_tool_calls: list[dict]     # 用户已确认的工具调用
-    rejected_tool_calls: list[dict]      # 用户拒绝的工具调用
+    # New: HITL-related fields
+    pending_tool_calls: list[dict]      # List of tool calls awaiting confirmation
+    hitl_confirmation_required: bool     # Whether user confirmation is needed
+    hitl_session_id: str | None          # HITL session unique identifier
+    confirmed_tool_calls: list[dict]     # User-confirmed tool calls
+    rejected_tool_calls: list[dict]      # User-rejected tool calls
 ```
 
-**改动影响**：
-- checkpoint 数据库中新增 5 个字段
-- 现有状态读取代码需要兼容新字段
+**Change Impact**:
+- 5 new fields in checkpoint database
+- Existing state reading code needs to be compatible with new fields
 
-##### 改动 1.2：添加 HITL 检测节点
+##### Change 1.2: Add HITL Detection Node
 
-**位置**：在 `generate_title` 函数后添加（约第 310 行）
+**Location**: Add after `generate_title` function (around line 310)
 
 ```python
-# 需要确认的工具列表
+# List of tools requiring confirmation
 HITL_TOOLS = {
     "execute_multiple_device_config_commands",
-    # 可根据需要添加：
+    # Can be added as needed:
     # "delete_node",
     # "start_gns3_node",
 }
@@ -117,7 +117,7 @@ DANGEROUS_PATTERNS = [
 
 
 def _is_dangerous_config(tool_name: str, tool_args: dict) -> bool:
-    """检测配置是否包含危险命令"""
+    """Check if configuration contains dangerous commands"""
     if tool_name == "execute_multiple_device_config_commands":
         device_configs = tool_args.get("device_configs", [])
         for device in device_configs:
@@ -131,14 +131,14 @@ def _is_dangerous_config(tool_name: str, tool_args: dict) -> bool:
 
 def check_hitl_requirement(state: MessagesState) -> dict:
     """
-    检查工具调用是否需要用户确认 (HITL)
+    Check if tool calls require user confirmation (HITL)
 
     Returns:
-        dict: 包含 pending_tool_calls 和 hitl_confirmation_required 的状态更新
+        dict: State update containing pending_tool_calls and hitl_confirmation_required
     """
     last_message = state["messages"][-1]
 
-    # 如果最后一条消息没有工具调用，直接返回
+    # If last message has no tool calls, return directly
     if not hasattr(last_message, 'tool_calls') or not last_message.tool_calls:
         return {"hitl_confirmation_required": False}
 
@@ -148,9 +148,9 @@ def check_hitl_requirement(state: MessagesState) -> dict:
         tool_name = tool_call["name"]
         tool_args = tool_call["args"]
 
-        # 只处理需要 HITL 的工具
+        # Only process tools that need HITL
         if tool_name in HITL_TOOLS:
-            # 检查是否为危险操作
+            # Check if it's a dangerous operation
             is_dangerous = _is_dangerous_config(tool_name, tool_args)
 
             tool_info = {
@@ -160,10 +160,10 @@ def check_hitl_requirement(state: MessagesState) -> dict:
                 "danger_level": "high" if is_dangerous else "medium"
             }
 
-            # 添加描述信息
+            # Add description information
             if tool_name == "execute_multiple_device_config_commands":
                 device_count = len(tool_args.get("device_configs", []))
-                tool_info["description"] = f"配置 {device_count} 个设备"
+                tool_info["description"] = f"Configure {device_count} device(s)"
 
             pending_tools.append(tool_info)
             logger.info("HITL: Tool '%s' requires confirmation (danger_level=%s)",
@@ -180,26 +180,26 @@ def check_hitl_requirement(state: MessagesState) -> dict:
     return {"hitl_confirmation_required": False}
 ```
 
-##### 改动 1.3：修改 should_continue 路由
+##### Change 1.3: Modify should_continue Route
 
-**位置**：第 337-370 行
+**Location**: Lines 337-370
 
 ```python
 def should_continue(
     state: MessagesState,
 ) -> Literal["conditional_tool_execution", "hitl_confirmation", "title_generator_node", END]:
     """
-    LLM 响应后的路由决策
+    Routing decision after LLM response
 
     Returns:
-        Literal: 路由到下一个节点
+        Literal: Route to next node
     """
     last_message = state["messages"][-1]
     current_title = state.get("conversation_title")
 
-    # LLM 请求工具调用
+    # LLM requests tool call
     if last_message.tool_calls:
-        # 检查是否需要 HITL 确认
+        # Check if HITL confirmation is needed
         if state.get("hitl_confirmation_required"):
             logger.info("Routing to hitl_confirmation node")
             return "hitl_confirmation"
@@ -207,64 +207,64 @@ def should_continue(
         logger.info("Routing to conditional_tool_execution node")
         return "conditional_tool_execution"
 
-    # 首次交互完成，生成标题
+    # First interaction completed, generate title
     if current_title in [None, "New Conversation"]:
         return "title_generator_node"
 
     return END
 ```
 
-**关键变更**：
-- 原路由 `"tool_node"` 改为 `"conditional_tool_execution"`
-- 新增 `"hitl_confirmation"` 路由
-- 路由名称变更，需要同步更新所有引用
+**Key Changes**:
+- Original route `"tool_node"` changed to `"conditional_tool_execution"`
+- New `"hitl_confirmation"` route added
+- Route name changed, all references need to be updated synchronously
 
-##### 改动 1.4：添加 HITL 确认等待节点
+##### Change 1.4: Add HITL Confirmation Wait Node
 
-**位置**：在 `should_continue` 函数后添加
+**Location**: Add after `should_continue` function
 
 ```python
 def hitl_confirmation_node(state: MessagesState) -> dict:
     """
-    HITL 确认节点 - 暂停执行，等待用户确认
+    HITL confirmation node - Pause execution, wait for user confirmation
 
-    这是一个特殊的节点，它不执行任何操作，只是保持状态。
-    实际的确认流程由 API 层处理。
+    This is a special node that performs no operations, only maintains state.
+    Actual confirmation flow is handled by the API layer.
 
-    工作原理：
-    1. 节点被调用时，状态中包含 pending_tool_calls
-    2. LangGraph 保存状态到 checkpoint
-    3. 执行流程暂停，等待外部状态更新
-    4. 用户通过 API 确认/拒绝后，状态被更新
-    5. 从 checkpoint 恢复并继续执行
+    Working principle:
+    1. When node is called, state contains pending_tool_calls
+    2. LangGraph saves state to checkpoint
+    3. Execution flow pauses, waits for external state update
+    4. After user confirms via API, state is updated
+    5. Resume execution from checkpoint
 
     Returns:
-        dict: 空字典，保持状态不变
+        dict: Empty dictionary, maintains state unchanged
     """
     logger.info("HITL: Pausing for user confirmation (session_id=%s)",
                state.get("hitl_session_id"))
 
-    # 返回空字典，保持状态不变
-    # 状态将在用户确认后通过 API 更新
+    # Return empty dictionary, keep state unchanged
+    # State will be updated via API after user confirmation
     return {}
 ```
 
-##### 改动 1.5：添加条件执行节点
+##### Change 1.5: Add Conditional Execution Node
 
-**位置**：在 `hitl_confirmation_node` 函数后添加
+**Location**: Add after `hitl_confirmation_node` function
 
 ```python
 def conditional_tool_execution(state: MessagesState) -> dict:
     """
-    条件工具执行节点 - 根据用户确认决定是否执行工具
+    Conditional tool execution node - Decide whether to execute tools based on user confirmation
 
-    这个节点替代原来的 tool_node，增加了：
-    1. 只执行用户确认的工具
-    2. 处理用户拒绝的工具
-    3. 更新 HITL 状态
+    This node replaces the original tool_node, adding:
+    1. Only execute user-confirmed tools
+    2. Handle user-rejected tools
+    3. Update HITL state
 
     Returns:
-        dict: 包含执行结果和状态更新的字典
+        dict: Contains execution results and state updates
     """
     confirmed_calls = state.get("confirmed_tool_calls", [])
     rejected_calls = state.get("rejected_tool_calls", [])
@@ -272,15 +272,15 @@ def conditional_tool_execution(state: MessagesState) -> dict:
     logger.info("HITL: Executing %d confirmed tools, %d rejected",
                len(confirmed_calls), len(rejected_calls))
 
-    # 处理用户拒绝的工具
+    # Handle user-rejected tools
     if rejected_calls:
         rejected_names = [c["tool_name"] for c in rejected_calls]
         rejection_msg = (
-            f"用户拒绝了以下操作: {', '.join(rejected_names)}。\n"
-            f"请提供替代方案或解释不执行这些操作的原因。"
+            f"User rejected the following operations: {', '.join(rejected_names)}.\n"
+            f"Please provide an alternative solution or explain why these operations should not be performed."
         )
 
-        # 添加系统消息通知 LLM
+        # Add system message to notify LLM
         return {
             "messages": [SystemMessage(content=rejection_msg)],
             "pending_tool_calls": [],
@@ -289,7 +289,7 @@ def conditional_tool_execution(state: MessagesState) -> dict:
             "rejected_tool_calls": []
         }
 
-    # 执行已确认的工具
+    # Execute confirmed tools
     if not confirmed_calls:
         logger.warning("HITL: No confirmed tools to execute")
         return {
@@ -322,7 +322,7 @@ def conditional_tool_execution(state: MessagesState) -> dict:
                 name=tool_name
             ))
 
-    # 清理 HITL 状态
+    # Clean up HITL state
     return {
         "messages": results,
         "pending_tool_calls": [],
@@ -332,45 +332,45 @@ def conditional_tool_execution(state: MessagesState) -> dict:
     }
 ```
 
-**关键变更**：
-- 替代原 `tool_node` 函数
-- 增加确认逻辑处理
-- 支持部分确认、部分拒绝
+**Key Changes**:
+- Replaces original `tool_node` function
+- Adds confirmation logic handling
+- Supports partial confirmation, partial rejection
 
-##### 改动 1.6：更新 LangGraph 构建流程
+##### Change 1.6: Update LangGraph Build Process
 
-**位置**：第 393-427 行
+**Location**: Lines 393-427
 
 ```python
-# 构建工作流
+# Build workflow
 agent_builder = StateGraph(MessagesState)
 
-# 添加节点
+# Add nodes
 agent_builder.add_node("llm_call", llm_call)
 agent_builder.add_node("hitl_confirmation", hitl_confirmation_node)
 agent_builder.add_node("conditional_tool_execution", conditional_tool_execution)
 agent_builder.add_node("title_generator_node", generate_title)
 
-# 添加边：START → llm_call
+# Add edges: START → llm_call
 agent_builder.add_edge(START, "llm_call")
 
-# 添加边：LLM 后的条件路由
+# Add edges: conditional routing after LLM
 agent_builder.add_conditional_edges(
     "llm_call",
     should_continue,
     {
-        "hitl_confirmation": "hitl_confirmation",          # 需要 HITL 确认
-        "conditional_tool_execution": "conditional_tool_execution",  # 直接执行
-        "title_generator_node": "title_generator_node",   # 生成标题
-        END: END                                         # 结束对话
+        "hitl_confirmation": "hitl_confirmation",          # Needs HITL confirmation
+        "conditional_tool_execution": "conditional_tool_execution",  # Direct execution
+        "title_generator_node": "title_generator_node",   # Generate title
+        END: END                                         # End conversation
     },
 )
 
-# HITL 确认节点是特殊的，它需要等待外部状态更新
-# 状态更新后，下一轮调用将从 checkpoint 恢复并继续
-# 这个循环通过 API 触发新的 graph.ainvoke() 调用完成
+# HITL confirmation node is special, needs to wait for external state update
+# State is updated after checkpoint saved, next round of invocation resumes from checkpoint
+# This cycle is completed by API triggering new graph.ainvoke() call
 
-# 添加边：条件执行后继续 LLM 调用
+# Add edges: continue LLM call after conditional execution
 agent_builder.add_conditional_edges(
     "conditional_tool_execution",
     recursion_limit_continue,
@@ -380,33 +380,33 @@ agent_builder.add_conditional_edges(
     },
 )
 
-# 添加边：标题生成后结束
+# Add edges: end after title generation
 agent_builder.add_edge("title_generator_node", END)
 ```
 
-**工作流图**：
+**Workflow Diagram**:
 ```
 START → llm_call → should_continue
                      ↓
         ┌────────────┼────────────┐
         ↓            ↓            ↓
 hitl_confirmation  conditional  title_generator
-(等待 API)      _execution         ↓
+(wait for API)      _execution         ↓
         └────────────┴────────────→ END
 ```
 
-#### 文件：`gns3server/agent/gns3_copilot/agent_service.py`
+#### File: `gns3server/agent/gns3_copilot/agent_service.py`
 
-##### 改动 2.1：添加 HITL 事件处理
+##### Change 2.1: Add HITL Event Handling
 
-**位置**：第 333-376 行的 `_convert_event_to_chunk` 函数
+**Location**: `_convert_event_to_chunk` function at lines 333-376
 
 ```python
 def _convert_event_to_chunk(self, event: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
     """
-    转换 LangGraph 事件为 API 响应块
+    Convert LangGraph events to API response chunks
 
-    支持 HITL 事件类型
+    Supports HITL event types
     """
     event_type = event.get("event", "")
     data = event.get("data", {})
@@ -435,30 +435,30 @@ def _convert_event_to_chunk(self, event: Dict[str, Any], session_id: str) -> Opt
             "session_id": session_id
         }
 
-    # 新增：HITL 确认要求事件
+    # New: HITL confirmation required event
     elif event_type == "hitl_required":
         return {
             "type": "hitl_required",
             "pending_tools": data.get("pending_tool_calls", []),
             "hitl_session_id": data.get("hitl_session_id"),
-            "timeout": 300,  # 5分钟超时
+            "timeout": 300,  # 5 minute timeout
             "session_id": session_id
         }
 
     return None
 ```
 
-**注意**：实际实现中，HITL 事件不是通过 LangGraph 的 `astream_events` 触发的，而是通过状态查询实现的。因此，此函数主要用于处理工具执行事件。
+**Note**: In actual implementation, HITL events are not triggered via LangGraph's `astream_events`, but achieved through state queries. Therefore, this function is mainly used to handle tool execution events.
 
 ---
 
-### 2. API 层
+### 2. API Layer
 
-#### 文件：`gns3server/api/routes/controller/chat.py`
+#### File: `gns3server/api/routes/controller/chat.py`
 
-##### 改动 2.1：添加 HITL 端点
+##### Change 2.1: Add HITL Endpoints
 
-**位置**：在文件末尾添加（约第 325 行后）
+**Location**: Add at end of file (after line 325)
 
 ```python
 from gns3server import schemas
@@ -466,14 +466,14 @@ from typing import List
 
 
 # =============================================================================
-# HITL (Human-in-the-Loop) 端点
+# HITL (Human-in-the-Loop) Endpoints
 # =============================================================================
 
 @router.get(
     "/sessions/{session_id}/hitl-status",
     response_model=schemas.HITLStatusResponse,
-    summary="获取 HITL 状态",
-    description="获取当前会话中待确认的工具列表"
+    summary="Get HITL status",
+    description="Get list of pending tools in current session"
 )
 async def get_hitl_status(
     session_id: str,
@@ -481,10 +481,10 @@ async def get_hitl_status(
     current_user: schemas.User = Depends(get_current_active_user),
 ) -> schemas.HITLStatusResponse:
     """
-    获取 HITL 状态
+    Get HITL status
 
-    返回当前会话中等待用户确认的工具调用列表。
-    前端应定期轮询此端点以检查是否有新的待确认工具。
+    Returns the list of tool calls waiting for user confirmation in the current session.
+    Frontend should poll this endpoint periodically to check for new pending tools.
     """
     if project.status != "opened":
         raise HTTPException(
@@ -495,7 +495,7 @@ async def get_hitl_status(
     agent_manager = await get_project_agent_manager()
     agent_service = await agent_manager.get_agent(str(project.id), project.path)
 
-    # 从 checkpoint 获取状态
+    # Get state from checkpoint
     config = {"configurable": {"thread_id": session_id}}
     state = await agent_service._graph.aget_state(config)
 
@@ -511,7 +511,7 @@ async def get_hitl_status(
     pending_tools = values.get("pending_tool_calls", [])
     hitl_session_id = values.get("hitl_session_id")
 
-    # 转换为 Schema 格式
+    # Convert to Schema format
     pending_tool_schemas = []
     for tool in pending_tools:
         pending_tool_schemas.append(schemas.PendingTool(
@@ -533,8 +533,8 @@ async def get_hitl_status(
 @router.post(
     "/sessions/{session_id}/hitl/confirm",
     response_model=schemas.HITLConfirmationResponse,
-    summary="确认执行工具",
-    description="用户确认执行一个或多个待确认的工具"
+    summary="Confirm tool execution",
+    description="User confirms to execute one or more pending tools"
 )
 async def confirm_tool_execution(
     session_id: str,
@@ -543,13 +543,13 @@ async def confirm_tool_execution(
     current_user: schemas.User = Depends(get_current_active_user),
 ) -> schemas.HITLConfirmationResponse:
     """
-    确认执行工具
+    Confirm tool execution
 
-    用户可以选择：
-    - confirm_all=true: 确认所有待确认的工具
-    - tool_call_ids=[...]: 确认指定的工具
+    User can choose:
+    - confirm_all=true: Confirm all pending tools
+    - tool_call_ids=[...]: Confirm specified tools
 
-    确认后，工具将被执行，结果将通过 SSE 流返回。
+    After confirmation, tools will be executed and results returned via SSE stream.
     """
     if project.status != "opened":
         raise HTTPException(
@@ -578,7 +578,7 @@ async def confirm_tool_execution(
             detail="No pending tools to confirm"
         )
 
-    # 根据请求选择要确认的工具
+    # Select tools to confirm based on request
     confirmed_tools = []
     if request.confirm_all:
         confirmed_tools = pending_tools
@@ -596,7 +596,7 @@ async def confirm_tool_execution(
             detail="No tools matched the confirmation criteria"
         )
 
-    # 更新状态：标记为已确认
+    # Update state: mark as confirmed
     await agent_service._graph.aupdate_state(
         config,
         {
@@ -606,7 +606,7 @@ async def confirm_tool_execution(
         }
     )
 
-    # 继续执行流程
+    # Continue execution flow
     try:
         new_state = await agent_service._graph.ainvoke(None, config)
     except Exception as e:
@@ -619,15 +619,15 @@ async def confirm_tool_execution(
     return schemas.HITLConfirmationResponse(
         status="confirmed",
         confirmed_count=len(confirmed_tools),
-        message=f"已确认 {len(confirmed_tools)} 个工具执行"
+        message=f"Confirmed {len(confirmed_tools)} tool(s) for execution"
     )
 
 
 @router.post(
     "/sessions/{session_id}/hitl/reject",
     response_model=schemas.HITLConfirmationResponse,
-    summary="拒绝执行工具",
-    description="用户拒绝执行一个或多个待确认的工具"
+    summary="Reject tool execution",
+    description="User rejects to execute one or more pending tools"
 )
 async def reject_tool_execution(
     session_id: str,
@@ -636,14 +636,14 @@ async def reject_tool_execution(
     current_user: schemas.User = Depends(get_current_active_user),
 ) -> schemas.HITLConfirmationResponse:
     """
-    拒绝执行工具
+    Reject tool execution
 
-    用户可以选择：
-    - reject_all=true: 拒绝所有待确认的工具
-    - tool_call_ids=[...]: 拒绝指定的工具
-    - reason: 拒绝原因（将反馈给 LLM）
+    User can choose:
+    - reject_all=true: Reject all pending tools
+    - tool_call_ids=[...]: Reject specified tools
+    - reason: Rejection reason (will be fed back to LLM)
 
-    拒绝后，LLM 将收到通知并可以提供替代方案。
+    After rejection, LLM will be notified and can provide alternative solution.
     """
     if project.status != "opened":
         raise HTTPException(
@@ -673,7 +673,7 @@ async def reject_tool_execution(
             detail="No pending tools to reject"
         )
 
-    # 更新状态：标记为已拒绝
+    # Update state: mark as rejected
     await agent_service._graph.aupdate_state(
         config,
         {
@@ -683,7 +683,7 @@ async def reject_tool_execution(
         }
     )
 
-    # 继续执行流程，LLM 将收到拒绝通知
+    # Continue execution flow, LLM will receive rejection notification
     try:
         new_state = await agent_service._graph.ainvoke(None, config)
     except Exception as e:
@@ -697,99 +697,99 @@ async def reject_tool_execution(
     return schemas.HITLConfirmationResponse(
         status="rejected",
         confirmed_count=0,
-        message=f"已拒绝 {len(rejected_tools)} 个工具执行: {', '.join(rejected_names)}"
+        message=f"Rejected {len(rejected_tools)} tool(s): {', '.join(rejected_names)}"
     )
 ```
 
 ---
 
-### 3. Schema 层
+### 3. Schema Layer
 
-#### 文件：`gns3server/schemas/controller/chat.py`
+#### File: `gns3server/schemas/controller/chat.py`
 
-##### 改动 3.1：添加 HITL 相关的 Pydantic 模型
+##### Change 3.1: Add HITL-related Pydantic Models
 
-**位置**：在文件末尾添加（约第 112 行后）
+**Location**: Add at end of file (after line 112)
 
 ```python
 class PendingTool(BaseModel):
-    """待确认的工具信息"""
-    tool_call_id: str = Field(..., description="工具调用的唯一 ID")
-    tool_name: str = Field(..., description="工具名称")
-    tool_args: Dict[str, Any] = Field(..., description="工具参数")
+    """Information about pending tool"""
+    tool_call_id: str = Field(..., description="Unique ID of the tool call")
+    tool_name: str = Field(..., description="Tool name")
+    tool_args: Dict[str, Any] = Field(..., description="Tool parameters")
     danger_level: Literal["low", "medium", "high"] = Field(
         default="medium",
-        description="危险等级"
+        description="Danger level"
     )
-    description: Optional[str] = Field(None, description="工具执行的描述")
+    description: Optional[str] = Field(None, description="Tool execution description")
 
 
 class HITLStatusResponse(BaseModel):
-    """HITL 状态响应"""
+    """HITL status response"""
     status: Literal["idle", "waiting", "confirmed", "rejected"] = Field(
         ...,
-        description="当前状态"
+        description="Current status"
     )
     pending_tools: List[PendingTool] = Field(
         default_factory=list,
-        description="待确认的工具列表"
+        description="List of pending tools"
     )
     hitl_session_id: Optional[str] = Field(
         None,
-        description="HITL 会话 ID"
+        description="HITL session ID"
     )
-    session_id: str = Field(..., description="聊天会话 ID")
+    session_id: str = Field(..., description="Chat session ID")
 
 
 class HITLConfirmationRequest(BaseModel):
-    """HITL 确认请求"""
+    """HITL confirmation request"""
     confirm_all: bool = Field(
         default=False,
-        description="是否确认所有待确认的工具"
+        description="Whether to confirm all pending tools"
     )
     tool_call_ids: Optional[List[str]] = Field(
         None,
-        description="要确认的工具调用 ID 列表"
+        description="List of tool call IDs to confirm"
     )
 
 
 class HITLRejectionRequest(BaseModel):
-    """HITL 拒绝请求"""
+    """HITL rejection request"""
     reject_all: bool = Field(
         default=False,
-        description="是否拒绝所有待确认的工具"
+        description="Whether to reject all pending tools"
     )
     tool_call_ids: Optional[List[str]] = Field(
         None,
-        description="要拒绝的工具调用 ID 列表"
+        description="List of tool call IDs to reject"
     )
     reason: Optional[str] = Field(
         None,
-        description="拒绝原因（将反馈给 LLM）"
+        description="Rejection reason (will be fed back to LLM)"
     )
 
 
 class HITLConfirmationResponse(BaseModel):
-    """HITL 确认响应"""
+    """HITL confirmation response"""
     status: Literal["confirmed", "rejected"] = Field(
         ...,
-        description="操作状态"
+        description="Operation status"
     )
     confirmed_count: int = Field(
         ...,
-        description="已确认的工具数量"
+        description="Number of confirmed tools"
     )
-    message: str = Field(..., description="响应消息")
+    message: str = Field(..., description="Response message")
 ```
 
-**同时更新 `__init__.py` 导出**：
+**Also update `__init__.py` exports**:
 
 ```python
-# 文件：gns3server/schemas/__init__.py
+# File: gns3server/schemas/__init__.py
 
-# 添加到导入列表
+# Add to import list
 from .controller.chat import (
-    # ... 现有导入 ...
+    # ... existing imports ...
     PendingTool,
     HITLStatusResponse,
     HITLConfirmationRequest,
@@ -800,48 +800,48 @@ from .controller.chat import (
 
 ---
 
-### 4. 文件改动汇总
+### 4. File Changes Summary
 
-| 文件路径 | 改动类型 | 行数变化 | 风险等级 |
-|---------|---------|----------|----------|
-| `gns3_copilot.py` | 修改/新增 | +200 行 | 🟡 中 |
-| `agent_service.py` | 修改 | +10 行 | 🟢 低 |
-| `chat.py` (API) | 新增 | +150 行 | 🟢 低 |
-| `chat.py` (Schema) | 新增 | +50 行 | 🟢 低 |
-| **总计** | - | **+410 行** | - |
-
----
-
-## 数据库变更
-
-### Checkpoint 表结构
-
-**表名**：`checkpoints` (LangGraph 自动管理)
-
-**新增字段**（通过 MessagesState 扩展自动添加）：
-
-| 字段名 | 类型 | 说明 |
-|--------|------|------|
-| `pending_tool_calls` | TEXT (JSON) | 待确认的工具调用列表 |
-| `hitl_confirmation_required` | BOOLEAN | 是否需要 HITL 确认 |
-| `hitl_session_id` | TEXT | HITL 会话 ID |
-| `confirmed_tool_calls` | TEXT (JSON) | 已确认的工具调用 |
-| `rejected_tool_calls` | TEXT (JSON) | 已拒绝的工具调用 |
-
-**迁移说明**：
-- LangGraph 自动处理新的 state 字段
-- 无需手动执行数据库迁移
-- 现有 checkpoint 向后兼容
+| File Path | Change Type | Line Changes | Risk Level |
+|-----------|-------------|--------------|------------|
+| `gns3_copilot.py` | Modify/Add | +200 lines | 🟡 Medium |
+| `agent_service.py` | Modify | +10 lines | 🟢 Low |
+| `chat.py` (API) | Add | +150 lines | 🟢 Low |
+| `chat.py` (Schema) | Add | +50 lines | 🟢 Low |
+| **Total** | - | **+410 lines** | - |
 
 ---
 
-## API 规范
+## Database Changes
 
-### 1. 获取 HITL 状态
+### Checkpoint Table Structure
 
-**端点**：`GET /v3/projects/{project_id}/chat/sessions/{session_id}/hitl-status`
+**Table Name**: `checkpoints` (managed by LangGraph)
 
-**响应示例**：
+**New Fields** (automatically added via MessagesState extension):
+
+| Field Name | Type | Description |
+|------------|------|-------------|
+| `pending_tool_calls` | TEXT (JSON) | List of pending tool calls |
+| `hitl_confirmation_required` | BOOLEAN | Whether HITL confirmation is needed |
+| `hitl_session_id` | TEXT | HITL session ID |
+| `confirmed_tool_calls` | TEXT (JSON) | Confirmed tool calls |
+| `rejected_tool_calls` | TEXT (JSON) | Rejected tool calls |
+
+**Migration Notes**:
+- LangGraph automatically handles new state fields
+- No manual database migration required
+- Existing checkpoints are backward compatible
+
+---
+
+## API Specification
+
+### 1. Get HITL Status
+
+**Endpoint**: `GET /v3/projects/{project_id}/chat/sessions/{session_id}/hitl-status`
+
+**Response Example**:
 ```json
 {
     "status": "waiting",
@@ -859,7 +859,7 @@ from .controller.chat import (
                 ]
             },
             "danger_level": "medium",
-            "description": "配置 1 个设备"
+            "description": "Configure 1 device"
         }
     ],
     "hitl_session_id": "hitl_12345",
@@ -867,11 +867,11 @@ from .controller.chat import (
 }
 ```
 
-### 2. 确认执行
+### 2. Confirm Execution
 
-**端点**：`POST /v3/projects/{project_id}/chat/sessions/{session_id}/hitl/confirm`
+**Endpoint**: `POST /v3/projects/{project_id}/chat/sessions/{session_id}/hitl/confirm`
 
-**请求体**：
+**Request Body**:
 ```json
 {
     "confirm_all": true,
@@ -879,7 +879,7 @@ from .controller.chat import (
 }
 ```
 
-**或指定工具**：
+**Or specify tools**:
 ```json
 {
     "confirm_all": false,
@@ -887,44 +887,44 @@ from .controller.chat import (
 }
 ```
 
-**响应示例**：
+**Response Example**:
 ```json
 {
     "status": "confirmed",
     "confirmed_count": 2,
-    "message": "已确认 2 个工具执行"
+    "message": "Confirmed 2 tool(s) for execution"
 }
 ```
 
-### 3. 拒绝执行
+### 3. Reject Execution
 
-**端点**：`POST /v3/projects/{project_id}/chat/sessions/{session_id}/hitl/reject`
+**Endpoint**: `POST /v3/projects/{project_id}/chat/sessions/{session_id}/hitl/reject`
 
-**请求体**：
+**Request Body**:
 ```json
 {
     "reject_all": true,
-    "reason": "配置有误，需要重新规划"
+    "reason": "Configuration has errors, needs re-planning"
 }
 ```
 
-**响应示例**：
+**Response Example**:
 ```json
 {
     "status": "rejected",
     "confirmed_count": 0,
-    "message": "已拒绝 1 个工具执行: execute_multiple_device_config_commands"
+    "message": "Rejected 1 tool(s): execute_multiple_device_config_commands"
 }
 ```
 
 ---
 
-## 前端集成指南
+## Frontend Integration Guide
 
-### 1. 检测 HITL 状态
+### 1. Detect HITL Status
 
 ```javascript
-// 定期轮询 HITL 状态
+// Periodically poll HITL status
 async function pollHITLStatus(sessionId) {
     const response = await fetch(
         `/api/v3/projects/${projectId}/chat/sessions/${sessionId}/hitl-status`
@@ -936,11 +936,11 @@ async function pollHITLStatus(sessionId) {
     }
 }
 
-// 每 2 秒轮询一次
+// Poll every 2 seconds
 setInterval(() => pollHITLStatus(sessionId), 2000);
 ```
 
-### 2. 显示确认对话框
+### 2. Show Confirmation Dialog
 
 ```javascript
 function showConfirmationDialog(hitlStatus) {
@@ -950,7 +950,7 @@ function showConfirmationDialog(hitlStatus) {
     dialog.className = 'hitl-confirmation-dialog';
 
     let html = `
-        <h3>⚠️ 需要确认以下操作</h3>
+        <h3>⚠️ Please Confirm the Following Operations</h3>
         <div class="pending-tools">
     `;
 
@@ -968,8 +968,8 @@ function showConfirmationDialog(hitlStatus) {
     html += `
         </div>
         <div class="actions">
-            <button onclick="confirmAll('${hitl_session_id}')">全部确认</button>
-            <button onclick="rejectAll('${hitl_session_id}')">全部拒绝</button>
+            <button onclick="confirmAll('${hitl_session_id}')">Confirm All</button>
+            <button onclick="rejectAll('${hitl_session_id}')">Reject All</button>
         </div>
     `;
 
@@ -989,7 +989,7 @@ async function confirmAll(sessionId) {
 
     if (response.ok) {
         closeDialog();
-        // 继续监听 SSE 流以获取执行结果
+        // Continue listening to SSE stream to get execution results
     }
 }
 
@@ -999,7 +999,7 @@ async function rejectAll(sessionId) {
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reject_all: true, reason: '用户取消操作' })
+            body: JSON.stringify({ reject_all: true, reason: 'User cancelled operation' })
         }
     );
 
@@ -1011,9 +1011,9 @@ async function rejectAll(sessionId) {
 
 ---
 
-## 测试计划
+## Test Plan
 
-### 单元测试
+### Unit Tests
 
 ```python
 import pytest
@@ -1023,7 +1023,7 @@ from gns3server.agent.gns3_copilot.agent.gns3_copilot import (
 )
 
 def test_dangerous_config_detection():
-    """测试危险命令检测"""
+    """Test dangerous command detection"""
     tool_args = {
         "device_configs": [{
             "config_commands": ["reload", "write erase"]
@@ -1033,7 +1033,7 @@ def test_dangerous_config_detection():
     assert _is_dangerous_config("execute_multiple_device_config_commands", tool_args) == True
 
 def test_safe_config_detection():
-    """测试安全命令检测"""
+    """Test safe command detection"""
     tool_args = {
         "device_configs": [{
             "config_commands": ["interface gig0/0", "ip address 10.0.0.1/24"]
@@ -1043,10 +1043,10 @@ def test_safe_config_detection():
     assert _is_dangerous_config("execute_multiple_device_config_commands", tool_args) == False
 
 def test_hitl_requirement_check():
-    """测试 HITL 需求检查"""
+    """Test HITL requirement check"""
     state = {
         "messages": [
-            HumanMessage(content="配置路由器"),
+            HumanMessage(content="Configure router"),
             AIMessage(
                 content="",
                 tool_calls=[{
@@ -1064,28 +1064,28 @@ def test_hitl_requirement_check():
     assert len(result["pending_tool_calls"]) == 1
 ```
 
-### 集成测试
+### Integration Tests
 
 ```python
 import pytest
 from fastapi.testclient import TestClient
 
 def test_hitl_flow():
-    """测试完整的 HITL 流程"""
+    """Test complete HITL flow"""
     client = TestClient(app)
 
-    # 1. 开始聊天
+    # 1. Start chat
     response = client.post(
         f"/v3/projects/{project_id}/chat/stream",
-        json={"message": "配置所有路由器"}
+        json={"message": "Configure all routers"}
     )
 
-    # 2. 检查 HITL 状态
+    # 2. Check HITL status
     status = client.get(f"/v3/projects/{project_id}/chat/sessions/{session_id}/hitl-status")
     assert status.json()["status"] == "waiting"
     assert len(status.json()["pending_tools"]) > 0
 
-    # 3. 确认执行
+    # 3. Confirm execution
     confirm = client.post(
         f"/v3/projects/{project_id}/chat/sessions/{session_id}/hitl/confirm",
         json={"confirm_all": True}
@@ -1095,85 +1095,85 @@ def test_hitl_flow():
 
 ---
 
-## 部署步骤
+## Deployment Steps
 
-### 第一阶段：基础架构（1-2 天）
+### Phase 1: Basic Infrastructure (1-2 days)
 
-1. ✅ 扩展 MessagesState
-2. ✅ 实现 check_hitl_requirement 节点
-3. ✅ 实现 hitl_confirmation_node 和 conditional_tool_execution
-4. ✅ 更新 LangGraph 工作流
-5. ✅ 单元测试
+1. ✅ Extend MessagesState
+2. ✅ Implement check_hitl_requirement node
+3. ✅ Implement hitl_confirmation_node and conditional_tool_execution
+4. ✅ Update LangGraph workflow
+5. ✅ Unit tests
 
-**验证**：现有功能不受影响
+**Verification**: Existing functionality unaffected
 
-### 第二阶段：API 端点（1 天）
+### Phase 2: API Endpoints (1 day)
 
-1. ✅ 添加 HITL 状态查询端点
-2. ✅ 添加确认/拒绝端点
-3. ✅ 添加 Schema 定义
-4. ✅ API 测试
+1. ✅ Add HITL status query endpoint
+2. ✅ Add confirm/reject endpoints
+3. ✅ Add Schema definitions
+4. ✅ API tests
 
-**验证**：API 可正常调用
+**Verification**: API can be called normally
 
-### 第三阶段：前端集成（2-3 天）
+### Phase 3: Frontend Integration (2-3 days)
 
-1. ✅ 实现轮询逻辑
-2. ✅ 显示确认对话框
-3. ✅ 处理确认/拒绝操作
-4. ✅ 显示执行结果
+1. ✅ Implement polling logic
+2. ✅ Show confirmation dialog
+3. ✅ Handle confirm/reject operations
+4. ✅ Display execution results
 
-**验证**：端到端流程可用
+**Verification**: End-to-end flow available
 
-### 第四阶段：优化和增强（1-2 天）
+### Phase 4: Optimization and Enhancement (1-2 days)
 
-1. ✅ 添加危险命令分级
-2. ✅ 实现超时处理
-3. ✅ 添加操作日志
-4. ✅ 性能优化
+1. ✅ Add dangerous command classification
+2. ✅ Implement timeout handling
+3. ✅ Add operation logging
+4. ✅ Performance optimization
 
-**验证**：生产就绪
+**Verification**: Production ready
 
 ---
 
-## 参数修改功能（扩展）
+## Parameter Modification Feature (Extension)
 
-### 功能概述
+### Feature Overview
 
-除了"确认/拒绝"外，HITL 还支持用户修改即将执行的命令参数，然后将修改反馈给 LLM，由 LLM 理解并按新参数执行。
+In addition to "Confirm/Reject", HITL also supports users modifying command parameters about to be executed, then feeding the modifications back to the LLM, which understands and executes with the new parameters.
 
-### 完整流程
+### Complete Flow
 
 ```
-LLM 生成命令 A
+LLM generates command A
        ↓
-  HITL 确认暂停
+  HITL confirmation pause
        ↓
-   显示给用户
+   Display to user
        ↓
 ┌─────────┼─────────┐
 │         │         │
-直接确认   拒绝    修改为B
+Direct Confirm   Reject    Modify to B
 │         │         │
-执行A    反馈LLM  反馈(A→B)给LLM
+Execute A    Feedback LLM  Feedback (A→B) to LLM
                   ↓
-              LLM理解修改
+              LLM understands modification
                   ↓
-              生成新tool call
+              Generate new tool call
                   ↓
-              执行B
+              Execute B
 ```
 
-### 对话示例
+### Conversation Example
 
 ```
-用户: 配置 R1 的 gig0/0 接口为 10.0.0.1/24
+User: Configure R1's gig0/0 interface to 10.0.0.1/24
 
-LLM: 我将为您配置 R1 的接口。
+LLM: I will configure R1's interface for you.
 
-HITL: ⚠️ 需要确认以下操作
-     工具: execute_multiple_device_config_commands
-     参数: {
+HITL: ⚠️ Please confirm the following operations
+     Tool: execute_multiple_device_config_commands
+     Parameters: {
        "device_configs": [{
          "device_name": "R1",
          "config_commands": [
@@ -1183,35 +1183,35 @@ HITL: ⚠️ 需要确认以下操作
        }]
      }
 
-用户: [修改参数]
+User: [Modify parameters]
      ip address 10.0.0.1 255.255.255.0
      → ip address 192.168.1.1 255.255.255.0
-     [保存并执行]
+     [Save and Execute]
 
-系统反馈给 LLM:
-     用户修改了即将执行的命令参数：
-     工具: execute_multiple_device_config_commands
+System feedback to LLM:
+     User modified the command parameters about to be executed:
+     Tool: execute_multiple_device_config_commands
      R1:
-       原命令: ['interface gig0/0', 'ip address 10.0.0.1 255.255.255.0']
-       修改为: ['interface gig0/0', 'ip address 192.168.1.1 255.255.255.0']
-     请按照修改后的参数执行。
+       Original commands: ['interface gig0/0', 'ip address 10.0.0.1 255.255.255.0']
+       Modified to: ['interface gig0/0', 'ip address 192.168.1.1 255.255.255.0']
+     Please execute according to the modified parameters.
 
-LLM: 明白，我将使用修改后的 IP 地址 192.168.1.1/24 来配置 R1 的 gig0/0 接口。
+LLM: Understood, I will use the modified IP address 192.168.1.1/24 to configure R1's gig0/0 interface.
 
-[工具执行 execute_multiple_device_config_commands with modified args]
+[Tool execution execute_multiple_device_config_commands with modified args]
 
-LLM: 已完成配置，R1 的 gig0/0 接口已配置为 192.168.1.1/24。
+LLM: Configuration completed, R1's gig0/0 interface configured to 192.168.1.1/24.
 ```
 
-### 实现要点
+### Implementation Points
 
-#### 1. 状态扩展
+#### 1. State Extension
 
-在 `MessagesState` 中添加：
+Add to `MessagesState`:
 
 ```python
-# 用户修改的字段
-user_modified_args: dict | None  # 结构:
+# User-modified fields
+user_modified_args: dict | None  # Structure:
 # {
 #     "tool_call_id": str,
 #     "original_args": dict,
@@ -1219,92 +1219,92 @@ user_modified_args: dict | None  # 结构:
 # }
 ```
 
-#### 2. API 扩展
+#### 2. API Extension
 
-新增端点：`POST /v3/projects/{project_id}/chat/sessions/{session_id}/hitl/modify`
+New endpoint: `POST /v3/projects/{project_id}/chat/sessions/{session_id}/hitl/modify`
 
-**请求体**：
+**Request Body**:
 ```python
 {
     "tool_call_id": "call_abc123",
     "modified_args": {
-        # 修改后的完整参数
+        # Modified complete parameters
     }
 }
 ```
 
-**响应**：
+**Response**:
 ```python
 {
     "status": "modified",
-    "modification_summary": "显示参数差异",
-    "message": "已将修改反馈给 AI"
+    "modification_summary": "Show parameter differences",
+    "message": "Feedback sent to AI"
 }
 ```
 
-#### 3. 后端处理流程
+#### 3. Backend Processing Flow
 
-1. 接收修改后的参数
-2. 生成参数差异摘要
-3. 添加 HumanMessage 到对话，说明用户的修改
-4. 清除 `pending_tool_calls` 和 `hitl_confirmation_required`
-5. 设置 `user_modified_args`（用于触发 LLM 重新生成）
-6. 继续执行，LLM 看到用户的修改后，生成新的 tool call
-7. 执行新的 tool call
+1. Receive modified parameters
+2. Generate parameter difference summary
+3. Add HumanMessage to conversation, explaining user's modification
+4. Clear `pending_tool_calls` and `hitl_confirmation_required`
+5. Set `user_modified_args` (used to trigger LLM regeneration)
+6. Continue execution, LLM sees user's modification and generates new tool call
+7. Execute new tool call
 
-#### 4. 前端实现要点
+#### 4. Frontend Implementation Points
 
-**界面组件**：
-- 显示原始参数和编辑区域
-- 提供参数差异高亮（原值 vs 新值）
-- 支持 JSON 格式验证
-- 保存修改并执行按钮
+**UI Components**:
+- Display original parameters and editing area
+- Provide parameter difference highlighting (original vs new values)
+- Support JSON format validation
+- Save modification and execute button
 
-**交互流程**：
-1. 用户点击"修改参数"按钮
-2. 展开参数编辑区域，显示原始 JSON
-3. 用户在文本框中编辑 JSON
-4. 实时验证 JSON 格式
-5. 点击"保存并执行"提交修改
-6. 系统反馈修改摘要并继续执行
+**Interaction Flow**:
+1. User clicks "Modify Parameters" button
+2. Expand parameter editing area, display original JSON
+3. User edits JSON in text box
+4. Real-time JSON format validation
+5. Click "Save and Execute" to submit modification
+6. System shows modification summary and continues execution
 
-**用户体验**：
-- 对于配置工具，可以提供更友好的命令行界面而非纯 JSON
-- 高亮显示修改的部分（红色删除线、绿色新增）
-- 提供参数预设模板
-- 显示修改前后的对比视图
+**User Experience**:
+- For configuration tools, can provide more friendly command-line interface instead of pure JSON
+- Highlight modified parts (red strikethrough, green addition)
+- Provide parameter preset templates
+- Show before/after comparison view
 
-### 关键代码位置
+### Key Code Locations
 
-**文件**：`gns3_copilot.py`
+**File**: `gns3_copilot.py`
 
-增强 `conditional_tool_execution` 函数，检测 `user_modified_args`：
+Enhance `conditional_tool_execution` function to detect `user_modified_args`:
 
 ```python
 def conditional_tool_execution(state: MessagesState) -> dict:
-    """条件工具执行节点（支持用户修改）"""
+    """Conditional tool execution node (supports user modification)"""
 
-    # 处理用户修改的情况
+    # Handle user modification case
     if state.get("user_modified_args"):
-        # LLM 已通过 HumanMessage 收到用户修改
-        # 清除标记，让 LLM 重新生成 tool call
+        # LLM already received user modification via HumanMessage
+        # Clear marker, let LLM regenerate tool call
         return {
             "user_modified_args": None,
             "pending_tool_calls": [],
             "hitl_confirmation_required": False
         }
 
-    # ... 其他处理逻辑
+    # ... other processing logic
 ```
 
-**参数差异生成**：
+**Parameter Difference Generation**:
 
 ```python
 def _generate_modification_summary(tool_name: str, original: dict, modified: dict) -> str:
-    """生成参数修改摘要"""
+    """Generate parameter modification summary"""
 
     if tool_name == "execute_multiple_device_config_commands":
-        # 特殊处理配置工具，逐命令对比
+        # Special handling for configuration tools, compare command by command
         orig_devices = original.get("device_configs", [])
         mod_devices = modified.get("device_configs", [])
 
@@ -1321,82 +1321,82 @@ def _generate_modification_summary(tool_name: str, original: dict, modified: dic
                         summary.append(f"  - {oc}")
                         summary.append(f"  + {mc}")
 
-        return "\n".join(summary) if summary else "无修改"
+        return "\n".join(summary) if summary else "No modifications"
 
-    # 其他工具的通用处理
+    # Other tools' generic handling
     # ...
 ```
 
-### 安全考虑
+### Security Considerations
 
-#### 参数验证
+#### Parameter Validation
 
-- 验证修改后的参数结构是否完整
-- 检查必填字段是否存在
-- 验证参数值是否在合法范围内
+- Validate modified parameter structure is complete
+- Check required fields exist
+- Validate parameter values are within legal range
 
-#### 危险命令二次确认
+#### Dangerous Command Secondary Confirmation
 
-即使修改后，某些命令仍需二次确认：
+Even after modification, certain commands still require secondary confirmation:
 - `erase startup-config`
 - `reload`
 - `format flash:`
 
-### 测试用例
+### Test Cases
 
-**场景**：用户修改配置命令
+**Scenario**: User modifies configuration command
 
-1. LLM 生成配置命令：`ip address 10.0.0.1 255.255.255.0`
-2. 用户修改为：`ip address 192.168.1.1 255.255.255.0`
-3. 系统反馈修改摘要
-4. LLM 理解并确认使用新 IP
-5. 执行工具，使用修改后的参数
-6. 验证配置结果
-
----
-
-## 风险评估
-
-| 风险 | 概率 | 影响 | 缓解措施 |
-|------|------|------|----------|
-| 破坏现有功能 | 低 | 高 | 完整的回归测试 |
-| 状态不一致 | 中 | 中 | checkpoint 验证 |
-| 性能影响 | 低 | 低 | 异步处理 |
-| 前端集成问题 | 中 | 中 | 详细的前端文档 |
+1. LLM generates configuration command: `ip address 10.0.0.1 255.255.255.0`
+2. User modifies to: `ip address 192.168.1.1 255.255.255.0`
+3. System shows modification summary
+4. LLM understands and confirms using new IP
+5. Execute tool with modified parameters
+6. Verify configuration result
 
 ---
 
-## 回滚计划
+## Risk Assessment
 
-如需回滚：
-
-1. 移除 HITL 相关节点
-2. 恢复原始 `should_continue` 和 `tool_node`
-3. 删除新增的 API 端点
-4. checkpoint 中的新字段会被自动忽略
-
-**回滚时间**：约 30 分钟
+| Risk | Probability | Impact | Mitigation Measures |
+|------|-------------|--------|---------------------|
+| Breaking existing functionality | Low | High | Complete regression testing |
+| State inconsistency | Medium | Medium | Checkpoint validation |
+| Performance impact | Low | Low | Asynchronous processing |
+| Frontend integration issues | Medium | Medium | Detailed frontend documentation |
 
 ---
 
-## 后续增强
+## Rollback Plan
 
-1. **批量操作优化**：支持选择性确认部分工具
-2. **操作历史**：记录所有 HITL 操作
-3. **自动审批**：对低风险操作设置自动审批规则
-4. **多用户协作**：支持多人审批流程
-5. **模板管理**：保存常用配置为模板
+If rollback is needed:
+
+1. Remove HITL-related nodes
+2. Restore original `should_continue` and `tool_node`
+3. Delete new API endpoints
+4. New fields in checkpoint are automatically ignored
+
+**Rollback Time**: Approximately 30 minutes
 
 ---
 
-## 参考文档
+## Future Enhancements
+
+1. **Batch operation optimization**: Support selective confirmation of some tools
+2. **Operation history**: Record all HITL operations
+3. **Automatic approval**: Set automatic approval rules for low-risk operations
+4. **Multi-user collaboration**: Support multi-person approval process
+5. **Template management**: Save commonly used configurations as templates
+
+---
+
+## Reference Documentation
 
 - [LangGraph Interrupts](https://langchain-ai.github.io/langgraph/concepts/low_level/#interruption)
-- [GNS3 Copilot 架构](./ai-chat-api-design.md)
-- [工具响应格式标准](./tool-response-format-standard.md)
+- [GNS3 Copilot Architecture](./ai-chat-api-design.md)
+- [Tool Response Format Standard](./tool-response-format-standard.md)
 
 ---
 
-**文档版本**：v1.0
-**创建日期**：2026-03-04
-**作者**：GNS3 Development Team
+**Document Version**: v1.0
+**Created Date**: 2026-03-04
+**Author**: GNS3 Development Team

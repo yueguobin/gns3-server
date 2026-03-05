@@ -1,20 +1,20 @@
-# GNS3 Copilot Agent Chat API 设计文档
+# GNS3 Copilot Agent Chat API Design Document
 
-## 概述
+## Overview
 
-本文档描述 GNS3 Copilot Chat API 的架构设计和实现方案。该 API 使客户端能够通过 RESTful 接口与 GNS3 Copilot Agent 进行交互，提供流式对话、会话管理、项目拓扑查询等功能。
+This document describes the architectural design and implementation plan for the GNS3 Copilot Chat API. This API enables clients to interact with the GNS3 Copilot Agent through a RESTful interface, providing streaming conversations, session management, and project topology queries.
 
-## 核心特性
+## Core Features
 
-- **项目级隔离**：每个 GNS3 项目拥有独立的 Agent 实例和会话存储
-- **流式响应**：使用 Server-Sent Events (SSE) 实现实时流式输出
-- **会话管理**：支持会话列表、重命名、删除、历史记录查询
-- **统计追踪**：自动记录消息数量、LLM 调用次数、Token 使用量
-- **用户隔离**：每个用户拥有独立的 LLM 配置和会话空间
+- **Project-level Isolation**: Each GNS3 project has its own Agent instance and session storage
+- **Streaming Responses**: Uses Server-Sent Events (SSE) for real-time streaming output
+- **Session Management**: Supports session listing, renaming, deletion, and history queries
+- **Statistics Tracking**: Automatically records message counts, LLM call counts, and token usage
+- **User Isolation**: Each user has independent LLM configurations and session spaces
 
-## 架构设计
+## Architecture Design
 
-### 整体架构
+### Overall Architecture
 
 ```
 Frontend (Web UI)
@@ -37,14 +37,14 @@ AgentService (per project)
         └─ tool_node (GNS3 tools)
 ```
 
-### 项目级 Checkpoint 设计
+### Project-level Checkpoint Design
 
-每个 GNS3 项目在项目目录下创建 `gns3-copilot/copilot_checkpoints.db` SQLite 数据库，包含两张表：
+Each GNS3 project creates a `gns3-copilot/copilot_checkpoints.db` SQLite database in the project directory, containing two tables:
 
-1. **checkpoints 表**（LangGraph 自动管理）：存储 Agent 的对话状态和记忆
-2. **chat_sessions 表**（自定义）：存储会话元数据和统计信息
+1. **checkpoints table** (managed by LangGraph): stores Agent conversation state and memory
+2. **chat_sessions table** (custom): stores session metadata and statistics
 
-**目录结构**：
+**Directory Structure**:
 ```
 {project.path}/
 ├── gns3-copilot/
@@ -53,36 +53,36 @@ AgentService (per project)
 └── project.gns3
 ```
 
-**设计优势**：
-- 项目删除时自动清理所有相关数据
-- 实现项目级别的会话隔离
-- 便于备份和迁移
+**Design Advantages**:
+- All related data is automatically cleaned up when the project is deleted
+- Achieves project-level session isolation
+- Facilitates backup and migration
 
-## 用户认证信息传递
+## User Authentication Information Passing
 
-### 背景需求
+### Background Requirements
 
-GNS3 Copilot Agent 需要以下信息才能正常工作：
-1. **user_id**：获取用户专属的 LLM 配置
-2. **jwt_token**：调用 GNS3 API 时进行身份验证
-3. **llm_config**：包含 provider、model、api_key 等配置
+GNS3 Copilot Agent requires the following information to work properly:
+1. **user_id**: Get user-specific LLM configuration
+2. **jwt_token**: Authenticate when calling GNS3 API
+3. **llm_config**: Contains provider, model, api_key, etc.
 
-### ContextVars 方案
+### ContextVars Solution
 
-使用 Python 的 `contextvars.ContextVar` 在请求作用域内传递数据，避免敏感信息持久化到 checkpoint。
+Uses Python's `contextvars.ContextVar` to pass data within request scope, avoiding persisting sensitive information to checkpoint.
 
-**数据流**：
+**Data Flow**:
 ```
-1. API 层获取用户信息
-   ├─ 从 FastAPI get_current_active_user 获取 user_id
-   ├─ 从 Authorization header 提取 jwt_token
-   └─ 从数据库查询 LLM 配置（已解密 API key）
+1. API layer gets user information
+   ├─ Get user_id from FastAPI get_current_active_user
+   ├─ Extract jwt_token from Authorization header
+   └─ Query LLM configuration from database (API key already decrypted)
 
-2. 设置 ContextVars（内存临时存储）
+2. Set ContextVars (temporary in-memory storage)
    ├─ set_current_jwt_token(jwt_token)
    └─ set_current_llm_config(llm_config)
 
-3. 构建安全的 LangGraph config（仅包含非敏感标识符）
+3. Build secure LangGraph config (only contains non-sensitive identifiers)
    {
      "configurable": {
        "thread_id": session_id,
@@ -93,55 +93,55 @@ GNS3 Copilot Agent 需要以下信息才能正常工作：
      }
    }
 
-4. LLM 节点从 ContextVars 获取配置
+4. LLM node gets configuration from ContextVars
    ├─ get_current_jwt_token()
    └─ get_current_llm_config()
 ```
 
-**方案优势**：
-- 敏感数据（JWT token、API key）仅存储在内存中
-- 请求结束后自动清理，不会持久化到数据库
-- 避免序列化/反序列化开销
-- 实现请求级别的数据隔离
+**Solution Advantages**:
+- Sensitive data (JWT token, API key) only stored in memory
+- Automatically cleared after request ends, not persisted to database
+- Avoids serialization/deserialization overhead
+- Achieves request-level data isolation
 
-## 会话管理
+## Session Management
 
-### chat_sessions 表结构
+### chat_sessions Table Structure
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | INTEGER | 主键（自增） |
-| thread_id | TEXT | LangGraph thread_id（唯一） |
-| user_id | TEXT | 用户 ID |
-| project_id | TEXT | GNS3 项目 ID |
-| title | TEXT | 会话标题 |
-| message_count | INTEGER | 消息数量 |
-| llm_calls_count | INTEGER | LLM 调用次数 |
-| input_tokens | INTEGER | 输入 token 总数 |
-| output_tokens | INTEGER | 输出 token 总数 |
-| total_tokens | INTEGER | 总 token 数 |
-| last_message_at | TIMESTAMP | 最后消息时间 |
-| created_at | TIMESTAMP | 创建时间 |
-| updated_at | TIMESTAMP | 更新时间 |
-| metadata | TEXT | 预留元数据（JSON） |
-| stats | TEXT | 额外统计信息（JSON） |
-| pinned | BOOLEAN | 是否置顶（默认 FALSE） |
+| Field | Type | Description |
+|-------|------|-------------|
+| id | INTEGER | Primary key (auto-increment) |
+| thread_id | TEXT | LangGraph thread_id (unique) |
+| user_id | TEXT | User ID |
+| project_id | TEXT | GNS3 project ID |
+| title | TEXT | Session title |
+| message_count | INTEGER | Number of messages |
+| llm_calls_count | INTEGER | Number of LLM calls |
+| input_tokens | INTEGER | Total input tokens |
+| output_tokens | INTEGER | Total output tokens |
+| total_tokens | INTEGER | Total tokens |
+| last_message_at | TIMESTAMP | Last message time |
+| created_at | TIMESTAMP | Creation time |
+| updated_at | TIMESTAMP | Update time |
+| metadata | TEXT | Reserved metadata (JSON) |
+| stats | TEXT | Additional statistics (JSON) |
+| pinned | BOOLEAN | Whether pinned (default FALSE) |
 
-**索引**：
-- `idx_thread_id`：thread_id 唯一索引
-- `idx_user_project`：user_id + project_id 复合索引
-- `idx_pinned_updated`：pinned + updated_at 复合索引（用于置顶排序）
+**Indexes**:
+- `idx_thread_id`: thread_id unique index
+- `idx_user_project`: user_id + project_id composite index
+- `idx_pinned_updated`: pinned + updated_at composite index (for pin sorting)
 
-### 数据库迁移
+### Database Migration
 
-**实现位置**：`agent_service.py` 的 `_create_chat_sessions_table` 方法
+**Implementation Location**: `_create_chat_sessions_table` method in `agent_service.py`
 
-**迁移策略**：
-- 使用 `PRAGMA table_info(chat_sessions)` 检查列是否存在
-- 如果 `pinned` 列不存在，执行 `ALTER TABLE ADD COLUMN` 添加该列
-- 确保列存在后再创建索引
+**Migration Strategy**:
+- Use `PRAGMA table_info(chat_sessions)` to check if columns exist
+- If `pinned` column doesn't exist, execute `ALTER TABLE ADD COLUMN` to add it
+- Ensure column exists before creating index
 
-**代码示例**：
+**Code Example**:
 ```python
 # Check if pinned column exists, add it if not (migration for existing databases)
 cursor = await conn.execute("PRAGMA table_info(chat_sessions)")
@@ -157,107 +157,107 @@ if "pinned" not in column_names:
 await conn.execute("CREATE INDEX IF NOT EXISTS idx_pinned_updated ON chat_sessions(pinned DESC, updated_at DESC)")
 ```
 
-**优势**：
-- 向后兼容：现有数据库自动升级，无需手动干预
-- 幂等性：重复执行不会报错
-- 零停机：迁移在初始化时自动完成
+**Advantages**:
+- Backward compatible: existing databases automatically upgraded without manual intervention
+- Idempotent: repeated execution won't cause errors
+- Zero downtime: migration happens automatically during initialization
 
 ### ChatSessionsRepository
 
-提供会话的 CRUD 操作：
+Provides CRUD operations for sessions:
 
-- **create_session**：创建新会话
-- **get_session_by_thread**：根据 thread_id 查询会话
-- **list_sessions**：列出用户的会话（支持过滤和分页，按 pinned 和 updated_at 排序）
-- **update_session**：更新会话（支持增量更新计数器）
-- **delete_session**：删除会话及其 checkpoints
-- **delete_all_sessions**：删除项目的所有会话
-- **pin_session**：置顶或取消置顶会话
+- **create_session**: Create new session
+- **get_session_by_thread**: Query session by thread_id
+- **list_sessions**: List user's sessions (supports filtering and pagination, sorted by pinned and updated_at)
+- **update_session**: Update session (supports incremental counter updates)
+- **delete_session**: Delete session and its checkpoints
+- **delete_all_sessions**: Delete all sessions in project
+- **pin_session**: Pin or unpin session
 
-### 统计信息自动收集
+### Automatic Statistics Collection
 
-统计信息在对话过程中实时收集，流结束后一次性更新到 `chat_sessions` 表。
+Statistics are collected in real-time during conversation, and updated to `chat_sessions` table in one batch after streaming ends.
 
-**实现位置**：`agent_service.py` 的 `stream_chat` 方法
+**Implementation Location**: `stream_chat` method in `agent_service.py`
 
-**统计逻辑**：
+**Statistics Logic**:
 
-1. **message_count（消息数量）**
-   - 初始值：1（用户消息）
-   - `on_chat_model_end` 事件：+1（AI 完整回复，不是每个 chunk）
-   - `on_tool_end` 事件：+1（每个工具执行结果）
+1. **message_count (number of messages)**
+   - Initial value: 1 (user message)
+   - `on_chat_model_end` event: +1 (AI complete reply, not each chunk)
+   - `on_tool_end` event: +1 (each tool execution result)
 
-2. **llm_calls_count（LLM 调用次数）**
-   - 监听 `on_chat_model_start` 事件
-   - 每次 LLM 开始生成时 +1
+2. **llm_calls_count (number of LLM calls)**
+   - Listen to `on_chat_model_start` event
+   - +1 each time LLM starts generation
 
-3. **input_tokens（输入 token）**
-   - 从 `on_chat_model_end` 事件的 `usage_metadata` 中提取
-   - **重要**：LangGraph 返回的 input_tokens 已包含对话历史，每次 LLM 调用都会累加之前的对话内容
-   - 示例：第1次 input=8674，第2次 input=9421（包含第1次对话 8674+675+系统提示词增量）
+3. **input_tokens (input tokens)**
+   - Extracted from `usage_metadata` in `on_chat_model_end` event
+   - **Important**: input_tokens returned by LangGraph already includes conversation history, accumulates previous conversation content on each LLM call
+   - Example: 1st call input=8674, 2nd call input=9421 (includes 1st conversation 8674+675+system prompt increment)
 
-4. **output_tokens（输出 token）**
-   - 从 `on_chat_model_end` 事件的 `usage_metadata` 中提取
-   - **重要**：LangGraph 返回的 output_tokens 也是累加值，包含所有 LLM 调用的输出
-   - 示例：第1次实际输出=675，第2次实际输出=9，累加后 output=684（675+9）
+4. **output_tokens (output tokens)**
+   - Extracted from `usage_metadata` in `on_chat_model_end` event
+   - **Important**: output_tokens returned by LangGraph is also accumulated value, includes output from all LLM calls
+   - Example: 1st actual output=675, 2nd actual output=9, accumulated output=684 (675+9)
 
-5. **total_tokens（总 token）**
-   - 计算公式：input_tokens + output_tokens
-   - 取最后一次 LLM 调用的累加值进行计算
+5. **total_tokens (total tokens)**
+   - Calculation formula: input_tokens + output_tokens
+   - Take the accumulated value from the last LLM call for calculation
 
-**统计示例**（真实数据）：
-- 第1次 LLM 调用（AI 回复）：input=8674, output=675
-- 第2次 LLM 调用（生成标题）：input=9421, output=684（累加值：675+9）
-- 最终存储：input_tokens=9421, output_tokens=684, total_tokens=10105
-- 说明：LangGraph 已自动累加，代码直接取最后一次值即可
+**Statistics Example** (real data):
+- 1st LLM call (AI reply): input=8674, output=675
+- 2nd LLM call (generate title): input=9421, output=684 (accumulated value: 675+9)
+- Final storage: input_tokens=9421, output_tokens=684, total_tokens=10105
+- Note: LangGraph automatically accumulates, code can directly take the last value
 
-**注意事项**：
-- message_count 统计的是**完整消息**，不是流式 chunks
-- Token 数据依赖 LLM 返回的 `usage_metadata`，某些模型可能不支持
-- 统计数据在流结束后通过 `update_session` 方法增量更新到数据库
-- LangGraph 已自动处理 input 和 output 的历史累加，代码使用最后一次 LLM 调用的值
-- **消息 ID 处理**：创建初始消息时分配 ID（`HumanMessage(id=str(uuid4()))`），从 checkpoint 读取的消息如果没有 ID 也会自动生成
-- **格式转换**：使用 `message_converters.py` 模块处理 LangChain 和 OpenAI 格式之间的转换，确保 tool_calls 格式符合 OpenAI 规范
+**Notes**:
+- message_count counts **complete messages**, not streaming chunks
+- Token data depends on LLM's returned `usage_metadata`, some models may not support
+- Statistics are incrementally updated to database via `update_session` method after stream ends
+- LangGraph automatically handles input and output history accumulation, code uses the last LLM call value
+- **Message ID handling**: Assign ID when creating initial message (`HumanMessage(id=str(uuid4()))`), messages read from checkpoint without ID are also automatically generated
+- **Format conversion**: Use `message_converters.py` module to handle conversion between LangChain and OpenAI formats, ensuring tool_calls format conforms to OpenAI specification
 
-### Title 自动同步
+### Automatic Title Synchronization
 
-会话标题由 `title_generator_node` 节点自动生成，保存在 LangGraph checkpoint 的 `conversation_title` 字段中。
+Session title is automatically generated by `title_generator_node` node, saved in `conversation_title` field in LangGraph checkpoint.
 
-**同步机制**：
-1. 流式 Chat 完成后，从 checkpoint 读取最终 state
-2. 检查 `conversation_title` 是否有变化
-3. 如果有变化，更新到 `chat_sessions` 表
+**Synchronization Mechanism**:
+1. After streaming Chat completes, read final state from checkpoint
+2. Check if `conversation_title` has changed
+3. If changed, update to `chat_sessions` table
 
-**优势**：
-- 避免在节点中直接访问数据库（防止循环依赖）
-- 所有数据库更新集中在流结束后
-- 逻辑清晰，易于维护
+**Advantages**:
+- Avoids accessing database directly in nodes (prevents circular dependencies)
+- All database updates concentrated after stream ends
+- Clear logic, easy to maintain
 
-## SSE 消息格式
+## SSE Message Format
 
-Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
+Chat API uses Server-Sent Events (SSE) for streaming transmission.
 
-### 消息类型
+### Message Types
 
-| type | 说明 | 包含字段 |
-|------|------|----------|
-| content | AI 文本内容（流式） | content, message_id (可选) |
-| tool_call | LLM 决定调用工具（流式，参数逐次累积） | tool_call (对象, 包含 id, type, function), session_id, message_id (可选) |
-| tool_start | 工具开始执行 | tool_name, tool_call_id, session_id |
-| tool_end | 工具执行完成 | tool_name, tool_output, session_id |
-| error | 错误信息 | error, session_id |
-| done | 流结束 | session_id |
-| heartbeat | 心跳保活 | session_id |
+| type | Description | Included Fields |
+|------|-------------|------------------|
+| content | AI text content (streaming) | content, message_id (optional) |
+| tool_call | LLM decides to call tool (streaming, parameters accumulated gradually) | tool_call (object, includes id, type, function), session_id, message_id (optional) |
+| tool_start | Tool starts execution | tool_name, tool_call_id, session_id |
+| tool_end | Tool execution complete | tool_name, tool_output, session_id |
+| error | Error message | error, session_id |
+| done | Stream end | session_id |
+| heartbeat | Heartbeat keepalive | session_id |
 
-### 消息示例
+### Message Examples
 
 ```json
-// AI 文本流式输出
+// AI text streaming output
 {"type": "content", "content": "Hello! How can I help"}
 
-// LLM 决定调用工具（流式传输，参数逐次累积）
+// LLM decides to call tool (streaming transmission, parameters accumulated gradually)
 
-// 第 1 个 chunk：工具调用开始（参数为空）
+// 1st chunk: tool call starts (parameters empty)
 {
   "type": "tool_call",
   "tool_call": {
@@ -268,7 +268,7 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
   "session_id": "xxx"
 }
 
-// 第 2 个 chunk：参数累积中
+// 2nd chunk: parameters accumulating
 {
   "type": "tool_call",
   "tool_call": {
@@ -279,7 +279,7 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
   "session_id": "xxx"
 }
 
-// 第 3 个 chunk：参数累积中
+// 3rd chunk: parameters accumulating
 {
   "type": "tool_call",
   "tool_call": {
@@ -290,7 +290,7 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
   "session_id": "xxx"
 }
 
-// 第 4 个 chunk：参数完整（标记 complete=true）
+// 4th chunk: parameters complete (mark complete=true)
 {
   "type": "tool_call",
   "tool_call": {
@@ -305,7 +305,7 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
   "session_id": "xxx"
 }
 
-// 工具开始执行（通过 tool_call_id 关联）
+// Tool starts execution (associated via tool_call_id)
 {
   "type": "tool_start",
   "tool_name": "execute_multiple_device_commands",
@@ -313,7 +313,7 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
   "session_id": "xxx"
 }
 
-// 工具执行完成
+// Tool execution complete
 {
   "type": "tool_end",
   "tool_name": "execute_multiple_device_commands",
@@ -321,41 +321,41 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
   "session_id": "xxx"
 }
 
-// 流结束
+// Stream end
 {"type": "done", "session_id": "xxx"}
 
-// 错误
+// Error
 {"type": "error", "error": "Project not found", "session_id": "xxx"}
 ```
 
-### 流式工具调用机制
+### Streaming Tool Call Mechanism
 
-**背景**：LLM 生成工具调用参数时是逐字符流式输出的，就像文本内容一样。
+**Background**: When LLM generates tool call parameters, it outputs character by character like text content.
 
-**实现**：使用 `ToolCallStreamAccumulator` 类维护状态，处理三个阶段：
+**Implementation**: Use `ToolCallStreamAccumulator` class to maintain state, handling three phases:
 
-1. **初始化阶段**：从 `tool_calls` 获取工具 ID 和名称，发送初始 `tool_call` 事件（参数为空）
+1. **Initialization Phase**: Get tool ID and name from `tool_calls`, send initial `tool_call` event (parameters empty)
 
-2. **累积阶段**：从 `tool_call_chunks` 逐个获取参数片段，通过字符串拼接累积完整参数，每次累积后发送更新的 `tool_call` 事件
+2. **Accumulation Phase**: Get parameter fragments from `tool_call_chunks`, accumulate complete parameters via string concatenation, send updated `tool_call` event after each accumulation
 
-3. **完成阶段**：检测 `finish_reason == "tool_calls"` 或 `"stop"`，发送最终 `tool_call` 事件（标记 `complete: true`）
+3. **Completion Phase**: Detect `finish_reason == "tool_calls"` or `"stop"`, send final `tool_call` event (mark `complete: true`)
 
-**前端处理**：
-- 收到 `tool_call` 事件时，根据 `tool_call.id` 判断是否为新工具调用
-- 同一个 ID 的后续事件用于更新参数显示
-- 当 `function.complete: true` 时，参数已完整，可以执行工具
-- `tool_start` 事件包含 `tool_call_id`，可以关联到之前的 `tool_call` 事件
+**Frontend Handling**:
+- When receiving `tool_call` event, determine if it's a new tool call based on `tool_call.id`
+- Subsequent events with same ID are used to update parameter display
+- When `function.complete: true`, parameters are complete, tool can be executed
+- `tool_start` event contains `tool_call_id`, can associate with previous `tool_call` event
 
-**示例代码**（前端）：
+**Example Code** (frontend):
 ```javascript
-// 维护当前工具调用状态
+// Maintain current tool call state
 let currentToolCall = null;
 
 function handleToolCallEvent(chunk) {
   const toolCall = chunk.tool_call;
 
   if (!currentToolCall || currentToolCall.id !== toolCall.id) {
-    // 新工具调用
+    // New tool call
     currentToolCall = {
       id: toolCall.id,
       name: toolCall.function.name,
@@ -364,257 +364,257 @@ function handleToolCallEvent(chunk) {
     };
     displayToolCallStarted(currentToolCall);
   } else {
-    // 更新现有工具调用的参数
+    // Update existing tool call parameters
     currentToolCall.arguments = toolCall.function.arguments;
     currentToolCall.complete = toolCall.function.complete || false;
     updateToolCallArguments(currentToolCall);
   }
 
   if (currentToolCall.complete) {
-    // 参数完整，准备执行工具
+    // Parameters complete, ready to execute tool
     displayToolCallReady(currentToolCall);
   }
 }
 ```
 
-### 心跳机制
+### Heartbeat Mechanism
 
-**作用**：防止代理服务器/负载均衡器因超时断开 SSE 连接。
+**Purpose**: Prevent proxy server/load balancer from disconnecting SSE connection due to timeout.
 
-**实现**：使用 `asyncio.wait` 设置超时，超时后发送 `heartbeat` 消息，然后继续等待下一个事件。
+**Implementation**: Use `asyncio.wait` to set timeout, send `heartbeat` message after timeout, then continue waiting for next event.
 
-**前端处理**：收到 `heartbeat` 消息时直接忽略，不渲染任何内容。
+**Frontend Handling**: When receiving `heartbeat` message, ignore it directly, don't render anything.
 
-## API 端点
+## API Endpoints
 
-所有端点都在 `/v3/projects/{project_id}/chat/` 路径下。
+All endpoints are under `/v3/projects/{project_id}/chat/` path.
 
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| POST | `/stream` | 流式 Chat（主要接口） |
-| GET | `/sessions` | 列出会话（按置顶和更新时间排序） |
-| GET | `/sessions/{session_id}/history` | 获取会话历史 |
-| PATCH | `/sessions/{session_id}` | 重命名会话 |
-| DELETE | `/sessions/{session_id}` | 删除会话 |
-| PUT | `/sessions/{session_id}/pin` | 置顶会话 |
-| DELETE | `/sessions/{session_id}/pin` | 取消置顶会话 |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/stream` | Streaming Chat (main interface) |
+| GET | `/sessions` | List sessions (sorted by pin and update time) |
+| GET | `/sessions/{session_id}/history` | Get session history |
+| PATCH | `/sessions/{session_id}` | Rename session |
+| DELETE | `/sessions/{session_id}` | Delete session |
+| PUT | `/sessions/{session_id}/pin` | Pin session |
+| DELETE | `/sessions/{session_id}/pin` | Unpin session |
 
 ### POST /v3/projects/{project_id}/chat/stream
 
-**功能**：流式对话接口
+**Function**: Streaming conversation interface
 
-**请求参数**：
-- message: 用户消息内容
-- session_id: 会话 ID（可选，不提供则自动创建新会话）
-- stream: 是否启用流式响应（默认 true）
-- temperature: LLM temperature 参数（注意：当前未使用，保留以备将来实现。实际 temperature 从用户的数据库 LLM 配置中读取）
-- mode: 交互模式（当前仅支持 "text"）
+**Request Parameters**:
+- message: User message content
+- session_id: Session ID (optional, creates new session if not provided)
+- stream: Enable streaming response (default true)
+- temperature: LLM temperature parameter (Note: currently unused, reserved for future implementation. Actual temperature is read from user's database LLM configuration)
+- mode: Interaction mode (currently only supports "text")
 
-**响应**：SSE 流，包含多种类型的消息（见上文消息格式）
+**Response**: SSE stream, contains multiple types of messages (see message format above)
 
-**项目状态检查**：只允许项目状态为 "opened" 时进行对话
+**Project Status Check**: Only allows conversation when project status is "opened"
 
 ### GET /v3/projects/{project_id}/chat/sessions
 
-**功能**：列出项目的所有会话
+**Function**: List all sessions in a project
 
-**响应**：会话列表，包含统计信息（消息数、token 使用量等），按置顶状态和更新时间排序
+**Response**: Session list, includes statistics (message count, token usage, etc.), sorted by pin status and update time
 
 ### GET /v3/projects/{project_id}/chat/sessions/{session_id}/history
 
-**功能**：获取会话的完整历史记录
+**Function**: Get complete history of a session
 
-**参数**：
-- session_id: 会话 ID
-- limit: 最大消息数量（默认 100）
+**Parameters**:
+- session_id: Session ID
+- limit: Maximum number of messages (default 100)
 
-**响应**：
-- thread_id: 会话 ID
-- title: 会话标题
-- messages: 消息列表（OpenAI 格式）
-- llm_calls: LLM 调用次数
+**Response**:
+- thread_id: Session ID
+- title: Session title
+- messages: Message list (OpenAI format)
+- llm_calls: Number of LLM calls
 
 ### PATCH /v3/projects/{project_id}/chat/sessions/{session_id}
 
-**功能**：重命名会话
+**Function**: Rename session
 
-**请求参数**：
-- title: 新标题（1-255 字符）
+**Request Parameters**:
+- title: New title (1-255 characters)
 
-**响应**：更新后的会话信息
+**Response**: Updated session information
 
 ### DELETE /v3/projects/{project_id}/chat/sessions/{session_id}
 
-**功能**：删除会话及其所有 checkpoint 数据
+**Function**: Delete session and all its checkpoint data
 
-**响应**：204 No Content
+**Response**: 204 No Content
 
 ### PUT /v3/projects/{project_id}/chat/sessions/{session_id}/pin
 
-**功能**：置顶会话到列表顶部
+**Function**: Pin session to top of list
 
-**响应**：更新后的会话信息（包含 pinned=true）
+**Response**: Updated session information (includes pinned=true)
 
 ### DELETE /v3/projects/{project_id}/chat/sessions/{session_id}/pin
 
-**功能**：取消置顶会话
+**Function**: Unpin session
 
-**响应**：更新后的会话信息（包含 pinned=false）
+**Response**: Updated session information (includes pinned=false)
 
-**排序规则**：
-- 置顶会话（pinned=true）排在最前面
-- 置顶会话之间按 updated_at 降序排列
-- 普通会话按 updated_at 降序排列
+**Sorting Rules**:
+- Pinned sessions (pinned=true) appear at the front
+- Among pinned sessions, sort by updated_at descending
+- Normal sessions sort by updated_at descending
 
-## 数据模型
+## Data Models
 
 ### ChatRequest
 
-- message: str - 用户消息内容
-- session_id: Optional[str] - 会话 ID（可选）
-- stream: bool - 是否流式响应（默认 true）
-- temperature: Optional[float] - LLM temperature 参数（注意：当前未使用，保留以备将来实现运行时覆盖。当前 temperature 从用户的数据库 LLM 配置中读取）
-- mode: Literal["text"] - 交互模式
+- message: str - User message content
+- session_id: Optional[str] - Session ID (optional)
+- stream: bool - Enable streaming response (default true)
+- temperature: Optional[float] - LLM temperature parameter (Note: currently unused, reserved for future runtime override implementation. Current temperature is read from user's database LLM configuration)
+- mode: Literal["text"] - Interaction mode
 
 ### ChatSession
 
-会话模型，存储会话元数据和统计信息。
+Session model, stores session metadata and statistics.
 
-**基础字段**：
-- id: 数据库自增 ID
-- thread_id: LangGraph thread_id（会话唯一标识）
-- user_id: 用户 ID
-- project_id: GNS3 项目 ID
-- title: 会话标题（自动生成或用户修改）
+**Base Fields**:
+- id: Database auto-increment ID
+- thread_id: LangGraph thread_id (session unique identifier)
+- user_id: User ID
+- project_id: GNS3 project ID
+- title: Session title (auto-generated or user-modified)
 
-**统计字段**：
-- message_count: 完整消息数量（用户消息 + AI 回复 + 工具结果）
-- llm_calls_count: LLM 总调用次数
-- input_tokens: 输入 token 总数（累加所有 LLM 调用）
-- output_tokens: 输出 token 总数（累加所有 LLM 调用）
-- total_tokens: 总 token 数（input_tokens + output_tokens）
+**Statistics Fields**:
+- message_count: Complete message count (user messages + AI replies + tool results)
+- llm_calls_count: Total LLM call count
+- input_tokens: Total input tokens (accumulated across all LLM calls)
+- output_tokens: Total output tokens (accumulated across all LLM calls)
+- total_tokens: Total tokens (input_tokens + output_tokens)
 
-**时间字段**：
-- last_message_at: 最后一条消息的时间戳
-- created_at: 会话创建时间
-- updated_at: 会话最后更新时间
+**Time Fields**:
+- last_message_at: Timestamp of last message
+- created_at: Session creation time
+- updated_at: Session last update time
 
-**预留字段**：
-- metadata: 元数据 JSON 字符串（存储 mode、status、tags 等）
-- stats: 额外统计 JSON 字符串（存储工具调用次数等）
+**Reserved Fields**:
+- metadata: Metadata JSON string (stores mode, status, tags, etc.)
+- stats: Additional statistics JSON string (stores tool call counts, etc.)
 
-**会话管理**：
-- pinned: 是否置顶到列表顶部（默认 false）
+**Session Management**:
+- pinned: Whether pinned to top of list (default false)
 
 ### ConversationHistory
 
-- thread_id: str - 会话 ID
-- title: str - 会话标题
-- messages: List[OpenAIMessage] - 消息列表
-- created_at: Optional[str] - 创建时间
-- updated_at: Optional[str] - 更新时间
-- llm_calls: int - LLM 调用次数
+- thread_id: str - Session ID
+- title: str - Session title
+- messages: List[OpenAIMessage] - Message list
+- created_at: Optional[str] - Creation time
+- updated_at: Optional[str] - Update time
+- llm_calls: int - Number of LLM calls
 
 ### OpenAIMessage
 
-OpenAI 兼容的消息模型。
+OpenAI-compatible message model.
 
-**基础字段**：
-- id: str - 消息唯一标识符（自动生成或从 LangChain 消息继承）
-- role: Literal["user", "assistant", "system", "tool"] - 消息角色
-- content: str - 消息内容（支持文本、JSON 字符串）
-- created_at: str - 创建时间（ISO 8601）
+**Base Fields**:
+- id: str - Message unique identifier (auto-generated or inherited from LangChain message)
+- role: Literal["user", "assistant", "system", "tool"] - Message role
+- content: str - Message content (supports text, JSON string)
+- created_at: str - Creation time (ISO 8601)
 
-**工具相关字段**：
-- name: Optional[str] - 工具消息名称（tool 消息）
-- tool_call_id: Optional[str] - 关联的工具调用 ID（tool 消息）
-- tool_calls: Optional[List[OpenAIToolCall]] - 工具调用列表（assistant 消息）
-  - id: str - 工具调用 ID
-  - type: Literal["function"] - 固定为 "function"
-  - function: Dict - 包含 name 和 arguments（dict 或 JSON 字符串）
+**Tool-related Fields**:
+- name: Optional[str] - Tool message name (tool message)
+- tool_call_id: Optional[str] - Associated tool call ID (tool message)
+- tool_calls: Optional[List[OpenAIToolCall]] - Tool call list (assistant message)
+  - id: str - Tool call ID
+  - type: Literal["function"] - Fixed as "function"
+  - function: Dict - Contains name and arguments (dict or JSON string)
 
-**元数据**：
-- metadata: Optional[Dict] - 额外的消息元数据
+**Metadata**:
+- metadata: Optional[Dict] - Additional message metadata
 
-## 核心组件
+## Core Components
 
-### Message Converters（消息格式转换）
+### Message Converters (Message Format Conversion)
 
-**文件**：`gns3server/agent/gns3_copilot/utils/message_converters.py`
+**File**: `gns3server/agent/gns3_copilot/utils/message_converters.py`
 
-**职责**：在 LangChain 消息格式和 OpenAI 兼容格式之间进行转换
+**Responsibility**: Convert between LangChain message format and OpenAI-compatible format
 
-**主要函数**：
-- `convert_langchain_to_openai()`：LangChain → OpenAI 格式
-- `convert_openai_to_langchain()`：OpenAI → LangChain 格式
-- `convert_stream_event_to_openai()`：流事件 → OpenAI SSE 格式
+**Main Functions**:
+- `convert_langchain_to_openai()`: LangChain → OpenAI format
+- `convert_openai_to_langchain()`: OpenAI → LangChain format
+- `convert_stream_event_to_openai()`: Stream event → OpenAI SSE format
 
-**关键转换逻辑**：
+**Key Conversion Logic**:
 
-1. **消息 ID 处理**
-   - 如果消息没有 ID，自动生成 UUID
-   - 确保所有返回的消息都有唯一标识符
+1. **Message ID Handling**
+   - Auto-generate UUID if message has no ID
+   - Ensure all returned messages have unique identifier
 
-2. **Tool Calls 格式转换**
-   - LangChain 格式：`{'name': 'xxx', 'args': {...}, 'id': 'yyy', 'type': 'tool_call'}`
-   - OpenAI 格式：`{'id': 'yyy', 'type': 'function', 'function': {'name': 'xxx', 'arguments': '{...}'}}`
-   - 自动将 `args` 对象转换为 JSON 字符串（如需要）
+2. **Tool Calls Format Conversion**
+   - LangChain format: `{'name': 'xxx', 'args': {...}, 'id': 'yyy', 'type': 'tool_call'}`
+   - OpenAI format: `{'id': 'yyy', 'type': 'function', 'function': {'name': 'xxx', 'arguments': '{...}'}}`
+   - Automatically convert `args` object to JSON string (if needed)
 
-3. **Content 类型处理**
-   - 支持 string、dict、list 类型
-   - 非 string 类型自动转换为 JSON 字符串
+3. **Content Type Handling**
+   - Supports string, dict, list types
+   - Non-string types automatically converted to JSON string
 
-**实现位置**：`utils/message_converters.py`
+**Implementation Location**: `utils/message_converters.py`
 
 ### AgentService
 
-**职责**：项目级的 Agent 管理服务
+**Responsibility**: Project-level Agent management service
 
-**主要方法**：
-- `stream_chat`：流式对话，自动管理会话和统计
-- `get_history`：获取会话历史
-- `list_sessions`：列出会话
-- `delete_session`：删除会话
-- `rename_session`：重命名会话
-- `close`：关闭数据库连接
+**Main Methods**:
+- `stream_chat`: Streaming conversation, automatically manages sessions and statistics
+- `get_history`: Get session history
+- `list_sessions`: List sessions
+- `delete_session`: Delete session
+- `rename_session`: Rename session
+- `close`: Close database connection
 
-**核心流程**（stream_chat）：
-1. 初始化 checkpointer 连接（如果未连接）
-2. 获取或创建 chat session（从 `chat_sessions` 表）
-3. 设置 ContextVars（JWT token、LLM config）
-4. 构建 LangGraph config
-5. 创建带 ID 的初始消息：`HumanMessage(content=message, id=str(uuid4()))`
-6. 流式执行 Agent，同时收集统计信息
-7. 流结束后更新会话统计到数据库
-8. 同步 auto-generated title
+**Core Flow** (stream_chat):
+1. Initialize checkpointer connection (if not connected)
+2. Get or create chat session (from `chat_sessions` table)
+3. Set ContextVars (JWT token, LLM config)
+4. Build LangGraph config
+5. Create initial message with ID: `HumanMessage(content=message, id=str(uuid4()))`
+6. Stream Agent execution, collecting statistics simultaneously
+7. Update session statistics to database after stream ends
+8. Sync auto-generated title
 
-**统计收集机制**（在 `stream_chat` 中）：
+**Statistics Collection Mechanism** (in `stream_chat`):
 
-- 监听 LangGraph 的 `astream_events` 事件流
-- 在事件循环中实时收集统计数据
-- 统计逻辑不依赖转换后的 SSE chunk，直接从原始事件获取
+- Listen to LangGraph's `astream_events` event stream
+- Collect statistics in real-time during event loop
+- Statistics logic doesn't depend on converted SSE chunk, gets directly from original events
 
-**关键事件处理**：
-- `on_chat_model_start`：LLM 调用次数 +1
-- `on_chat_model_end`：提取 token 使用量（从 `output.usage_metadata`），AI 消息计数 +1
-- `on_tool_end`：工具消息计数 +1
+**Key Event Handling**:
+- `on_chat_model_start`: LLM call count +1
+- `on_chat_model_end`: Extract token usage (from `output.usage_metadata`), AI message count +1
+- `on_tool_end`: Tool message count +1
 
-**实现位置**：`agent_service.py`
+**Implementation Location**: `agent_service.py`
 
 ### ProjectAgentManager
 
-**职责**：全局单例，管理所有项目的 AgentService 实例
+**Responsibility**: Global singleton, manages AgentService instances for all projects
 
-**方法**：
-- `get_agent(project_id, project_path)`：获取或创建项目的 AgentService
-- `remove_agent(project_id)`：移除项目的 AgentService
-- `close_all`：关闭所有 AgentService
+**Methods**:
+- `get_agent(project_id, project_path)`: Get or create project's AgentService
+- `remove_agent(project_id)`: Remove project's AgentService
+- `close_all`: Close all AgentService
 
 ### Chat API Routes
 
-**文件**：`gns3server/api/routes/controller/chat.py`
+**File**: `gns3server/api/routes/controller/chat.py`
 
-**路由注册**：
+**Route Registration**:
 ```python
 router.include_router(
     chat.router,
@@ -623,110 +623,110 @@ router.include_router(
 )
 ```
 
-**主要端点实现**：
-- 所有端点都需要用户认证（`get_current_active_user`）
-- 所有端点都检查项目状态是否为 "opened"
-- stream 端点使用 `StreamingResponse` 返回 SSE 流
+**Main Endpoint Implementation**:
+- All endpoints require user authentication (`get_current_active_user`)
+- All endpoints check if project status is "opened"
+- stream endpoint uses `StreamingResponse` to return SSE stream
 
-## 项目生命周期集成
+## Project Lifecycle Integration
 
-### 项目打开时
+### When Project Opens
 
-创建或获取 AgentService 实例：
+Create or get AgentService instance:
 ```python
 agent_manager = await get_project_agent_manager()
 agent_service = await agent_manager.get_agent(project_id, project.path)
 ```
 
-### 项目关闭时
+### When Project Closes
 
-移除 AgentService 实例，释放资源：
+Remove AgentService instance, release resources:
 ```python
 agent_manager.remove_agent(project_id)
 ```
 
-### 项目删除时
+### When Project Deletes
 
-1. 调用 `delete_all_sessions(project_id)` 删除所有会话和 checkpoint 数据
-2. 移除 AgentService 实例
-3. 项目目录被删除，数据库文件也被删除
+1. Call `delete_all_sessions(project_id)` to delete all sessions and checkpoint data
+2. Remove AgentService instance
+3. Project directory is deleted, database file is also deleted
 
-## 前端集成
+## Frontend Integration
 
 ### useChat Hook
 
-根据 SSE 消息的 `type` 字段进行不同处理：
+Handle different types based on SSE message's `type` field:
 
-| type | 处理逻辑 |
-|------|----------|
-| content | 追加到当前 AI 消息内容 |
-| tool_call | 创建 tool_call 类型消息，显示工具调用信息 |
-| tool_start | 可选：显示工具开始执行状态 |
-| tool_end | 创建 tool_result 类型消息，显示工具执行结果 |
-| error | 显示错误信息 |
-| done | 标记流结束，停止加载状态 |
-| heartbeat | 忽略（保活信号） |
+| type | Handling Logic |
+|------|----------------|
+| content | Append to current AI message content |
+| tool_call | Create tool_call type message, display tool call information |
+| tool_start | Optional: show tool start execution status |
+| tool_end | Create tool_result type message, display tool execution result |
+| error | Display error message |
+| done | Mark stream end, stop loading state |
+| heartbeat | Ignore (keepalive signal) |
 
-### 错误处理
+### Error Handling
 
-- 网络错误：显示重试选项
-- LLM 错误：显示错误消息
-- 项目未打开：提示用户打开项目
-- LLM 未配置：引导用户配置 LLM
+- Network error: Show retry option
+- LLM error: Show error message
+- Project not opened: Prompt user to open project
+- LLM not configured: Guide user to configure LLM
 
-## 安全考虑
+## Security Considerations
 
-### 用户隔离
+### User Isolation
 
-- 每个用户只能访问自己的会话
-- user_id 存储在 config.metadata 中
-- 所有数据库查询都带 user_id 过滤
+- Each user can only access their own sessions
+- user_id stored in config.metadata
+- All database queries filtered by user_id
 
-### 项目访问控制
+### Project Access Control
 
-- 只允许访问用户有权限的项目
-- 项目状态检查：只允许 "opened" 状态的项目使用 Chat
+- Only allow access to projects user has permission for
+- Project status check: only allow "opened" status projects to use Chat
 
-### LLM 配置安全
+### LLM Configuration Security
 
-- API key 加密存储在数据库
-- 使用 ContextVars 传递，不持久化到 checkpoint
-- 请求结束后自动清理内存中的敏感信息
+- API key encrypted storage in database
+- Pass via ContextVars, not persisted to checkpoint
+- Automatically clear sensitive information in memory after request ends
 
-## 性能优化
+## Performance Optimization
 
-### 数据库连接管理
+### Database Connection Management
 
-- 使用 WAL 模式提升并发写入性能
-- 项目级连接复用
-- 项目切换时自动关闭旧连接
+- Use WAL mode to improve concurrent write performance
+- Project-level connection reuse
+- Automatically close old connections when switching projects
 
-### Checkpoint 优化
+### Checkpoint Optimization
 
-- LangGraph 自动管理 checkpoints 表
-- 定期清理旧 checkpoint（可选）
-- 使用索引加速查询（thread_id, user_id + project_id）
+- LangGraph automatically manages checkpoints table
+- Periodically clean old checkpoints (optional)
+- Use indexes to accelerate queries (thread_id, user_id + project_id)
 
-### 统计信息收集与更新
+### Statistics Collection and Update
 
-**收集机制**（在内存中进行）：
-- 在 SSE 流式传输过程中同步收集统计数据
-- 监听 LangGraph 事件流，不增加额外网络开销
-- 使用临时变量累加统计值，避免频繁数据库访问
+**Collection Mechanism** (in-memory):
+- Collect statistics synchronously during SSE streaming transmission
+- Listen to LangGraph event stream, no additional network overhead
+- Use temporary variables to accumulate statistics, avoid frequent database access
 
-**更新策略**（流结束后批量写入）：
-- 流式 Chat 完成后，一次性更新 `chat_sessions` 表
-- 使用 SQL 增量更新语法：`message_count = message_count + ?`
-- 单次数据库事务，提交所有统计更新
+**Update Strategy** (batch write after stream ends):
+- After streaming Chat completes, update `chat_sessions` table in one batch
+- Use SQL incremental update syntax: `message_count = message_count + ?`
+- Single database transaction, commit all statistic updates
 
-**优势**：
-- 减少数据库写入次数（N 次事件 → 1 次更新）
-- 降低数据库锁竞争
-- 提升流式响应的实时性
+**Advantages**:
+- Reduce database write count (N events → 1 update)
+- Lower database lock contention
+- Improve real-time performance of streaming response
 
-**实现位置**：`agent_service.py` 第 283-294 行
+**Implementation Location**: `agent_service.py` lines 283-294
 
-## 依赖项
+## Dependencies
 
 - `langchain` >= 0.3.0
 - `langgraph` >= 0.2.0
@@ -734,47 +734,47 @@ agent_manager.remove_agent(project_id)
 - `langgraph-checkpoint-sqlite` >= 3.0.1
 - `aiosqlite`
 
-## 扩展性
+## Extensibility
 
-### 预留字段
+### Reserved Fields
 
-- `metadata`（TEXT JSON）：存储会话级别的元数据
-- `stats`（TEXT JSON）：存储额外的统计信息
+- `metadata` (TEXT JSON): Store session-level metadata
+- `stats` (TEXT JSON): Store additional statistics
 
-### 未来可能的扩展
+### Future Possible Extensions
 
-#### 运行时 LLM 参数覆盖
+#### Runtime LLM Parameter Override
 
-当前 LLM 配置（包括 temperature、max_tokens 等）从用户的数据库配置中读取。将来可以支持在请求时覆盖这些参数：
+Current LLM configuration (including temperature, max_tokens, etc.) is read from user's database configuration. Future support for overriding these parameters at request time:
 
-**实现方案**：
+**Implementation Plan**:
 ```python
-# 在 chat.py 的 stream_chat 函数中
+# In chat.py's stream_chat function
 if request.temperature is not None:
     llm_config["temperature"] = str(request.temperature)
 if request.max_tokens is not None:
     llm_config["max_tokens"] = str(request.max_tokens)
 ```
 
-**当前状态**：
-- `temperature` 参数已添加到 ChatRequest schema，但未实现覆盖逻辑
-- 参数保留在 API 中以保持向后兼容性
-- 代码中已添加 TODO 注释标记实现位置
+**Current Status**:
+- `temperature` parameter already added to ChatRequest schema, but override logic not implemented
+- Parameter reserved in API for backward compatibility
+- TODO comments added in code to mark implementation location
 
-**注意事项**：
-- 需要验证参数范围（如 temperature: 0.0-2.0）
-- 需要考虑是否记录覆盖值到统计信息
-- 需要在前端 UI 中提供相应的设置选项
+**Notes**:
+- Need to validate parameter ranges (e.g., temperature: 0.0-2.0)
+- Need to consider whether to record override values to statistics
+- Need to provide corresponding settings in frontend UI
 
-#### 其他扩展方向
+#### Other Extension Directions
 
-- 多模态支持（图片、文件）
-- 语音输入/输出
-- 多人协作会话
-- 会话分享和导出
-- 自定义工具注册
+- Multi-modal support (images, files)
+- Voice input/output
+- Multi-user collaboration sessions
+- Session sharing and export
+- Custom tool registration
 
-## 参考资料
+## References
 
 - [LangGraph Checkpoint Documentation](https://langchain-ai.github.io/langgraph/how-tos/checkpointers/)
 - [Server-Sent Events (MDN)](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
