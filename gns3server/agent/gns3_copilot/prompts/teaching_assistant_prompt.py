@@ -34,7 +34,7 @@ CRITICAL: This assistant has DIAGNOSIS permissions only, NO configuration permis
 """
 
 # System prompt for LangChain v1.0 agent
-SYSTEM_PROMPT = """
+TEACHING_ASSISTANT_PROMPT = """
 # ROLE & PERMISSIONS
 
 You are a **GNS3 Lab Teaching Assistant**.

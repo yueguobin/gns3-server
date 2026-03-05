@@ -30,13 +30,13 @@ This package contains system prompts and prompt loading utilities for
 the GNS3-Copilot AI agent.
 
 Available prompts:
-- base_prompt: Teaching assistant mode (diagnostics only, no configuration)
-- lab_assistant_prompt: Lab automation assistant mode (diagnostics + configuration)
+- teaching_assistant_prompt: Teaching assistant mode (diagnostics only, no configuration)
+- lab_automation_assistant_prompt: Lab automation assistant mode (diagnostics + configuration)
 
 """
 
-from .base_prompt import SYSTEM_PROMPT
-from .lab_assistant_prompt import LAB_ASSISTANT_PROMPT
+from .teaching_assistant_prompt import TEACHING_ASSISTANT_PROMPT
+from .lab_automation_assistant_prompt import LAB_AUTOMATION_ASSISTANT_PROMPT
 from .prompt_loader import load_system_prompt
 from .title_prompt import TITLE_PROMPT
 
@@ -53,8 +53,8 @@ __description__ = "AI-powered network automation assistant for GNS3"
 __url__ = "https://github.com/yueguobin/gns3-copilot"
 
 __all__ = [
-    "SYSTEM_PROMPT",
-    "LAB_ASSISTANT_PROMPT",
+    "TEACHING_ASSISTANT_PROMPT",
+    "LAB_AUTOMATION_ASSISTANT_PROMPT",
     "TITLE_PROMPT",
     "load_system_prompt",
 ]

@@ -37,8 +37,8 @@ Available Modes (controlled by config.copilot_mode in llm_model_configs):
 
 import logging
 
-from .base_prompt import SYSTEM_PROMPT
-from .lab_assistant_prompt import LAB_ASSISTANT_PROMPT
+from .teaching_assistant_prompt import TEACHING_ASSISTANT_PROMPT
+from .lab_automation_assistant_prompt import LAB_AUTOMATION_ASSISTANT_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def load_system_prompt(llm_config: dict | None = None) -> str:
     """
     if not llm_config:
         logger.info("No LLM config provided, using default TEACHING_ASSISTANT prompt mode")
-        return SYSTEM_PROMPT
+        return TEACHING_ASSISTANT_PROMPT
 
     # llm_config is a flattened dict with copilot_mode at the top level
     # Example: {"provider": "...", "model": "...", "copilot_mode": "...", ...}
@@ -67,7 +67,7 @@ def load_system_prompt(llm_config: dict | None = None) -> str:
 
     if mode == "lab_automation_assistant":
         logger.info("Using LAB_AUTOMATION_ASSISTANT prompt mode (diagnostics + configuration)")
-        return LAB_ASSISTANT_PROMPT
+        return LAB_AUTOMATION_ASSISTANT_PROMPT
     else:
         logger.info("Using TEACHING_ASSISTANT prompt mode (diagnostics only)")
-        return SYSTEM_PROMPT
+        return TEACHING_ASSISTANT_PROMPT

@@ -33,8 +33,8 @@ operations in GNS3 network labs.
 This is the full-featured assistant mode with configuration permissions enabled.
 """
 
-# System prompt for GNS3 Lab Assistant
-LAB_ASSISTANT_PROMPT = """
+# System prompt for GNS3 Lab Automation Assistant
+LAB_AUTOMATION_ASSISTANT_PROMPT = """
 # ROLE & MISSION
 
 You are a **GNS3 Network Lab Assistant** - an intelligent automation assistant
