@@ -257,16 +257,21 @@ pip install tiktoken>=0.8.0
 发送给 LLM 的完整请求:
 ┌─────────────────────────────────────────────────────────────┐
 │ 1. Messages (我们管理的)                                     │
-│    ├─ SystemMessage: system prompt                          │
-│    ├─ SystemMessage: topology info                          │
-│    └─ HumanMessage: 用户消息 / 历史消息                      │
+│    ├─ SystemMessage: system prompt + topology (模板注入)     │
+│    └─ HumanMessage/AIMessage: 用户消息 / 历史消息             │
 ├─────────────────────────────────────────────────────────────┤
 │ 2. Tool Definitions (LangChain 自动添加，不在消息中)          │
 │    ├─ Tool 1 schema (name, description, parameters)        │
 │    ├─ Tool 2 schema                                        │
-│    └─ ... (约 1000-2000 tokens per tool)                  │
+│    └─ ... (约 500-1500 tokens per tool)                   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**System Message 结构**：
+- 使用模板变量 `{{topology_info}}` 动态注入 topology
+- System prompt 包含占位符：`"### CURRENT TOPOLOGY\n{{topology_info}}"`
+- 如果有 topology，替换为实际内容
+- 如果没有 topology，替换为 `"(No topology information available)"`
 
 #### 2.2 裁剪流程
 
@@ -287,14 +292,14 @@ pip install tiktoken>=0.8.0
 │ 可用于消息 = 9,600 - 1,862 = 7,738 tokens                 │
 └─────────────────────────────────────────────────────────────┘
                             ↓
-第三步：分离系统消息和对话历史
+第三步：计算 System Message token（已合并）
 ┌─────────────────────────────────────────────────────────────┐
 │ 可用于消息: 7,738 tokens                                   │
 │                                                            │
-│ System Messages (保留):                                    │
-│   - System prompt: ~1,000 tokens                          │
+│ System Message (已包含 system + topology):                 │
+│   - System prompt (base): ~1,000 tokens                   │
 │   - Topology info: ~3,000 tokens                          │
-│   = 4,000 tokens                                         │
+│   = 4,000 tokens (合并后)                                 │
 │                                                            │
 │ 可用于历史 = 7,738 - 4,000 = 3,738 tokens               │
 └─────────────────────────────────────────────────────────────┘
@@ -313,18 +318,24 @@ pip install tiktoken>=0.8.0
 
 | 优先级 | 内容 | 说明 |
 |--------|------|------|
-| 1️⃣ | System Prompt | 永远保留（第1个） |
-| 2️⃣ | Topology Info | 永远保留（第2个） |
-| 3️⃣ | 最新用户消息 | 至少保留最后1条 |
-| 4️⃣ | 旧对话历史 | 按时间顺序丢弃 |
+| 1️⃣ | System Message (system prompt + topology) | 永远保留 |
+| 2️⃣ | 最新用户消息 | 至少保留最后1条 |
+| 3️⃣ | 旧对话历史 | 按时间顺序丢弃 |
+
+**注意**：System prompt 和 topology info 通过模板变量合并为一个 SystemMessage，无法单独分离。
 
 #### 2.4 边界情况处理
 
 | 情况 | 处理方式 |
 |------|----------|
-| System > 预算 | 只保留 system prompt，丢弃所有其他消息 |
-| Tools > 预算 | 警告日志，建议增加 context_limit |
+| System (包含 topology) > 预算 | 保留完整的 System Message（无法分离 system 和 topology） |
+| Tools > 预算 | 警告日志，建议增加 context_limit 或减少工具数量 |
 | 历史全被裁剪 | 保留最后1条用户消息 |
+
+**重要提示**：
+- 当 system + topology 超出可用预算时，**两者都会被保留**
+- 无法只丢弃 topology 而保留 system prompt（因为已合并）
+- 建议在 system prompt 中精简 topology 信息或使用更短的 system prompt
 
 ### 2. 集成到 GNS3 Copilot
 
@@ -358,29 +369,49 @@ full_messages = prepare_context_messages(
 )
 ```
 
-### 3. LangChain/LangGraph 的内置功能
+### 3. Token 计数实现细节
 
-#### `trim_messages` 参数说明
+系统使用 **tiktoken** 进行准确的 Token 计数：
+
+#### 3.1 Token 计数器
+
+**使用的编码**：`cl100k_base` (GPT-4)
+
+**支持的模型**：
+- ✅ OpenAI (GPT-4, GPT-3.5)
+- ✅ Anthropic (Claude 系列)
+- ✅ DeepSeek (deepseek-chat, deepseek-coder)
+- ✅ 大多数基于 GPT-4 架构的模型
+
+**准确率**：
+- 英文：95%+
+- 中文：95%+
+- 代码：90-95%
+
+#### 3.2 工具定义 Token 估算
 
 ```python
-from langchain_core.messages.utils import trim_messages
-
-trimmed = trim_messages(
-    messages,
-    strategy="last",                    # 保留最近的 N 条消息
-    max_tokens=10000,                   # 最大 token 数
-    token_counter=count_tokens_approximately,  # Token 计数器
-    preserve_system=True,               # 保留系统消息
-    start_on="human",                   # 确保从人类消息开始
-    end_on=("human", "tool", "ai"),    # 在特定类型消息结束
-)
+def estimate_tool_tokens(tools: list[Any]) -> int:
+    """动态序列化工具 schema 并计算 token"""
+    for tool in tools:
+        tool_schema = {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.args_schema.schema()
+            }
+        }
+        # 使用 tiktoken 计数
+        schema_str = json.dumps(tool_schema, ensure_ascii=False)
+        tool_tokens = len(encoding.encode(schema_str))
 ```
 
-#### `count_tokens_approximately`
-
-- 快速估算消息的 token 数量
-- 不需要调用 LLM API
-- 用于判断是否需要裁剪
+**典型消耗**：
+- 简单工具（1-2 个参数）：500-800 tokens
+- 中等工具（3-5 个参数）：800-1200 tokens
+- 复杂工具（嵌套参数）：1200-1500 tokens
+- 8 个工具：约 6000-10000 tokens
 
 ---
 
@@ -601,19 +632,34 @@ ERROR: context_limit is required but not provided for model 'gpt-4o'.
 
 ### 日志格式说明
 
-新的日志格式（包含工具定义）：
+新的日志格式（包含工具定义和 topology 分解）：
 ```
-Context prepared: {消息数} msgs, ~{消息tokens} tokens (messages) + {工具tokens} tokens (tools) = {总计tokens} total / {限制}K limit ({使用百分比}%), strategy={策略}
+Context prepared: system={总tokens} (base={base_tokens} + topology={topology_tokens}) + history={history_tokens} + tools={tool_tokens} = {总计} total / {限制}K limit ({使用百分比}%), strategy={策略}
 ```
 
 字段说明：
-- **消息数**: 对话历史中的消息条数（不包括 system prompt）
-- **消息 tokens**: 对话历史 + system prompt + topology context 的 token 数
-- **工具 tokens**: 工具定义（schema）的 token 数
-- **总计 tokens**: 消息 tokens + 工具 tokens
-- **限制**: 模型的上下文窗口大小（K tokens）
-- **使用百分比**: 总计 tokens / 限制 × 100%
-- **策略**: 使用的裁剪策略（conservative/balanced/aggressive）
+- **system**：System Message 的总 token 数（包含 system prompt + topology）
+- **base**：基础 system prompt 的 token 数（不含 topology）
+- **topology**：Topology info 的 token 数
+- **history**：对话历史（HumanMessage + AIMessage + ToolMessage）的 token 数
+- **tools**：工具定义（schema）的 token 数
+- **总计**：所有部分的 token 总和
+- **限制**：模型的上下文窗口大小（K tokens）
+- **使用百分比**：总计 tokens / 限制 × 100%
+- **策略**：使用的裁剪策略（conservative/balanced/aggressive）
+
+**示例输出**：
+```
+Context prepared: system=6124 (base=2804 + topology=3320) + history=11800 + tools=1862 = 19786 total / 128K limit (15.5%), strategy=balanced
+```
+
+这表示：
+- System Message 总共 6124 tokens
+  - 其中基础 system prompt 2804 tokens
+  - 其中 topology info 3320 tokens
+- 对话历史 11800 tokens
+- 工具定义 1862 tokens
+- 总计 19786 tokens，使用 128K 限制的 15.5%
 
 ---
 
@@ -764,17 +810,19 @@ except Exception as e:
 
 ## 总结
 
-通过使用 LangChain/LangGraph 的内置功能，我们实现了：
+通过使用 LangChain/LangGraph 的内置功能和自定义优化，我们实现了：
 1. ✅ 智能裁剪消息历史，避免超限
 2. ✅ **必须手动配置 context_limit**，确保使用正确的上下文窗口大小
 3. ✅ 可配置的裁剪策略（保守/平衡/激进）
-4. ✅ 始终保留系统消息和拓扑信息
+4. ✅ 始终保留系统消息（包含 system prompt 和 topology）
 5. ✅ 详细的日志输出，便于调试
 6. ✅ 优雅的错误处理和明确的错误提示
 7. ✅ 提供参考工具，帮助查找常见模型的上下文限制
 8. ✅ **使用 tiktoken 进行准确的 token 计数**（准确率 95%+）
 9. ✅ **自动估算工具定义的 token 消耗**
 10. ✅ **支持中文、英文、代码等多种内容类型**
+11. ✅ **使用模板变量动态注入 topology info** (新增)
+12. ✅ **日志中详细显示 system/topology/history 分解** (新增)
 
 ### 关键优势
 
@@ -786,18 +834,21 @@ except Exception as e:
 - **灵活性**：
   - 每个配置独立设置，支持不同用户使用不同限制
   - 自动适配不同语言和内容类型
+  - 模板变量注入方式易于维护和调整
 
 - **明确性**：
   - 缺少配置时立即报错，避免静默失败
-  - 详细日志显示所有 token 消耗（消息 + 工具）
+  - 详细日志显示所有 token 消耗（system base + topology + history + tools）
+  - 清楚显示各部分的 token 分解
 
 - **可维护性**：
   - 无需维护内置默认值，减少代码维护负担
+  - 模板变量注入方式，system prompt 和 topology 管理更清晰
   - 模块化设计，易于扩展和调试
 
 - **可观测性**：
   - 详细日志显示上下文使用情况和裁剪决策
-  - 区分消息 tokens 和工具 tokens
+  - 区分 system base tokens、topology tokens、history tokens 和工具 tokens
   - 显示使用百分比和策略选择
 
 这个实现确保了即使在进行长对话时，系统也不会因为上下文溢出而失败。

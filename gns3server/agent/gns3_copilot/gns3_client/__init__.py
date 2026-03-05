@@ -1,8 +1,30 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# GNS3-Copilot - AI-powered Network Lab Assistant for GNS3
+#
+# This file is part of GNS3-Copilot project.
+#
+# GNS3-Copilot is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# GNS3-Copilot is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with GNS3-Copilot. If not, see <https://www.gnu.org/licenses/>.
+#
+# Project Home: https://github.com/yueguobin/gns3-copilot
+#
+
 """
 GNS3 Client Package
 
 This package provides a Python interface for interacting with GNS3 servers.
-It's adapted from the upstream gns3fy project with modifications for compatibility
+Adapted from the upstream gns3fy project with modifications for compatibility
 with langchain and reduced dependency conflicts.
 
 Main classes:
@@ -11,13 +33,18 @@ Main classes:
 - Node: GNS3 Node management
 - Link: GNS3 Link management
 - GNS3TopologyTool: GNS3 topology reading tool
-- GNS3UpdateDrawingTool: GNS3 drawing update tool
+- GNS3ProjectInfoTool: GNS3 project info tool
 
 Main functions:
-- get_gns3_connector: Factory function to create Gns3Connector from environment
-- get_gns3_connector_with_llm_config: Factory function to create connector AND retrieve LLM config
+- get_gns3_connector: Factory function to create Gns3Connector
+- get_gns3_connector_with_llm_config: Create connector AND retrieve LLM config
 - get_gns3_server_host: Get GNS3 server hostname from Controller or Config
 - get_llm_config: Get LLM model configuration for a user
+
+This module is part of the GNS3-Copilot project.
+GitHub: https://github.com/yueguobin/gns3-copilot
+
+Upstream gns3fy: https://github.com/davidban77/gns3fy
 """
 
 from .connector_factory import (

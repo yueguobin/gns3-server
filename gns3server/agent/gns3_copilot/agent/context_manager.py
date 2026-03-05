@@ -1,19 +1,39 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Context Window Manager for GNS3-Copilot
+# GNS3-Copilot - AI-powered Network Lab Assistant for GNS3
 #
-# This module manages context window limits for different LLM models,
-# implementing intelligent message trimming and token counting strategies.
+# This file is part of GNS3-Copilot project.
+#
+# GNS3-Copilot is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# GNS3-Copilot is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with GNS3-Copilot. If not, see <https://www.gnu.org/licenses/>.
+#
+# Project Home: https://github.com/yueguobin/gns3-copilot
+#
 
 """
 Context Window Manager for GNS3-Copilot
 
-This module provides context window management for different LLM models,
+This module provides intelligent context window management for LLM models,
 including:
 - Model-specific context window limits
-- Token counting for messages
-- Message trimming strategies
+- Accurate token counting using tiktoken
+- Message trimming strategies (conservative/balanced/aggressive)
 - System message preservation
+- Tool definition token estimation
+- Template variable injection for topology info
+
+This module is part of the GNS3-Copilot project.
+GitHub: https://github.com/yueguobin/gns3-copilot
 """
 
 import json
@@ -26,9 +46,22 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.messages.utils import trim_messages
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Constants
+# ============================================================================
+
+# Context strategy ratios
+CONTEXT_STRATEGY_RATIOS = {
+    "conservative": 0.60,  # 60% for input, 40% reserved for output
+    "balanced": 0.75,      # 75% for input, 25% reserved for output
+    "aggressive": 0.85,    # 85% for input, 15% reserved for output
+}
+
+DEFAULT_CONTEXT_STRATEGY = "balanced"
 
 
 # ============================================================================
@@ -176,6 +209,10 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
     return total_tokens
 
 
+# ============================================================================
+# Model Context Limits
+# ============================================================================
+
 # NOTE: Built-in model context limits have been removed.
 # Model providers frequently update context limits, and maintaining this list is not sustainable.
 # Users MUST configure context_limit explicitly in their LLM model configurations.
@@ -243,7 +280,7 @@ def get_model_context_limit(
 
 def calculate_max_tokens(
     model_limit: int,
-    strategy: Literal["conservative", "balanced", "aggressive"] = "balanced"
+    strategy: Literal["conservative", "balanced", "aggressive"] = DEFAULT_CONTEXT_STRATEGY
 ) -> int:
     """
     Calculate the maximum tokens to use, reserving space for output.
@@ -258,13 +295,7 @@ def calculate_max_tokens(
     Returns:
         int: Maximum tokens for input messages
     """
-    ratios = {
-        "conservative": 0.60,
-        "balanced": 0.75,
-        "aggressive": 0.85,
-    }
-
-    ratio = ratios.get(strategy, 0.75)
+    ratio = CONTEXT_STRATEGY_RATIOS.get(strategy, CONTEXT_STRATEGY_RATIOS[DEFAULT_CONTEXT_STRATEGY])
     max_tokens = int(model_limit * ratio)
 
     logger.debug(
@@ -275,11 +306,15 @@ def calculate_max_tokens(
     return max_tokens
 
 
+# ============================================================================
+# Message Trimming
+# ============================================================================
+
 def trim_messages_for_context(
     messages: list[Any],
     model_name: str,
     llm_config: dict[str, Any] | None = None,
-    strategy: Literal["conservative", "balanced", "aggressive"] = "balanced",
+    strategy: Literal["conservative", "balanced", "aggressive"] = DEFAULT_CONTEXT_STRATEGY,
     preserve_system: bool = True,
     tool_tokens: int = 0,
 ) -> list[Any]:
@@ -313,7 +348,7 @@ def trim_messages_for_context(
     if not messages:
         return messages
 
-    # Get model's context limit (from database or built-in defaults)
+    # Get model's context limit (from database config)
     model_limit = get_model_context_limit(model_name, llm_config)
 
     # Calculate usable tokens (reserve space for output)
@@ -414,6 +449,10 @@ def _trim_to_token_limit(messages: list[Any], max_tokens: int) -> list[Any]:
     return trimmed
 
 
+# ============================================================================
+# Token Usage Summary
+# ============================================================================
+
 def get_token_usage_summary(
     messages: list[Any],
     model_name: str,
@@ -466,7 +505,10 @@ def get_token_usage_summary(
     }
 
 
-# Convenience function for GNS3-Copilot integration
+# ============================================================================
+# Main Entry Point - Context Preparation with Template Injection
+# ============================================================================
+
 def prepare_context_messages(
     state_messages: list[Any],
     system_prompt: str,
@@ -479,11 +521,17 @@ def prepare_context_messages(
     Prepare full context messages for LLM call with automatic trimming.
 
     This is the main entry point for GNS3-Copilot to prepare messages
-    before calling the LLM.
+    before calling the LLM. It injects topology info into the system prompt
+    using template variables and performs intelligent message trimming.
+
+    Template Variable Injection:
+        The system_prompt must contain the {{topology_info}} placeholder.
+        This function will replace it with actual topology information or
+        a placeholder message if topology is not available.
 
     Args:
         state_messages: Message history from conversation state
-        system_prompt: System prompt text
+        system_prompt: System prompt text (must contain {{topology_info}} placeholder)
         topology_context: Optional topology information string
         model_name: Name of the LLM model
         llm_config: Optional LLM config dict from database (may contain context_limit and context_strategy)
@@ -495,51 +543,50 @@ def prepare_context_messages(
     Examples:
         >>> messages = prepare_context_messages(
         ...     state_messages=[HumanMessage("Help me")],
-        ...     system_prompt="You are a helpful assistant",
+        ...     system_prompt="You are a helpful assistant\\n\\n{{topology_info}}",
         ...     topology_context=None,
         ...     model_name="gpt-4o"
         ... )
         >>> len(messages)
         2  # System message + Human message
     """
-    # Get trimming strategy from config (default: "balanced")
-    trim_strategy = "balanced"
+    # Step 1: Get trimming strategy from config
+    trim_strategy = DEFAULT_CONTEXT_STRATEGY
     if llm_config and "context_strategy" in llm_config:
         strategy = llm_config["context_strategy"]
-        if strategy in ["conservative", "balanced", "aggressive"]:
+        if strategy in CONTEXT_STRATEGY_RATIOS:
             trim_strategy = strategy
             logger.debug("Using context_strategy from config: %s", trim_strategy)
         else:
-            logger.warning("Invalid context_strategy '%s', using 'balanced'", strategy)
+            logger.warning("Invalid context_strategy '%s', using '%s'", strategy, DEFAULT_CONTEXT_STRATEGY)
 
-    # Estimate tool tokens (tools are sent with each LLM call)
+    # Step 2: Estimate tool tokens (tools are sent with each LLM call)
     tool_tokens = estimate_tool_tokens(tools) if tools else 0
 
-    # Inject topology info into system prompt using template variable
+    # Step 3: Inject topology info into system prompt using template variable
     # The system_prompt contains {{topology_info}} placeholder
     if topology_context:
         topology_formatted = f"Current Topology:\n{topology_context}"
         formatted_prompt = system_prompt.replace("{{topology_info}}", topology_formatted)
     else:
-        # If no topology, remove the placeholder
+        # If no topology, use placeholder
         formatted_prompt = system_prompt.replace("{{topology_info}}", "(No topology information available)")
 
-    # Calculate token breakdown
+    # Step 4: Calculate token breakdown
     system_prompt_tokens = count_tokens_accurately(system_prompt)
     topology_tokens = count_tokens_accurately(topology_formatted) if topology_context else 0
     formatted_tokens = count_tokens_accurately(formatted_prompt)
 
-    # Build context messages (single system message with topology injected)
+    # Step 5: Build context messages (single system message with topology injected)
     context_messages = [SystemMessage(content=formatted_prompt)]
 
-    # Calculate conversation history tokens
+    # Step 6: Calculate conversation history tokens
     history_tokens = count_messages_tokens(state_messages)
-    total_context_tokens = system_prompt_tokens + topology_tokens + history_tokens
 
-    # Combine with conversation history
+    # Step 7: Combine with conversation history
     full_messages = context_messages + state_messages
 
-    # Trim if needed
+    # Step 8: Trim if needed
     trimmed_messages = trim_messages_for_context(
         full_messages,
         model_name=model_name,
@@ -549,11 +596,10 @@ def prepare_context_messages(
         tool_tokens=tool_tokens,  # Account for tool definitions
     )
 
-    # Recalculate after trimming
+    # Step 9: Recalculate after trimming
     trimmed_history_tokens = count_messages_tokens([m for m in trimmed_messages if not isinstance(m, SystemMessage)])
-    trimmed_total_tokens = system_prompt_tokens + topology_tokens + trimmed_history_tokens
 
-    # Log summary with detailed breakdown
+    # Step 10: Log summary with detailed breakdown
     model_limit_k = get_model_context_limit(model_name, llm_config) // 1000
 
     if trimmed_history_tokens < history_tokens:
@@ -589,16 +635,26 @@ def prepare_context_messages(
     return trimmed_messages
 
 
+# ============================================================================
+# Module Test
+# ============================================================================
+
 if __name__ == "__main__":
     # Simple test
     test_messages = [
         HumanMessage(f"Message {i}") for i in range(100)
     ]
 
-    result = trim_messages_for_context(
-        test_messages,
+    # Test with mock llm_config
+    mock_config = {"context_limit": 8, "context_strategy": "conservative"}
+
+    result = prepare_context_messages(
+        state_messages=test_messages,
+        system_prompt="You are GNS3 Copilot.\n\n{{topology_info}}",
+        topology_context='{"project_id": "test", "nodes": 5}',
         model_name="gpt-4o",
-        strategy="balanced"
+        llm_config=mock_config,
+        tools=None
     )
 
     print(f"Original: {len(test_messages)} messages")

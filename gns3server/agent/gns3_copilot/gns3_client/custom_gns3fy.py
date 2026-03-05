@@ -1,14 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# GNS3-Copilot - AI-powered Network Lab Assistant for GNS3
+#
+# This file is part of GNS3-Copilot project.
+#
+# GNS3-Copilot is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# GNS3-Copilot is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with GNS3-Copilot. If not, see <https://www.gnu.org/licenses/>.
+#
+# Project Home: https://github.com/yueguobin/gns3-copilot
+#
+
 """
-Adapted gns3fy module for gns3-copilot.
+Adapted gns3fy module for GNS3-Copilot
 
 This module is based on the upstream gns3fy project (https://github.com/davidban77/gns3fy).
-Modifications made for this repository:
-- Adjusted some pydantic usages and dataclass configuration to reduce dependency conflicts
-  with langchain (pydantic version/api differences).
-- Kept the original API surface where possible but simplified validators/config to improve compatibility.
-- Please review any pydantic-specific code if upgrading langchain or pydantic in the future.
 
-Note: This file is adapted - not the untouched upstream source. See repository README for details.
+Modifications made for GNS3-Copilot:
+- Adjusted pydantic usages and dataclass configuration to reduce dependency conflicts
+  with langchain (pydantic version/api differences)
+- Kept the original API surface where possible but simplified validators/config
+- Added JWT token authentication support
+- Integrated with context-aware connector factory
+
+Note: This file is adapted from upstream gns3fy for compatibility with
+GNS3-Copilot's architecture.
+
+This module is part of the GNS3-Copilot project.
+GitHub: https://github.com/yueguobin/gns3-copilot
+
+Upstream: https://github.com/davidban77/gns3fy
 """
 
 import os

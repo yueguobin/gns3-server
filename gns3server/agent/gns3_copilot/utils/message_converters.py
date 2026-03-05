@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # This file is part of GNS3 Server.
 #
@@ -16,6 +16,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
+
+This module is part of the GNS3-Copilot project.
+GitHub: https://github.com/yueguobin/gns3-copilot
 Message format converters for OpenAI-compatible message format.
 Converts between LangChain messages and OpenAI-compatible format.
 """

@@ -1,36 +1,42 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
-# This file is part of GNS3-Copilot.
+# GNS3-Copilot - AI-powered Network Lab Assistant for GNS3
+#
+# This file is part of GNS3-Copilot project.
 #
 # GNS3-Copilot is free software: you can redistribute it and/or modify it
-# under the terms of the GNU Affero General Public License as published by the
+# under the terms of the GNU General Public License as published by the
 # Free Software Foundation, either version 3 of the License, or (at your
 # option) any later version.
 #
 # GNS3-Copilot is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
-# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
 # for more details.
 #
-# You should have received a copy of the GNU Affero General Public License along
-# with GNS3-Copilot. If not, see <https://www.gnu.org/licenses/>.
+# You should have received a copy of the GNU General Public License
+# along with GNS3-Copilot. If not, see <https://www.gnu.org/licenses/>.
+#
+# Project Home: https://github.com/yueguobin/gns3-copilot
+#
 
 # mypy: ignore-errors
 
 """
-GNS3 Network Automation Assistant
+GNS3 Network Automation Assistant - LangGraph Agent
 
-This module implements an AI-powered assistant for GNS3 network automation and management.
-It uses LangChain for agent orchestration and DeepSeek LLM for natural language processing.
-The assistant provides comprehensive GNS3 topology management capabilities including:
-- Reading and analyzing GNS3 project topologies
-- Creating and managing network nodes and links
-- Executing network configuration and display commands on multiple devices
-- Managing VPCS (Virtual PC Simulator) commands
-- Starting and controlling GNS3 nodes
+This module implements the core LangGraph agent workflow for GNS3-Copilot,
+an AI-powered assistant for GNS3 network automation and management.
 
-The assistant integrates with various tools to provide a complete network automation
-solution for GNS3 environments.
+The agent provides:
+- LangGraph-based state management and workflow
+- Tool orchestration for GNS3 operations
+- Context-aware conversation handling
+- Automatic conversation title generation
+- Integration with GNS3 topology management
+
+This module is part of the GNS3-Copilot project.
+GitHub: https://github.com/yueguobin/gns3-copilot
 """
 
 import operator

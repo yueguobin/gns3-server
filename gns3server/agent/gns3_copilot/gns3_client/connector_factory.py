@@ -1,29 +1,39 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# GNS3-Copilot - AI-powered Network Lab Assistant for GNS3
+#
+# This file is part of GNS3-Copilot project.
+#
+# GNS3-Copilot is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# GNS3-Copilot is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with GNS3-Copilot. If not, see <https://www.gnu.org/licenses/>.
+#
+# Project Home: https://github.com/yueguobin/gns3-copilot
+#
+
 """
 GNS3 Connector Factory Module
 
-This module provides factory functions for creating Gns3Connector instances.
-It creates appropriately configured connectors using JWT token authentication.
+This module provides factory functions for creating Gns3Connector instances
+with JWT token authentication and context-aware configuration management.
 
-The URL resolution strategy follows a priority order:
-1. Explicitly provided URL parameter
-2. Runtime configuration from Controller.instance().compute("local")
-3. Static configuration from Config.instance().settings.Server
-4. Fallback to localhost:3080
+Features:
+- Context variable based request-scoped data management (JWT tokens, LLM config)
+- Auto-detection of GNS3 server URL from Controller/Config
+- Fallback URL strategy for flexible deployment
+- LLM configuration retrieval for users
 
-Main Functions:
-    get_gns3_connector: Create a Gns3Connector with JWT token
-
-Example:
-    from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
-
-    # Auto-detect URL from Controller or Config
-    connector = get_gns3_connector(jwt_token="your_token")
-    if connector:
-        # Use connector to interact with GNS3 server
-        projects = connector.projects
-
-Authentication:
-    - JWT token based authentication
+This module is part of the GNS3-Copilot project.
+GitHub: https://github.com/yueguobin/gns3-copilot
 """
 
 import logging
