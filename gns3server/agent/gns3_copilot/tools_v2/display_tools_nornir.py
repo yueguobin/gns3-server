@@ -45,6 +45,7 @@ from nornir_netmiko.tasks import netmiko_multiline
 
 from gns3server.agent.gns3_copilot.gns3_client import get_gns3_server_host
 from gns3server.agent.gns3_copilot.utils import get_device_ports_from_topology
+from gns3server.agent.gns3_copilot.utils.command_filter import filter_forbidden_commands
 
 # config log
 logger = logging.getLogger(__name__)
@@ -185,6 +186,11 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         if isinstance(device_configs_list, list) and len(device_configs_list) > 0 and "error" in device_configs_list[0]:
             return device_configs_list
 
+        # Filter forbidden commands and store blocked commands info
+        device_configs_list, blocked_commands_map = self._filter_forbidden_commands_from_device_configs(
+            device_configs_list
+        )
+
         # Create a mapping of device names to their display commands
         device_configs_map = self._configs_map(device_configs_list)
 
@@ -212,7 +218,7 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             )
 
             # Process results for all devices
-            results = self._process_task_results(device_configs_list, hosts_data, task_result)
+            results = self._process_task_results(device_configs_list, hosts_data, task_result, blocked_commands_map)
 
         except Exception as e:
             # Overall execution failed
@@ -369,6 +375,47 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         return bool(re.match(uuid_pattern, project_id, re.IGNORECASE))
 
+    def _filter_forbidden_commands_from_device_configs(
+        self, device_configs_list: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+        """
+        Filter out forbidden commands from device configurations.
+
+        Args:
+            device_configs_list: List of device configurations with commands.
+
+        Returns:
+            A tuple of (filtered_device_configs_list, blocked_commands_map):
+            - filtered_device_configs_list: Device configs with forbidden commands removed.
+            - blocked_commands_map: Dict mapping device names to their blocked commands info.
+        """
+        filtered_list = []
+        blocked_commands_map: dict[str, dict[str, str]] = {}
+
+        for device_config in device_configs_list:
+            device_name = device_config["device_name"]
+            commands = device_config["commands"]
+
+            # Filter commands
+            allowed_commands, blocked_info = filter_forbidden_commands(commands)
+
+            # Update device config with allowed commands only
+            filtered_config = device_config.copy()
+            filtered_config["commands"] = allowed_commands
+            filtered_list.append(filtered_config)
+
+            # Store blocked commands info if any
+            if blocked_info:
+                blocked_commands_map[device_name] = blocked_info
+                logger.info(
+                    "Device %s: %d command(s) blocked: %s",
+                    device_name,
+                    len(blocked_info),
+                    list(blocked_info.keys()),
+                )
+
+        return filtered_list, blocked_commands_map
+
     def _configs_map(self, device_config_list: list[dict[str, Any]]) -> dict[str, list[str]]:
         """Create a mapping of device names to their diagnostic commands."""
         device_diagnostic_map = {}
@@ -462,6 +509,7 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         device_configs_list: list[dict[str, Any]],
         hosts_data: dict[str, dict[str, Any]],
         task_result: AggregatedResult,
+        blocked_commands_map: dict[str, dict[str, str]],
     ) -> list[dict[str, Any]]:
         """Process the task results and format them for return."""
         results = []
@@ -469,6 +517,7 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         for device_config in device_configs_list:
             device_name = device_config["device_name"]
             diagnostic_commands = device_config["commands"]
+            blocked_commands_info = blocked_commands_map.get(device_name, {})
 
             # Check if device is in topology
             if device_name not in hosts_data:
@@ -477,6 +526,10 @@ class ExecuteMultipleDeviceCommands(BaseTool):
                     "status": "failed",
                     "error": (f"Device '{device_name}' not found in topology or missing console_port"),
                 }
+                # Add blocked commands info if any
+                if blocked_commands_info:
+                    device_result["blocked_commands"] = list(blocked_commands_info.keys())
+                    device_result["blocked_info"] = blocked_commands_info
                 results.append(device_result)
                 continue
 
@@ -487,6 +540,10 @@ class ExecuteMultipleDeviceCommands(BaseTool):
                     "status": "failed",
                     "error": (f"Device '{device_name}' not found in task results"),
                 }
+                # Add blocked commands info if any
+                if blocked_commands_info:
+                    device_result["blocked_commands"] = list(blocked_commands_info.keys())
+                    device_result["blocked_info"] = blocked_commands_info
                 results.append(device_result)
                 continue
 
@@ -504,6 +561,14 @@ class ExecuteMultipleDeviceCommands(BaseTool):
                 device_result["status"] = "success"
                 device_result["output"] = multi_result[0].result
                 device_result["diagnostic_commands"] = diagnostic_commands
+
+            # Add blocked commands info if any
+            if blocked_commands_info:
+                device_result["blocked_commands"] = list(blocked_commands_info.keys())
+                device_result["blocked_info"] = blocked_commands_info
+                # Update status if some commands were blocked but execution succeeded
+                if device_result["status"] == "success":
+                    device_result["status"] = "partial_success"
 
             results.append(device_result)
 
