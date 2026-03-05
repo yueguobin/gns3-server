@@ -49,6 +49,12 @@ from gns3server.agent.gns3_copilot.utils import get_device_ports_from_topology
 # config log
 logger = logging.getLogger(__name__)
 
+# Suppress nornir INFO logs in console (reduce verbosity)
+# The logging={"enabled": False} in InitNornir only disables plugin internal logs,
+# but nornir.core still logs task execution at INFO level. Set to WARNING to suppress these.
+logging.getLogger("nornir.core").setLevel(logging.WARNING)
+logging.getLogger("nornir").setLevel(logging.WARNING)
+
 
 # Local Nornir configuration functions for Cisco IOS Telnet devices
 def _get_nornir_defaults() -> dict[str, Any]:
