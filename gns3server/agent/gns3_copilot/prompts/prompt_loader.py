@@ -27,29 +27,45 @@
 Prompt Loader for GNS3-Copilot
 
 This module provides utilities for loading system prompts.
-Can be extended to support multiple prompt variants based on
-environment variables (e.g., ENGLISH_LEVEL).
+Supports multiple prompt variants based on LLM model configuration.
+
+Available Modes (controlled by config.copilot_mode in llm_model_configs):
+- "teaching" (default): Teaching assistant mode - diagnostics only, no configuration
+- "lab_assistant": Full lab assistant mode - diagnostics and configuration enabled
 
 """
 
 import logging
-import os
 
 from .base_prompt import SYSTEM_PROMPT
+from .lab_assistant_prompt import LAB_ASSISTANT_PROMPT
 
 logger = logging.getLogger(__name__)
 
-def load_system_prompt() -> str:
+def load_system_prompt(llm_config: dict | None = None) -> str:
     """
     Load the system prompt for GNS3-Copilot.
 
-    In the future, this can be extended to support multiple prompt variants
-    based on environment variables (e.g., ENGLISH_LEVEL).
+    The prompt mode is controlled by the `copilot_mode` field in the LLM model config:
+    - "teaching" (default): Teaching assistant mode - diagnostics only, no configuration
+    - "lab_assistant": Full lab assistant mode - diagnostics and configuration enabled
+
+    Args:
+        llm_config: LLM model configuration dictionary containing the config field
 
     Returns:
         str: The system prompt string.
     """
-    # For now, just return the base system prompt
-    # Future enhancement: Load different prompts based on ENGLISH_LEVEL env var
-    # english_level = os.getenv("ENGLISH_LEVEL", "native")
-    return SYSTEM_PROMPT
+    if not llm_config:
+        logger.info("No LLM config provided, using default TEACHING assistant prompt mode")
+        return SYSTEM_PROMPT
+
+    config = llm_config.get("config", {})
+    mode = config.get("copilot_mode", "teaching").lower()
+
+    if mode == "lab_assistant":
+        logger.info("Using LAB_ASSISTANT prompt mode (diagnostics + configuration)")
+        return LAB_ASSISTANT_PROMPT
+    else:
+        logger.info("Using TEACHING assistant prompt mode (diagnostics only)")
+        return SYSTEM_PROMPT

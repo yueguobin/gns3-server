@@ -48,7 +48,9 @@ def get_device_ports_from_topology(
         {
             "device_name": {
                 "port": console_port,
-                "groups": ["cisco_IOSv_telnet"]
+                "groups": ["cisco_IOSv_telnet"],
+                "device_type": "cisco_ios_telnet",  # Extracted from tags
+                "platform": "cisco_ios"              # Extracted from tags
             }
         }
         Devices that don't exist or missing console_port will not be included
@@ -82,10 +84,36 @@ def get_device_ports_from_topology(
                 logger.warning("Device '%s' missing console_port", device_name)
                 continue
 
+            # Extract device_type and platform from tags
+            device_type = None
+            platform = None
+            tags = node_info.get("tags", [])
+
+            for tag in tags:
+                if tag.startswith("device_type:"):
+                    device_type = tag.split(":", 1)[1].strip()
+                elif tag.startswith("platform:"):
+                    platform = tag.split(":", 1)[1].strip()
+
+            # Use defaults if not found in tags
+            if device_type is None:
+                device_type = "cisco_ios_telnet"
+                logger.debug("Device '%s': device_type not found in tags, using default: cisco_ios_telnet", device_name)
+            else:
+                logger.debug("Device '%s': extracted device_type=%s from tags", device_name, device_type)
+
+            if platform is None:
+                platform = "cisco_ios"
+                logger.debug("Device '%s': platform not found in tags, using default: cisco_ios", device_name)
+            else:
+                logger.debug("Device '%s': extracted platform=%s from tags", device_name, platform)
+
             # Add device to hosts_data
             hosts_data[device_name] = {
                 "port": node_info["console_port"],
                 "groups": ["cisco_IOSv_telnet"],
+                "device_type": device_type,
+                "platform": platform,
             }
 
         logger.info("Returning %d device port mappings", len(hosts_data))

@@ -124,6 +124,7 @@ The `model_type` field accepts the following values:
 | `api_key` | string | API key (auto-encrypted) |
 | `max_tokens` | integer | Max tokens for generation |
 | `context_strategy` | string | Context trimming strategy: "conservative" (60%), "balanced" (75%), "aggressive" (85%). Default: "balanced" |
+| `copilot_mode` | string | GNS3-Copilot mode: "teaching" (diagnostics only, default) or "lab_assistant" (full configuration access) |
 | `is_default` | boolean | Set as default (default: false) |
 
 **Important Notes:**
@@ -255,7 +256,8 @@ curl -X POST http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
     "temperature": 0.7,
     "context_limit": 128,
     "context_strategy": "balanced",
-    "api_key": "sk-xxx"
+    "api_key": "sk-xxx",
+    "copilot_mode": null
   },
   "user_id": "uuid-user",
   "group_id": null,
@@ -308,7 +310,8 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
         "temperature": 0.7,
         "context_limit": 128,
         "context_strategy": "balanced",
-        "api_key": "sk-xxx"
+        "api_key": "sk-xxx",
+        "copilot_mode": "lab_assistant"
       },
       "user_id": "uuid-user",
       "group_id": null,
@@ -330,7 +333,8 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
         "temperature": 0.7,
         "context_limit": 200,
         "context_strategy": "balanced",
-        "api_key": null
+        "api_key": null,
+        "copilot_mode": null
       },
       "user_id": null,
       "group_id": "uuid-group",
@@ -353,7 +357,8 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
       "temperature": 0.7,
       "context_limit": 128,
       "context_strategy": "balanced",
-      "api_key": "sk-xxx"
+      "api_key": "sk-xxx",
+      "copilot_mode": "lab_assistant"
     },
     "user_id": "uuid-user",
     "group_id": null,
@@ -393,7 +398,10 @@ curl -X GET http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs 
         "base_url": "https://api.anthropic.com",
         "model": "claude-3-opus-20240229",
         "temperature": 0.7,
-        "api_key": "sk-ant-xxx"
+        "context_limit": 200,
+        "context_strategy": "balanced",
+        "api_key": "sk-ant-xxx",
+        "copilot_mode": null
       },
       "user_id": null,
       "group_id": "uuid-group",
@@ -411,7 +419,10 @@ curl -X GET http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs 
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4",
         "temperature": 0.7,
-        "api_key": "sk-xxx"
+        "context_limit": 128,
+        "context_strategy": "balanced",
+        "api_key": "sk-xxx",
+        "copilot_mode": null
       },
       "user_id": null,
       "group_id": "uuid-group",

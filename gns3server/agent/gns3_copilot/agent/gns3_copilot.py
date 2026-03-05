@@ -65,6 +65,7 @@ from pathlib import Path
 # Add backend to path for prompt_manager
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "backend"))
 from gns3server.agent.gns3_copilot.tools_v2 import (
+    ExecuteMultipleDeviceConfigCommands,
     ExecuteMultipleDeviceCommands,
     GNS3CreateNodeTool,
     GNS3LinkTool,
@@ -88,6 +89,7 @@ tools = [
     GNS3StartNodeTool(),  # Start GNS3 nodes
     GNS3UpdateNodeNameTool(),  # Update node name
     ExecuteMultipleDeviceCommands(),  # Execute show/display/debug commands on multiple devices (READ-ONLY)
+    ExecuteMultipleDeviceConfigCommands(),  # Execute configuration commands on multiple devices
     VPCSMultiCommands(),  # Execute VPCS commands on multiple devices
 ]
 # Augment the LLM with tools
@@ -197,7 +199,8 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     state["topology_info"] = topology_info
 
     # Create pre_model_hook for automatic topology injection and trimming
-    system_prompt = load_system_prompt()
+    # Load system prompt based on copilot_mode configuration
+    system_prompt = load_system_prompt(llm_config)
     pre_hook = create_pre_model_hook(
         system_prompt=system_prompt,
         get_topology_func=lambda s: s.get("topology_info"),

@@ -48,9 +48,14 @@ class LLMModelConfigData(BaseModel):
     context_strategy: Literal["conservative", "balanced", "aggressive"] = Field(
         "balanced", description="Context trimming strategy: conservative (60%), balanced (75%), aggressive (85%)"
     )
+    copilot_mode: Optional[str] = Field(
+        None,
+        description="GNS3-Copilot mode: 'teaching' (diagnostics only) or 'lab_assistant' (full configuration access)"
+    )
 
     # Allow extra fields for extensibility
-    model_config = ConfigDict(extra="allow")
+    # Ensure all fields are included in serialization, even if None
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
 # Request schemas
@@ -70,6 +75,10 @@ class LLMModelConfigCreate(BaseModel):
     context_limit: int = Field(..., gt=0, description="Model context window limit in K tokens (REQUIRED, e.g., 128 = 128K tokens)")
     context_strategy: Literal["conservative", "balanced", "aggressive"] = Field(
         "balanced", description="Context trimming strategy"
+    )
+    copilot_mode: Optional[str] = Field(
+        None,
+        description="GNS3-Copilot mode: 'teaching' (diagnostics only) or 'lab_assistant' (full configuration access)"
     )
 
     # Allow extra config fields
@@ -95,6 +104,10 @@ class LLMModelConfigUpdate(BaseModel):
     context_limit: Optional[int] = Field(None, gt=0, description="Model context window limit in K tokens (e.g., 128 = 128K tokens)")
     context_strategy: Optional[Literal["conservative", "balanced", "aggressive"]] = Field(
         None, description="Context trimming strategy"
+    )
+    copilot_mode: Optional[str] = Field(
+        None,
+        description="GNS3-Copilot mode: 'teaching' (diagnostics only) or 'lab_assistant' (full configuration access)"
     )
 
     # Allow extra config fields

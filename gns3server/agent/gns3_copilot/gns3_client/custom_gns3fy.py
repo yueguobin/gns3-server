@@ -477,6 +477,11 @@ class Gns3Connector:
         **Required Attributes:**
 
         - `name` or `template_id`
+
+        **Optional Attributes (can be passed via kwargs):**
+
+        - `tags` (list): List of tags for the template (e.g., ["device_type:cisco_ios_telnet", "platform:cisco_ios"])
+        - Any other template attributes supported by GNS3 API
         """
         # Get existing template
         _template = self.get_template(name=name, template_id=template_id)
@@ -505,6 +510,21 @@ class Gns3Connector:
         - `name`
         - `compute_id` by default is 'local'
         - `template_type`
+
+        **Optional Attributes (can be passed via kwargs):**
+
+        - `tags` (list): List of tags for the template (e.g., ["device_type:cisco_ios_telnet", "platform:cisco_ios"])
+        - Any other template attributes supported by GNS3 API
+
+        **Example:**
+
+        ```python
+        >>> connector.create_template(
+        ...     name="cisco_router",
+        ...     template_type="dynamips",
+        ...     tags=["device_type:cisco_ios_telnet", "platform:cisco_ios"]
+        ... )
+        ```
         """
         # kwargs["name"] might raise KeyError at runtime, for more robust code we can use get first
         template_name = kwargs.get("name")
@@ -1051,6 +1071,7 @@ class Node:
     z: int | None = None
     template_id: str | None = None
     properties: Any | None = None
+    tags: list[str] | None = None
 
     template: str | None = None
     links: list[Link] = field(default_factory=list, repr=False)
@@ -2084,6 +2105,7 @@ class Project:
                         # "template": _n.template,
                         "x": _n.x,
                         "y": _n.y,
+                        "tags": _n.tags if _n.tags else [],
                     }
                 }
             )

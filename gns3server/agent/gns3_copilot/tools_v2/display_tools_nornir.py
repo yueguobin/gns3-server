@@ -54,25 +54,52 @@ def _get_nornir_defaults() -> dict[str, Any]:
     """Get Nornir default configuration for Cisco IOS."""
     return {"data": {"location": "gns3"}}
 
-def _get_nornir_groups_config() -> dict[str, dict[str, Any]]:
-    """Get Nornir groups configuration for Cisco IOS Telnet devices."""
+def _get_nornir_groups_config(
+    device_type: str = "cisco_ios_telnet",
+    platform: str = "cisco_ios"
+) -> dict[str, Any]:
+    """
+    Get Nornir group configuration for Cisco IOS Telnet devices.
+
+    Args:
+        device_type: Device type for Netmiko (e.g., 'cisco_ios_telnet')
+        platform: Platform type for Nornir (e.g., 'cisco_ios')
+
+    Returns:
+        Dictionary containing Nornir group configuration
+    """
     return {
-        "cisco_IOSv_telnet": {
-            "platform": "cisco_ios",
-            "hostname": get_gns3_server_host(),
-            "timeout": 120,
-            "username": "",
-            "password": "",
-            "connection_options": {
-                "netmiko": {"extras": {"device_type": "cisco_ios_telnet"}}
-            },
+        "platform": platform,
+        "hostname": get_gns3_server_host(),
+        "timeout": 120,
+        "username": "",
+        "password": "",
+        "connection_options": {
+            "netmiko": {"extras": {"device_type": device_type}}
         },
     }
 
-def _get_nornir_group(group_name: str = "cisco_IOSv_telnet") -> dict[str, Any]:
-    """Get Nornir group configuration for a specific group."""
-    all_groups = _get_nornir_groups_config()
-    return all_groups.get(group_name, {})
+def _get_nornir_group(
+    group_name: str = "cisco_IOSv_telnet",
+    device_type: str = "cisco_ios_telnet",
+    platform: str = "cisco_ios"
+) -> dict[str, Any]:
+    """
+    Get Nornir group configuration for a specific group.
+
+    Args:
+        group_name: Name of the group
+        device_type: Device type for Netmiko (e.g., 'cisco_ios_telnet')
+        platform: Platform type for Nornir (e.g., 'cisco_ios')
+
+    Returns:
+        Dictionary containing group configuration
+    """
+    # _get_nornir_groups_config now returns the group config directly
+    return _get_nornir_groups_config(
+        device_type=device_type,
+        platform=platform
+    )
 
 class ExecuteMultipleDeviceCommands(BaseTool):
     """
@@ -403,8 +430,27 @@ class ExecuteMultipleDeviceCommands(BaseTool):
     def _initialize_nornir(self, hosts_data: dict[str, dict[str, Any]]) -> Nornir:
         """Initialize Nornir with the provided hosts data."""
         try:
-            # Get latest environment configuration
-            groups_data = _get_nornir_group("cisco_IOSv_telnet")
+            # Extract device_type and platform from hosts_data
+            # Use the first device's configuration as default
+            device_type = None
+            platform = None
+
+            if hosts_data:
+                first_device_data = next(iter(hosts_data.values()), {})
+                device_type = first_device_data.get("device_type", "cisco_ios_telnet")
+                platform = first_device_data.get("platform", "cisco_ios")
+
+                logger.info(
+                    "Extracted from tags: device_type=%s, platform=%s",
+                    device_type,
+                    platform
+                )
+
+            # Get latest environment configuration with dynamic device_type and platform
+            groups_data = _get_nornir_groups_config(
+                device_type=device_type or "cisco_ios_telnet",
+                platform=platform or "cisco_ios"
+            )
             defaults = _get_nornir_defaults()
 
             # Log nornir account information
