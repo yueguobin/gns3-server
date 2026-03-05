@@ -410,6 +410,28 @@ class AgentService:
             if content:
                 return {"type": "content", "content": content}
 
+        elif event_type == "on_chat_model_end":
+            # LLM call completed, check if it decided to call tools
+            output = data.get("output", {})
+            if hasattr(output, "tool_calls") and output.tool_calls:
+                # Extract tool calls information
+                tool_calls_data = []
+                for tc in output.tool_calls:
+                    # Convert to dict if it's an object
+                    tc_dict = tc if isinstance(tc, dict) else tc.model_dump()
+                    tool_calls_data.append(
+                        {
+                            "id": tc_dict.get("id", ""),
+                            "name": tc_dict.get("name", ""),
+                            "args": tc_dict.get("args", {}),
+                        }
+                    )
+                return {
+                    "type": "tool_call",
+                    "tool_calls": tool_calls_data,
+                    "session_id": session_id,
+                }
+
         elif event_type == "on_tool_start":
             # Tool execution started
             return {"type": "tool_start", "tool_name": event.get("name", ""), "session_id": session_id}

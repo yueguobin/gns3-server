@@ -242,10 +242,10 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
 | type | 说明 | 包含字段 |
 |------|------|----------|
 | content | AI 文本内容（流式） | content |
-| tool_call | 工具调用请求 | tool_call (id, name, arguments) |
-| tool_start | 工具开始执行 | tool_name |
-| tool_end | 工具执行完成 | tool_name, tool_output |
-| error | 错误信息 | error |
+| tool_call | LLM 决定调用工具（可能多个） | tool_calls (数组, 每项包含 id, name, args), session_id |
+| tool_start | 工具开始执行 | tool_name, session_id |
+| tool_end | 工具执行完成 | tool_name, tool_output, session_id |
+| error | 错误信息 | error, session_id |
 | done | 流结束 | session_id |
 | heartbeat | 心跳保活 | session_id |
 
@@ -255,16 +255,29 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
 // AI 文本流式输出
 {"type": "content", "content": "Hello! How can I help"}
 
-// 工具调用
-{"type": "tool_call", "tool_call": {"id": "call_123", "function": {"name": "GNS3TopologyTool", "arguments": {"project_id": "xxx"}}}}
+// LLM 决定调用工具（单个或多个）
+{
+  "type": "tool_call",
+  "tool_calls": [
+    {
+      "id": "call_123",
+      "name": "execute_multiple_device_commands",
+      "args": {
+        "device_names": ["R1", "R2"],
+        "commands": ["show version"]
+      }
+    }
+  ],
+  "session_id": "xxx"
+}
 
-// 工具开始
-{"type": "tool_start", "tool_name": "GNS3TopologyTool", "session_id": "xxx"}
+// 工具开始执行
+{"type": "tool_start", "tool_name": "execute_multiple_device_commands", "session_id": "xxx"}
 
-// 工具完成
-{"type": "tool_end", "tool_name": "GNS3TopologyTool", "tool_output": "{...}", "session_id": "xxx"}
+// 工具执行完成
+{"type": "tool_end", "tool_name": "execute_multiple_device_commands", "tool_output": "{...}", "session_id": "xxx"}
 
-// 完成
+// 流结束
 {"type": "done", "session_id": "xxx"}
 
 // 错误
