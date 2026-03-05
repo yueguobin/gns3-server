@@ -51,7 +51,7 @@ def load_system_prompt(llm_config: dict | None = None) -> str:
     - "lab_assistant": Full lab assistant mode - diagnostics and configuration enabled
 
     Args:
-        llm_config: LLM model configuration dictionary containing the config field
+        llm_config: LLM model configuration dictionary (flattened structure from get_user_llm_config_full)
 
     Returns:
         str: The system prompt string.
@@ -60,8 +60,9 @@ def load_system_prompt(llm_config: dict | None = None) -> str:
         logger.info("No LLM config provided, using default TEACHING assistant prompt mode")
         return SYSTEM_PROMPT
 
-    config = llm_config.get("config", {})
-    mode = config.get("copilot_mode", "teaching").lower()
+    # llm_config is a flattened dict with copilot_mode at the top level
+    # Example: {"provider": "...", "model": "...", "copilot_mode": "...", ...}
+    mode = llm_config.get("copilot_mode", "teaching").lower()
 
     if mode == "lab_assistant":
         logger.info("Using LAB_ASSISTANT prompt mode (diagnostics + configuration)")

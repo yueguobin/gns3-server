@@ -235,6 +235,7 @@ curl -X POST http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
     "context_limit": 128,
     "context_strategy": "balanced",
     "api_key": "sk-xxx",
+    "copilot_mode": "teaching",
     "is_default": true
   }'
 ```
@@ -284,6 +285,7 @@ curl -X POST http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs
     "context_limit": 200,
     "context_strategy": "balanced",
     "api_key": "sk-ant-xxx",
+    "copilot_mode": "lab_assistant",
     "is_default": true
   }'
 ```
@@ -535,7 +537,8 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/de
     "temperature": 0.7,
     "context_limit": 128,
     "context_strategy": "balanced",
-    "api_key": "sk-xxx"
+    "api_key": "sk-xxx",
+    "copilot_mode": null
   },
   "user_id": "uuid-user",
   "group_id": null,
