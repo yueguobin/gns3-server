@@ -46,8 +46,8 @@ async def web_ui(file_path: str):
     file_path = os.path.normpath(file_path).strip("/")
     file_path = os.path.join("static", "web-ui", file_path)
 
-    # Raise error if user try to escape
-    if file_path[0] == ".":
+    # Raise error if user tries to escape the web-ui directory
+    if not os.path.normpath(file_path).startswith(os.path.join("static", "web-ui")):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     static = get_resource(file_path)
