@@ -28,12 +28,18 @@
 Message format converters for OpenAI-compatible message format.
 Converts between LangChain messages and OpenAI-compatible format.
 """
+
 import json
 import uuid
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any
+from typing import Dict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
+from langchain_core.messages import SystemMessage
+from langchain_core.messages import ToolMessage
+
 
 def _ensure_string(content: Any) -> str:
     """Ensure content is a string, converting dicts/lists to JSON if needed."""
@@ -43,6 +49,7 @@ def _ensure_string(content: Any) -> str:
         return json.dumps(content, ensure_ascii=False, indent=2)
     else:
         return str(content)
+
 
 def convert_langchain_to_openai(lc_message) -> Dict[str, Any]:
     """
@@ -55,53 +62,40 @@ def convert_langchain_to_openai(lc_message) -> Dict[str, Any]:
         Dictionary in OpenAI-compatible format
     """
     # Generate message ID
-    msg_id = getattr(lc_message, 'id', None)
+    msg_id = getattr(lc_message, "id", None)
     if msg_id is None:
         msg_id = str(uuid.uuid4())
 
     # Get timestamp
-    timestamp = getattr(lc_message, 'created_at', None)
+    timestamp = getattr(lc_message, "created_at", None)
     if timestamp is None:
         timestamp = datetime.utcnow().isoformat()
-    elif hasattr(timestamp, 'isoformat'):
+    elif hasattr(timestamp, "isoformat"):
         timestamp = timestamp.isoformat()
 
     # Base message structure
-    base_msg = {
-        "id": msg_id,
-        "created_at": timestamp,
-        "metadata": {}
-    }
+    base_msg = {"id": msg_id, "created_at": timestamp, "metadata": {}}
 
     # Convert based on message type
     if isinstance(lc_message, HumanMessage):
-        return {
-            **base_msg,
-            "role": "user",
-            "content": lc_message.content
-        }
+        return {**base_msg, "role": "user", "content": lc_message.content}
 
     elif isinstance(lc_message, AIMessage):
-        msg = {
-            **base_msg,
-            "role": "assistant",
-            "content": lc_message.content
-        }
+        msg = {**base_msg, "role": "assistant", "content": lc_message.content}
 
         # Handle tool calls - convert to OpenAI format
-        if hasattr(lc_message, 'tool_calls') and lc_message.tool_calls:
+        if hasattr(lc_message, "tool_calls") and lc_message.tool_calls:
             tool_calls = []
             for tc in lc_message.tool_calls:
                 # Convert to dict if it's an object
                 tc_dict = tc if isinstance(tc, dict) else tc.model_dump()
-                tool_calls.append({
-                    "id": tc_dict.get("id", str(uuid.uuid4())),
-                    "type": "function",
-                    "function": {
-                        "name": tc_dict.get("name", ""),
-                        "arguments": tc_dict.get("args", {})
+                tool_calls.append(
+                    {
+                        "id": tc_dict.get("id", str(uuid.uuid4())),
+                        "type": "function",
+                        "function": {"name": tc_dict.get("name", ""), "arguments": tc_dict.get("args", {})},
                     }
-                })
+                )
             msg["tool_calls"] = tool_calls
 
         return msg
@@ -111,24 +105,17 @@ def convert_langchain_to_openai(lc_message) -> Dict[str, Any]:
             **base_msg,
             "role": "tool",
             "content": _ensure_string(lc_message.content),
-            "name": getattr(lc_message, 'name', ''),
-            "tool_call_id": getattr(lc_message, 'tool_call_id', '')
+            "name": getattr(lc_message, "name", ""),
+            "tool_call_id": getattr(lc_message, "tool_call_id", ""),
         }
 
     elif isinstance(lc_message, SystemMessage):
-        return {
-            **base_msg,
-            "role": "system",
-            "content": lc_message.content
-        }
+        return {**base_msg, "role": "system", "content": lc_message.content}
 
     else:
         # Fallback for unknown message types
-        return {
-            **base_msg,
-            "role": "unknown",
-            "content": str(lc_message)
-        }
+        return {**base_msg, "role": "unknown", "content": str(lc_message)}
+
 
 def convert_openai_to_langchain(msg: Dict[str, Any]):
     """
@@ -153,21 +140,19 @@ def convert_openai_to_langchain(msg: Dict[str, Any]):
         if "tool_calls" in msg and msg["tool_calls"]:
             tool_calls = []
             for tc in msg["tool_calls"]:
-                tool_calls.append({
-                    "id": tc.get("id", str(uuid.uuid4())),
-                    "name": tc.get("function", {}).get("name", ""),
-                    "args": tc.get("function", {}).get("arguments", {})
-                })
+                tool_calls.append(
+                    {
+                        "id": tc.get("id", str(uuid.uuid4())),
+                        "name": tc.get("function", {}).get("name", ""),
+                        "args": tc.get("function", {}).get("arguments", {}),
+                    }
+                )
             ai_msg.tool_calls = tool_calls
 
         return ai_msg
 
     elif role == "tool":
-        return ToolMessage(
-            content=content,
-            name=msg.get("name", ""),
-            tool_call_id=msg.get("tool_call_id", "")
-        )
+        return ToolMessage(content=content, name=msg.get("name", ""), tool_call_id=msg.get("tool_call_id", ""))
 
     elif role == "system":
         return SystemMessage(content=content)
@@ -175,6 +160,7 @@ def convert_openai_to_langchain(msg: Dict[str, Any]):
     else:
         # Fallback to HumanMessage for unknown roles
         return HumanMessage(content=content)
+
 
 def convert_stream_event_to_openai(event: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -190,21 +176,17 @@ def convert_stream_event_to_openai(event: Dict[str, Any]) -> Dict[str, Any]:
 
     if event_type == "on_chat_model_stream":
         chunk = event.get("data", {}).get("chunk", {})
-        content = getattr(chunk, 'content', '')
+        content = getattr(chunk, "content", "")
 
         if content:
-            return {
-                "type": "content",
-                "content": content,
-                "message_id": event.get("metadata", {}).get("msg_id")
-            }
+            return {"type": "content", "content": content, "message_id": event.get("metadata", {}).get("msg_id")}
 
         # Check for tool call chunks
-        if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
             for tc_chunk in chunk.tool_call_chunks:
-                tc_id = getattr(tc_chunk, 'id', None)
-                tc_name = getattr(tc_chunk, 'name', None)
-                tc_args = getattr(tc_chunk, 'args', None)
+                tc_id = getattr(tc_chunk, "id", None)
+                tc_name = getattr(tc_chunk, "name", None)
+                tc_args = getattr(tc_chunk, "args", None)
 
                 if tc_id:
                     return {
@@ -212,19 +194,12 @@ def convert_stream_event_to_openai(event: Dict[str, Any]) -> Dict[str, Any]:
                         "tool_call": {
                             "id": tc_id,
                             "type": "function",
-                            "function": {
-                                "name": tc_name or "",
-                                "arguments": tc_args or ""
-                            }
-                        }
+                            "function": {"name": tc_name or "", "arguments": tc_args or ""},
+                        },
                     }
 
     elif event_type == "on_tool_start":
-        return {
-            "type": "tool_start",
-            "tool_name": event.get("name", ""),
-            "metadata": event.get("metadata", {})
-        }
+        return {"type": "tool_start", "tool_name": event.get("name", ""), "metadata": event.get("metadata", {})}
 
     elif event_type == "on_tool_end":
         tool_output = event.get("data", {}).get("output", "")
@@ -236,7 +211,7 @@ def convert_stream_event_to_openai(event: Dict[str, Any]) -> Dict[str, Any]:
             "type": "tool_end",
             "tool_output": tool_output,
             "tool_name": event.get("name", ""),
-            "metadata": event.get("metadata", {})
+            "metadata": event.get("metadata", {}),
         }
 
     # Default empty response

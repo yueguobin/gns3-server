@@ -43,43 +43,40 @@ The agent provides:
 # Standard library imports
 import logging
 import operator
-import sys
-from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
+from typing import Literal
 
 # Third-party imports
-from langchain.messages import AnyMessage, SystemMessage, ToolMessage
+from langchain.messages import AnyMessage
+from langchain.messages import SystemMessage
+from langchain.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END
+from langgraph.graph import START
+from langgraph.graph import StateGraph
 from langgraph.managed.is_last_step import RemainingSteps
 from typing_extensions import TypedDict
 
-# Add backend to path for prompt_manager
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "backend"))
-
 # Local imports
-from gns3server.agent.gns3_copilot.agent.context_manager import (
-    create_pre_model_hook,
-)
+from gns3server.agent.gns3_copilot.agent.context_manager import create_pre_model_hook
 from gns3server.agent.gns3_copilot.agent.model_factory import (
     create_base_model_with_tools,
-    create_title_model,
 )
+from gns3server.agent.gns3_copilot.agent.model_factory import create_title_model
 from gns3server.agent.gns3_copilot.gns3_client import GNS3TopologyTool
 from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
     get_current_llm_config,
 )
-from gns3server.agent.gns3_copilot.prompts import TITLE_PROMPT, load_system_prompt
-from gns3server.agent.gns3_copilot.tools_v2 import (
-    ExecuteMultipleDeviceConfigCommands,
-    ExecuteMultipleDeviceCommands,
-    GNS3CreateNodeTool,
-    GNS3LinkTool,
-    GNS3StartNodeTool,
-    GNS3TemplateTool,
-    GNS3UpdateNodeNameTool,
-    VPCSMultiCommands,
-)
+from gns3server.agent.gns3_copilot.prompts import TITLE_PROMPT
+from gns3server.agent.gns3_copilot.prompts import load_system_prompt
+from gns3server.agent.gns3_copilot.tools_v2 import ExecuteMultipleDeviceCommands
+from gns3server.agent.gns3_copilot.tools_v2 import ExecuteMultipleDeviceConfigCommands
+from gns3server.agent.gns3_copilot.tools_v2 import GNS3CreateNodeTool
+from gns3server.agent.gns3_copilot.tools_v2 import GNS3LinkTool
+from gns3server.agent.gns3_copilot.tools_v2 import GNS3StartNodeTool
+from gns3server.agent.gns3_copilot.tools_v2 import GNS3TemplateTool
+from gns3server.agent.gns3_copilot.tools_v2 import GNS3UpdateNodeNameTool
+from gns3server.agent.gns3_copilot.tools_v2 import VPCSMultiCommands
 
 # Set up logger for GNS3-Copilot
 logger = logging.getLogger(__name__)
@@ -110,6 +107,7 @@ DEFAULT_CONVERSATION_TITLE = "New Conversation"
 UNTITLED_SESSION_FALLBACK = "Untitled Session"
 TITLE_MAX_LENGTH = 40
 
+
 # Define state
 class MessagesState(TypedDict):
     """
@@ -138,6 +136,7 @@ class MessagesState(TypedDict):
     # Store GNS3 topology information
     topology_info: dict | None
 
+
 # Define llm call  node
 def llm_call(state: dict, config: RunnableConfig | None = None):
     """
@@ -161,8 +160,9 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
             "topology_info": None,
         }
 
-    logger.debug("LLM config retrieved from context: provider=%s, model=%s",
-                 llm_config.get("provider"), llm_config.get("model"))
+    logger.debug(
+        "LLM config retrieved from context: provider=%s, model=%s", llm_config.get("provider"), llm_config.get("model")
+    )
 
     # Defensive check: skip LLM call if no user messages
     messages = state.get("messages", [])
@@ -189,13 +189,13 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
             if topology and "error" not in topology:
                 topology_info = topology
                 logger.info(
-                    "Successfully retrieved topology for project_id: %s, name: %s",
-                    project_id, topology.get("name")
+                    "Successfully retrieved topology for project_id: %s, name: %s", project_id, topology.get("name")
                 )
             else:
                 logger.warning(
                     "Failed to retrieve topology for project_id %s: %s",
-                    project_id, topology.get("error", "Unknown error") if topology else "No result"
+                    project_id,
+                    topology.get("error", "Unknown error") if topology else "No result",
                 )
         except Exception as e:
             logger.warning("Error retrieving topology for project_id %s: %s", project_id, e)
@@ -214,12 +214,10 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     )
 
     # Create fresh model with tools for each LLM call
-    logger.debug("Creating model with tools: provider=%s, model=%s",
-                 llm_config.get("provider"), llm_config.get("model"))
-    model_with_tools = create_base_model_with_tools(
-        tools,
-        llm_config=llm_config
+    logger.debug(
+        "Creating model with tools: provider=%s, model=%s", llm_config.get("provider"), llm_config.get("model")
     )
+    model_with_tools = create_base_model_with_tools(tools, llm_config=llm_config)
 
     # Call pre_hook directly to prepare messages (topology injection + trimming)
     # Note: LangGraph's pre_model_hook only works with prebuilt agents, not custom StateGraph
@@ -231,14 +229,14 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     # Invoke model with prepared messages
     response = model_with_tools.invoke(prepared_messages)
 
-    logger.info("LLM call completed: tool_calls=%d",
-                len(response.tool_calls) if hasattr(response, 'tool_calls') else 0)
+    logger.info("LLM call completed: tool_calls=%d", len(response.tool_calls) if hasattr(response, "tool_calls") else 0)
 
     return {
         "messages": [response],
         "llm_calls": state.get("llm_calls", 0) + 1,
         "topology_info": topology_info,
     }
+
 
 # Define generate title node
 def generate_title(state: MessagesState, config: RunnableConfig | None = None) -> dict:
@@ -270,9 +268,7 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
         # Call the title generation model (create fresh instance for each call)
         try:
             title_model = create_title_model(llm_config=llm_config)
-            response = title_model.invoke(
-                title_prompt_messages, config={"configurable": {"foo_temperature": 1.0}}
-            )
+            response = title_model.invoke(title_prompt_messages, config={"configurable": {"foo_temperature": 1.0}})
             raw_content = response.content
 
             new_title = raw_content.strip()
@@ -286,7 +282,7 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
 
             # Safety: truncate long titles and avoid line breaks
             if len(new_title) > TITLE_MAX_LENGTH:
-                new_title = new_title[:TITLE_MAX_LENGTH - 2] + "..."
+                new_title = new_title[: TITLE_MAX_LENGTH - 2] + "..."
 
             # Remove unwanted characters
             new_title = new_title.replace("\n", " ").replace('"', "").replace("'", "")
@@ -300,7 +296,7 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
             # Improved fallback: Use user's first message content
             if messages and len(messages) > 0:
                 first_message = messages[0]
-                if hasattr(first_message, 'content'):
+                if hasattr(first_message, "content"):
                     fallback_title = first_message.content[:30].strip()
                     # Remove newlines and extra spaces
                     fallback_title = fallback_title.replace("\n", " ").strip()
@@ -323,6 +319,7 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
     # Title already exists → no update needed
     return {}
 
+
 # Define tool node
 def tool_node(state: dict, config: RunnableConfig | None = None):
     """Performs the tool call"""
@@ -337,17 +334,13 @@ def tool_node(state: dict, config: RunnableConfig | None = None):
         tool = tools_by_name[tool_name]
         try:
             observation = tool.invoke(tool_call["args"])
-            logger.debug("Tool %s completed: output_length=%d",
-                         tool_name, len(str(observation)) if observation else 0)
+            logger.debug("Tool %s completed: output_length=%d", tool_name, len(str(observation)) if observation else 0)
         except Exception as e:
             logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
             observation = f"Error: {str(e)}"
-        result.append(ToolMessage(
-            content=observation,
-            tool_call_id=tool_call["id"],
-            name=tool_call["name"]
-        ))
+        result.append(ToolMessage(content=observation, tool_call_id=tool_call["id"], name=tool_call["name"]))
     return {"messages": result}
+
 
 # Routing logic after the LLM node
 def should_continue(
@@ -374,6 +367,7 @@ def should_continue(
     # Normal completion (multi-turn conversation or title already exists)
     return END
 
+
 # Routing logic after the tool node, Check remaining_steps
 def recursion_limit_continue(state: MessagesState) -> Literal["llm_call", END]:
     """
@@ -399,6 +393,7 @@ def recursion_limit_continue(state: MessagesState) -> Literal["llm_call", END]:
         return "llm_call"
 
     return END
+
 
 # Build and compile the agent
 # Build workflow

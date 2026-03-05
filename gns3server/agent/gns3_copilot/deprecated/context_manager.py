@@ -39,14 +39,13 @@ including:
 
 import json
 import logging
-from typing import Any, Literal
+from typing import Any
+from typing import Literal
 
-from langchain_core.messages import (
-    AIMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
+from langchain_core.messages import SystemMessage
+from langchain_core.messages import ToolMessage
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +56,8 @@ logger = logging.getLogger(__name__)
 # Context strategy ratios
 CONTEXT_STRATEGY_RATIOS = {
     "conservative": 0.60,  # 60% for input, 40% reserved for output
-    "balanced": 0.75,      # 75% for input, 25% reserved for output
-    "aggressive": 0.85,    # 85% for input, 15% reserved for output
+    "balanced": 0.75,  # 75% for input, 25% reserved for output
+    "aggressive": 0.85,  # 85% for input, 15% reserved for output
 }
 
 DEFAULT_CONTEXT_STRATEGY = "balanced"
@@ -69,6 +68,7 @@ DEFAULT_CONTEXT_STRATEGY = "balanced"
 
 # Global tiktoken encoding cache (lazy loading)
 _tiktoken_encoding = None
+
 
 def _get_tiktoken_encoding():
     """
@@ -87,6 +87,7 @@ def _get_tiktoken_encoding():
     if _tiktoken_encoding is None:
         try:
             import tiktoken
+
             _tiktoken_encoding = tiktoken.get_encoding("cl100k_base")
             logger.debug("Using tiktoken (cl100k_base) for accurate token counting")
         except ImportError:
@@ -95,6 +96,7 @@ def _get_tiktoken_encoding():
                 "Please install it with: pip install tiktoken>=0.8.0"
             )
     return _tiktoken_encoding
+
 
 def count_tokens_accurately(text: str) -> int:
     """
@@ -119,6 +121,7 @@ def count_tokens_accurately(text: str) -> int:
         logger.error("tiktoken encoding failed: %s", e)
         raise
 
+
 def count_messages_tokens(messages: list[Any]) -> int:
     """
     Count total tokens in a list of messages accurately.
@@ -134,15 +137,17 @@ def count_messages_tokens(messages: list[Any]) -> int:
     """
     total = 0
     for msg in messages:
-        if hasattr(msg, 'content') and msg.content:
+        if hasattr(msg, "content") and msg.content:
             # Handle both string and complex content
             content = str(msg.content)
             total += count_tokens_accurately(content)
     return total
 
+
 # ============================================================================
 # Tool Definition Token Estimation
 # ============================================================================
+
 
 def estimate_tool_tokens(tools: list[Any]) -> int:
     """
@@ -174,12 +179,12 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
                 "type": "function",
                 "function": {
                     "name": tool.name,
-                    "description": tool.description if hasattr(tool, 'description') else "",
-                }
+                    "description": tool.description if hasattr(tool, "description") else "",
+                },
             }
 
             # Add parameters schema if available
-            if hasattr(tool, 'args_schema') and tool.args_schema:
+            if hasattr(tool, "args_schema") and tool.args_schema:
                 try:
                     tool_schema["function"]["parameters"] = tool.args_schema.schema()
                 except Exception:
@@ -191,10 +196,7 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
             tool_tokens = len(encoding.encode(schema_str))
             total_tokens += tool_tokens
 
-            logger.debug(
-                "Tool '%s': ~%d tokens (schema size: %d chars)",
-                tool.name, tool_tokens, len(schema_str)
-            )
+            logger.debug("Tool '%s': ~%d tokens (schema size: %d chars)", tool.name, tool_tokens, len(schema_str))
 
         except Exception as e:
             logger.error("Failed to estimate tokens for tool '%s': %s", tool.name, e)
@@ -202,6 +204,7 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
 
     logger.info("Tool definitions estimated at ~%d total tokens (%d tools)", total_tokens, len(tools))
     return total_tokens
+
 
 # ============================================================================
 # Model Context Limits
@@ -221,10 +224,8 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
 #
 # Always verify current limits from official provider documentation.
 
-def get_model_context_limit(
-    model_name: str,
-    llm_config: dict[str, Any] | None = None
-) -> int:
+
+def get_model_context_limit(model_name: str, llm_config: dict[str, Any] | None = None) -> int:
     """
     Get the context window limit for a given model.
 
@@ -253,7 +254,9 @@ def get_model_context_limit(
             actual_tokens = db_limit_k * 1000
             logger.debug(
                 "Using database config context limit: %dK tokens (%d tokens) for model '%s'",
-                db_limit_k, actual_tokens, model_name
+                db_limit_k,
+                actual_tokens,
+                model_name,
             )
             return actual_tokens
         else:
@@ -270,9 +273,9 @@ def get_model_context_limit(
         f"Refer to the model provider's documentation for the current context window size."
     )
 
+
 def calculate_max_tokens(
-    model_limit: int,
-    strategy: Literal["conservative", "balanced", "aggressive"] = DEFAULT_CONTEXT_STRATEGY
+    model_limit: int, strategy: Literal["conservative", "balanced", "aggressive"] = DEFAULT_CONTEXT_STRATEGY
 ) -> int:
     """
     Calculate the maximum tokens to use, reserving space for output.
@@ -290,16 +293,15 @@ def calculate_max_tokens(
     ratio = CONTEXT_STRATEGY_RATIOS.get(strategy, CONTEXT_STRATEGY_RATIOS[DEFAULT_CONTEXT_STRATEGY])
     max_tokens = int(model_limit * ratio)
 
-    logger.debug(
-        "Context limit: model=%d, strategy=%s, usable=%d tokens",
-        model_limit, strategy, max_tokens
-    )
+    logger.debug("Context limit: model=%d, strategy=%s, usable=%d tokens", model_limit, strategy, max_tokens)
 
     return max_tokens
+
 
 # ============================================================================
 # Message Trimming
 # ============================================================================
+
 
 def trim_messages_for_context(
     messages: list[Any],
@@ -353,7 +355,8 @@ def trim_messages_for_context(
         logger.warning(
             "Tool definitions (%d tokens) exceed input budget (%d tokens). "
             "Consider reducing context_limit or using fewer tools.",
-            tool_tokens, max_tokens
+            tool_tokens,
+            max_tokens,
         )
         available_for_messages = 0
 
@@ -363,13 +366,19 @@ def trim_messages_for_context(
     if current_tokens <= available_for_messages:
         logger.debug(
             "Messages fit in context: %d / %d tokens (available: %d, tools: %d)",
-            current_tokens, max_tokens, available_for_messages, tool_tokens
+            current_tokens,
+            max_tokens,
+            available_for_messages,
+            tool_tokens,
         )
         return messages
 
     logger.info(
         "Trimming messages: %d → %d tokens (budget: %d, tools: %d)",
-        current_tokens, available_for_messages, max_tokens, tool_tokens
+        current_tokens,
+        available_for_messages,
+        max_tokens,
+        tool_tokens,
     )
 
     # Manually separate and trim to ensure system messages are preserved
@@ -387,7 +396,8 @@ def trim_messages_for_context(
         # Not enough space for system messages - keep only system messages
         logger.warning(
             "System messages (%d tokens) exceed available space (%d tokens), truncating to system only",
-            system_tokens, available_for_messages
+            system_tokens,
+            available_for_messages,
         )
         return system_msgs[:1] if system_msgs else messages[-1:]
 
@@ -399,11 +409,15 @@ def trim_messages_for_context(
 
     logger.info(
         "Trimmed %d → %d messages (system: %d, history: %d → %d)",
-        len(messages), len(trimmed),
-        len(system_msgs), len(other_msgs), len(trimmed_other)
+        len(messages),
+        len(trimmed),
+        len(system_msgs),
+        len(other_msgs),
+        len(trimmed_other),
     )
 
     return trimmed
+
 
 def _trim_to_token_limit(messages: list[Any], max_tokens: int) -> list[Any]:
     """
@@ -454,7 +468,7 @@ def _trim_to_token_limit(messages: list[Any], max_tokens: int) -> list[Any]:
         len(groups) - len(trimmed_groups),
         len(trimmed),
         current_tokens,
-        _count_groups_tokens(trimmed_groups)
+        _count_groups_tokens(trimmed_groups),
     )
 
     return trimmed
@@ -481,18 +495,18 @@ def _build_message_groups(messages: list[Any]) -> list[list[Any]]:
         msg = messages[i]
 
         # If AIMessage with tool_calls, group it with all following ToolMessages
-        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             group = [msg]
             i += 1
 
             # Collect all following ToolMessages that match these tool_calls
-            tool_call_ids = {tc['id'] for tc in msg.tool_calls}
+            tool_call_ids = {tc["id"] for tc in msg.tool_calls}
 
             while i < len(messages):
                 next_msg = messages[i]
                 if isinstance(next_msg, ToolMessage):
                     # Check if this ToolMessage belongs to current AIMessage
-                    if hasattr(next_msg, 'tool_call_id') and next_msg.tool_call_id in tool_call_ids:
+                    if hasattr(next_msg, "tool_call_id") and next_msg.tool_call_id in tool_call_ids:
                         group.append(next_msg)
                         i += 1
                     else:
@@ -516,13 +530,15 @@ def _count_groups_tokens(groups: list[list[Any]]) -> int:
     total = 0
     for group in groups:
         for msg in group:
-            if hasattr(msg, 'content') and msg.content:
+            if hasattr(msg, "content") and msg.content:
                 total += count_tokens_accurately(str(msg.content))
     return total
+
 
 # ============================================================================
 # Token Usage Summary
 # ============================================================================
+
 
 def get_token_usage_summary(
     messages: list[Any],
@@ -575,9 +591,11 @@ def get_token_usage_summary(
         "needs_trimming": usage_percentage > 80,
     }
 
+
 # ============================================================================
 # Main Entry Point - Context Preparation with Template Injection
 # ============================================================================
+
 
 def prepare_context_messages(
     state_messages: list[Any],
@@ -685,7 +703,7 @@ def prepare_context_messages(
             formatted_tokens + trimmed_history_tokens + tool_tokens,
             model_limit_k,
             ((formatted_tokens + trimmed_history_tokens) / (model_limit_k * 1000)) * 100,
-            trim_strategy
+            trim_strategy,
         )
     else:
         # No trimming
@@ -699,10 +717,11 @@ def prepare_context_messages(
             formatted_tokens + history_tokens + tool_tokens,
             model_limit_k,
             (formatted_tokens / (model_limit_k * 1000)) * 100,
-            trim_strategy
+            trim_strategy,
         )
 
     return trimmed_messages
+
 
 # ============================================================================
 # Module Test
@@ -710,9 +729,7 @@ def prepare_context_messages(
 
 if __name__ == "__main__":
     # Simple test
-    test_messages = [
-        HumanMessage(f"Message {i}") for i in range(100)
-    ]
+    test_messages = [HumanMessage(f"Message {i}") for i in range(100)]
 
     # Test with mock llm_config
     mock_config = {"context_limit": 8, "context_strategy": "conservative"}
@@ -723,7 +740,7 @@ if __name__ == "__main__":
         topology_context='{"project_id": "test", "nodes": 5}',
         model_name="gpt-4o",
         llm_config=mock_config,
-        tools=None
+        tools=None,
     )
 
     print(f"Original: {len(test_messages)} messages")

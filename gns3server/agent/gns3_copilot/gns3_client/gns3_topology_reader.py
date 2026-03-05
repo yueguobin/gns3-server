@@ -38,10 +38,12 @@ from typing import Any
 
 from langchain.tools import BaseTool
 
-from gns3server.agent.gns3_copilot.gns3_client import Project, get_gns3_connector
+from gns3server.agent.gns3_copilot.gns3_client import Project
+from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
 
 # Define LangChain tool class
 class GNS3TopologyTool(BaseTool):
@@ -87,9 +89,7 @@ class GNS3TopologyTool(BaseTool):
             # Validate project_id parameter
             if not project_id:
                 logger.error("project_id parameter is required.")
-                return {
-                    "error": "project_id parameter is required. Please provide a valid project UUID."
-                }
+                return {"error": "project_id parameter is required. Please provide a valid project UUID."}
 
             # Initialize Gns3Connector using factory function
             logger.info("Connecting to GNS3 server...")
@@ -97,9 +97,7 @@ class GNS3TopologyTool(BaseTool):
 
             if server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {
-                    "error": "Failed to connect to GNS3 server. Please check your configuration."
-                }
+                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
 
             # Use the provided project_id directly
             logger.info(f"Retrieving topology for project_id: {project_id}")
@@ -111,18 +109,18 @@ class GNS3TopologyTool(BaseTool):
                 "project_id": project.project_id,
                 "name": project.name,
                 "status": project.status,
-                "nodes": self._clean_nodes_ports(
-                    copy.deepcopy(project.nodes_inventory())
-                ),
+                "nodes": self._clean_nodes_ports(copy.deepcopy(project.nodes_inventory())),
                 "links": project.links_summary(is_print=False),
             }
 
             # Log topology result
-            logger.info("Topology retrieved: project_id=%s, name=%s, nodes=%d, links=%d",
-                        topology.get("project_id"),
-                        topology.get("name"),
-                        len(topology.get("nodes", {})),
-                        len(topology.get("links", [])))
+            logger.info(
+                "Topology retrieved: project_id=%s, name=%s, nodes=%d, links=%d",
+                topology.get("project_id"),
+                topology.get("name"),
+                len(topology.get("nodes", {})),
+                len(topology.get("links", [])),
+            )
             logger.debug("Topology details: %s", topology)
 
             return topology
@@ -138,11 +136,9 @@ class GNS3TopologyTool(BaseTool):
         """
         for node in data.values():  # Iterate through R-1, R-2, R-3, R-4
             if "ports" in node and isinstance(node["ports"], list):
-                node["ports"] = [
-                    {"name": port["name"], "short_name": port["short_name"]}
-                    for port in node["ports"]
-                ]
+                node["ports"] = [{"name": port["name"], "short_name": port["short_name"]} for port in node["ports"]]
         return data
+
 
 if __name__ == "__main__":
     # Test the tool

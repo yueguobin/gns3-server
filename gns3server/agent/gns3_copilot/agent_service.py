@@ -32,26 +32,36 @@ in the project directory.
 """
 
 import asyncio
-import json
 import logging
 import os
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Any, Optional, List
+from typing import Any
+from typing import AsyncGenerator
+from typing import Dict
+from typing import List
+from typing import Optional
 from uuid import uuid4
 
 import aiosqlite
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from gns3server.agent.gns3_copilot.agent.gns3_copilot import agent_builder
-from gns3server.agent.gns3_copilot.chat_sessions_repository import ChatSessionsRepository
+from gns3server.agent.gns3_copilot.chat_sessions_repository import (
+    ChatSessionsRepository,
+)
 from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
     set_current_jwt_token,
+)
+from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
     set_current_llm_config,
 )
-from gns3server.agent.gns3_copilot.utils.message_converters import convert_langchain_to_openai
+from gns3server.agent.gns3_copilot.utils.message_converters import (
+    convert_langchain_to_openai,
+)
 
 log = logging.getLogger(__name__)
+
 
 class AgentService:
     """
@@ -176,7 +186,9 @@ class AgentService:
             await conn.commit()
 
         # Create pinned index (after column is guaranteed to exist)
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_pinned_updated ON chat_sessions(pinned DESC, updated_at DESC)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pinned_updated ON chat_sessions(pinned DESC, updated_at DESC)"
+        )
 
         await conn.commit()
         log.debug("chat_sessions table created in checkpoint database")
@@ -197,7 +209,7 @@ class AgentService:
         user_id: Optional[str] = None,
         jwt_token: Optional[str] = None,
         mode: str = "text",
-        llm_config: Optional[Dict[str, Any]] = None
+        llm_config: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream chat responses from the agent.
@@ -234,10 +246,7 @@ class AgentService:
         if is_new_session:
             # Create new session
             session = await repo.create_session(
-                thread_id=session_id,
-                user_id=user_id or "",
-                project_id=project_id or "",
-                title="New Conversation"
+                thread_id=session_id, user_id=user_id or "", project_id=project_id or "", title="New Conversation"
             )
             log.debug("Created new chat session: thread_id=%s", session_id)
 
@@ -247,8 +256,9 @@ class AgentService:
             log.debug("JWT token set in context")
         if llm_config:
             set_current_llm_config(llm_config)
-            log.debug("LLM config set in context: provider=%s, model=%s",
-                       llm_config.get("provider"), llm_config.get("model"))
+            log.debug(
+                "LLM config set in context: provider=%s, model=%s", llm_config.get("provider"), llm_config.get("model")
+            )
 
         # Build config - only thread-safe identifiers
         config = {
@@ -258,7 +268,7 @@ class AgentService:
             },
             "metadata": {
                 "user_id": user_id,
-            }
+            },
         }
 
         # Build inputs
@@ -353,10 +363,17 @@ class AgentService:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=input_tokens + output_tokens,
-                last_message_at=last_message_at
+                last_message_at=last_message_at,
             )
-            log.info("Session statistics updated: thread_id=%s, messages=%d, llm_calls=%d, tokens=%d+%d=%d",
-                     session_id, message_count, llm_calls_count, input_tokens, output_tokens, input_tokens + output_tokens)
+            log.info(
+                "Session statistics updated: thread_id=%s, messages=%d, llm_calls=%d, tokens=%d+%d=%d",
+                session_id,
+                message_count,
+                llm_calls_count,
+                input_tokens,
+                output_tokens,
+                input_tokens + output_tokens,
+            )
 
             # Sync auto-generated title from checkpoint state
             final_state = await graph.aget_state(config)
@@ -365,8 +382,7 @@ class AgentService:
                 current_session = await repo.get_session_by_thread(session_id)
                 if current_session and current_session.title != generated_title:
                     await repo.update_session(thread_id=session_id, title=generated_title)
-                    log.info("Auto-generated title synced: thread_id=%s, title=%s",
-                            session_id, generated_title)
+                    log.info("Auto-generated title synced: thread_id=%s, title=%s", session_id, generated_title)
 
         except Exception as e:
             log.error("Error in stream_chat: %s", e, exc_info=True)
@@ -396,11 +412,7 @@ class AgentService:
 
         elif event_type == "on_tool_start":
             # Tool execution started
-            return {
-                "type": "tool_start",
-                "tool_name": event.get("name", ""),
-                "session_id": session_id
-            }
+            return {"type": "tool_start", "tool_name": event.get("name", ""), "session_id": session_id}
 
         elif event_type == "on_tool_end":
             # Tool execution completed
@@ -412,7 +424,7 @@ class AgentService:
                 "type": "tool_end",
                 "tool_name": event.get("name", ""),
                 "tool_output": output,
-                "session_id": session_id
+                "session_id": session_id,
             }
 
         return None
@@ -441,19 +453,11 @@ class AgentService:
 
                 title = state.values.get("conversation_title", "New Conversation")
 
-                return {
-                    "thread_id": session_id,
-                    "title": title,
-                    "messages": messages
-                }
+                return {"thread_id": session_id, "title": title, "messages": messages}
         except Exception as e:
             log.error("Error getting history: %s", e, exc_info=True)
 
-        return {
-            "thread_id": session_id,
-            "title": "New Conversation",
-            "messages": []
-        }
+        return {"thread_id": session_id, "title": "New Conversation", "messages": []}
 
     def _convert_message_to_dict(self, msg) -> Dict[str, Any]:
         """Convert a LangChain message to OpenAI-compatible dict format."""

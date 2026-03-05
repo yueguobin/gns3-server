@@ -38,10 +38,12 @@ from typing import Any
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 
-from gns3server.agent.gns3_copilot.gns3_client import Link, get_gns3_connector
+from gns3server.agent.gns3_copilot.gns3_client import Link
+from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
 
 class GNS3LinkTool(BaseTool):
     """
@@ -96,9 +98,7 @@ class GNS3LinkTool(BaseTool):
     ]
     """
 
-    def _run(
-        self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None
-    ) -> list[dict[str, Any]]:
+    def _run(self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None) -> list[dict[str, Any]]:
         """
         Creates one or multiple links between nodes in a GNS3 project.
 
@@ -133,11 +133,7 @@ class GNS3LinkTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return [
-                    {
-                        "error": "Failed to connect to GNS3 server. Please check your configuration."
-                    }
-                ]
+                return [{"error": "Failed to connect to GNS3 server. Please check your configuration."}]
 
             created_links = []
 
@@ -160,12 +156,8 @@ class GNS3LinkTool(BaseTool):
                         continue
 
                     # Get node details
-                    node1 = gns3_server.get_node(
-                        project_id=project_id, node_id=node_id1
-                    )
-                    node2 = gns3_server.get_node(
-                        project_id=project_id, node_id=node_id2
-                    )
+                    node1 = gns3_server.get_node(project_id=project_id, node_id=node_id1)
+                    node2 = gns3_server.get_node(project_id=project_id, node_id=node_id2)
                     if not node1 or not node2:
                         error_msg = f"Node not found in link {i}"
                         logger.error(error_msg)
@@ -174,19 +166,11 @@ class GNS3LinkTool(BaseTool):
 
                     # Find port information
                     port1_info = next(
-                        (
-                            port
-                            for port in node1.get("ports", [])
-                            if port.get("name") == port1
-                        ),
+                        (port for port in node1.get("ports", []) if port.get("name") == port1),
                         None,
                     )
                     port2_info = next(
-                        (
-                            port
-                            for port in node2.get("ports", [])
-                            if port.get("name") == port2
-                        ),
+                        (port for port in node2.get("ports", []) if port.get("name") == port2),
                         None,
                     )
                     if not port1_info or not port2_info:
@@ -248,6 +232,7 @@ class GNS3LinkTool(BaseTool):
         except Exception as e:
             logger.error("Failed to process link creation: %s", e)
             return [{"error": f"Failed to process link creation: {str(e)}"}]
+
 
 if __name__ == "__main__":
     # Test with single link

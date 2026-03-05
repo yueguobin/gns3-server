@@ -32,6 +32,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
 def get_device_ports_from_topology(
     device_names: list[str],
     project_id: str | None = None,

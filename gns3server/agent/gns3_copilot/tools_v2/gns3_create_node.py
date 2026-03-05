@@ -38,10 +38,12 @@ from typing import Any
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 
-from gns3server.agent.gns3_copilot.gns3_client import Node, get_gns3_connector
+from gns3server.agent.gns3_copilot.gns3_client import Node
+from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
 
 class GNS3CreateNodeTool(BaseTool):
     """
@@ -174,9 +176,7 @@ class GNS3CreateNodeTool(BaseTool):
                         "Invalid input: Node %d missing or invalid template_id, x, or y.",
                         i + 1,
                     )
-                    return {
-                        "error": f"Node {i + 1} missing or invalid template_id, x, or y."
-                    }
+                    return {"error": f"Node {i + 1} missing or invalid template_id, x, or y."}
 
             # Initialize Gns3Connector using factory function
             logger.info("Connecting to GNS3 server...")
@@ -184,9 +184,7 @@ class GNS3CreateNodeTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {
-                    "error": "Failed to connect to GNS3 server. Please check your configuration."
-                }
+                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
 
             # Create nodes
             logger.info("Creating %d nodes in project %s...", len(nodes), project_id)
@@ -266,6 +264,7 @@ class GNS3CreateNodeTool(BaseTool):
         except Exception as e:
             logger.error("Failed to process node creation request: %s", e)
             return {"error": f"Failed to process node creation request: {str(e)}"}
+
 
 if __name__ == "__main__":
     # Test the tool locally with multiple nodes

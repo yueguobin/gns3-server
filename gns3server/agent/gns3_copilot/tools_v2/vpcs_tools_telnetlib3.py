@@ -30,7 +30,6 @@ Supports concurrent execution of multiple command groups across multiple VPCS de
 
 import json
 import logging
-import os
 import re
 import threading
 from time import sleep
@@ -44,6 +43,7 @@ from gns3server.agent.gns3_copilot.gns3_client import get_gns3_server_host
 from gns3server.agent.gns3_copilot.utils import get_device_ports_from_topology
 
 logger = logging.getLogger(__name__)
+
 
 class VPCSMultiCommands(BaseTool):
     """
@@ -131,9 +131,7 @@ class VPCSMultiCommands(BaseTool):
 
         # Check if device has port information
         if device_name not in device_ports:
-            logger.warning(
-                "Device '%s' not found in topology or missing console port", device_name
-            )
+            logger.warning("Device '%s' not found in topology or missing console port", device_name)
             results_list[index] = {
                 "device_name": device_name,
                 "status": "error",
@@ -199,9 +197,7 @@ class VPCSMultiCommands(BaseTool):
             )
 
         except Exception as e:
-            logger.error(
-                "Error executing commands on device '%s': %s", device_name, str(e)
-            )
+            logger.error("Error executing commands on device '%s': %s", device_name, str(e))
             results_list[index] = {
                 "device_name": device_name,
                 "status": "error",
@@ -256,9 +252,7 @@ class VPCSMultiCommands(BaseTool):
         else:
             # Handle standard models where the framework has already parsed the JSON.
             parsed_input = tool_input
-            logger.info(
-                "Using tool input directly as type: %s", type(parsed_input).__name__
-            )
+            logger.info("Using tool input directly as type: %s", type(parsed_input).__name__)
 
         # Validate input is a dictionary
         if not isinstance(parsed_input, dict):
@@ -278,9 +272,7 @@ class VPCSMultiCommands(BaseTool):
 
         # Validate project_id format
         if not self._validate_project_id(project_id):
-            error_msg = (
-                f"Invalid project_id format: {project_id}. Expected UUID format."
-            )
+            error_msg = f"Invalid project_id format: {project_id}. Expected UUID format."
             logger.error(error_msg)
             return ([{"error": error_msg}], "")
 
@@ -305,9 +297,7 @@ class VPCSMultiCommands(BaseTool):
         # Validate each item in device_configs
         for i, item in enumerate(device_configs):
             if not isinstance(item, dict):
-                error_msg = (
-                    f"Item at index {i} must be a dictionary, got {type(item).__name__}"
-                )
+                error_msg = f"Item at index {i} must be a dictionary, got {type(item).__name__}"
                 logger.error(error_msg)
                 return ([{"error": error_msg}], "")
 
@@ -324,8 +314,7 @@ class VPCSMultiCommands(BaseTool):
 
             if not isinstance(item["commands"], list):
                 error_msg = (
-                    f"'commands' in item at index {i} must be a list, "
-                    f"but got {type(item['commands']).__name__}"
+                    f"'commands' in item at index {i} must be a list, " f"but got {type(item['commands']).__name__}"
                 )
                 logger.error(error_msg)
                 return ([{"error": error_msg}], "")
@@ -363,20 +352,14 @@ class VPCSMultiCommands(BaseTool):
         device_configs, project_id = self._validate_tool_input(tool_input)
 
         # Check if validation returned an error
-        if (
-            isinstance(device_configs, list)
-            and len(device_configs) > 0
-            and "error" in device_configs[0]
-        ):
+        if isinstance(device_configs, list) and len(device_configs) > 0 and "error" in device_configs[0]:
             return device_configs
 
         # Extract all device names from input using set comprehension
         device_names = {config["device_name"] for config in device_configs}
 
         # Get device port mapping with project_id
-        device_ports = get_device_ports_from_topology(
-            list(device_names), project_id=project_id
-        )
+        device_ports = get_device_ports_from_topology(list(device_names), project_id=project_id)
         logger.info(
             "Retrieved port mappings for %d devices: %s",
             len(device_ports),
@@ -394,7 +377,6 @@ class VPCSMultiCommands(BaseTool):
         # Create thread for each command group
         logger.info("Starting parallel execution for %d devices", len(device_configs))
         for i, cmd_group in enumerate(device_configs):
-            device_name = cmd_group["device_name"]
             thread = threading.Thread(
                 target=self._connect_and_execute_commands,
                 args=(
@@ -425,6 +407,7 @@ class VPCSMultiCommands(BaseTool):
         )
 
         return results
+
 
 if __name__ == "__main__":
     # Example usage

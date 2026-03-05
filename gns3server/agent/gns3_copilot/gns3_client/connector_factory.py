@@ -41,23 +41,21 @@ Features:
 import asyncio
 import concurrent.futures
 import logging
-import threading
 from typing import Optional
 from uuid import UUID
 
-# Local imports
-from gns3server.agent.gns3_copilot.gns3_client.custom_gns3fy import Gns3Connector
 from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
     get_current_jwt_token,
-    get_current_llm_config,
-    set_current_jwt_token,
-    set_current_llm_config,
 )
+
+# Local imports
+from gns3server.agent.gns3_copilot.gns3_client.custom_gns3fy import Gns3Connector
 
 logger = logging.getLogger(__name__)
 
 # Fallback default URL
 DEFAULT_GNS3_URL = "http://127.0.0.1:3080"
+
 
 def _get_url_from_controller() -> Optional[str]:
     """Try to get GNS3 server URL from running Controller instance.
@@ -93,6 +91,7 @@ def _get_url_from_controller() -> Optional[str]:
         logger.warning("Unexpected error getting URL from Controller: %s", str(e))
         return None
 
+
 def _get_url_from_config() -> Optional[str]:
     """Try to get GNS3 server URL from Config settings.
 
@@ -121,6 +120,7 @@ def _get_url_from_config() -> Optional[str]:
     except Exception as e:
         logger.warning("Unexpected error getting URL from Config: %s", str(e))
         return None
+
 
 def get_gns3_connector(jwt_token: Optional[str] = None, url: Optional[str] = None) -> Optional[Gns3Connector]:
     """Create and return a Gns3Connector instance with JWT authentication.
@@ -184,7 +184,7 @@ def get_gns3_connector(jwt_token: Optional[str] = None, url: Optional[str] = Non
                         "Using fallback default URL: %s. "
                         "This may not be correct if your GNS3 server is configured differently. "
                         "Consider providing the URL explicitly or ensuring gns3server is running.",
-                        url
+                        url,
                     )
         else:
             logger.info("Using explicitly provided GNS3 server URL: %s", url)
@@ -208,22 +208,20 @@ def get_gns3_connector(jwt_token: Optional[str] = None, url: Optional[str] = Non
         logger.error("Failed to create Gns3Connector: %s", str(e), exc_info=True)
         return None
 
-async def get_gns3_connector_with_llm_config(
-    user_id,
-    jwt_token: str,
-    url: Optional[str] = None
-) -> Optional[dict]:
+
+async def get_gns3_connector_with_llm_config(user_id, jwt_token: str, url: Optional[str] = None, app=None) -> Optional[dict]:
     """
     Create Gns3Connector and retrieve LLM model configuration for the user.
 
     This is a convenience function that combines:
     1. get_gns3_connector() - Create GNS3 API connector
-    2. get_user_llm_config() - Retrieve user's default LLM config with API key
+    2. get_llm_config() - Retrieve user's default LLM config with API key
 
     Args:
         user_id: User UUID (can be string or UUID object)
         jwt_token: JWT token for authentication
         url: GNS3 server URL (optional, auto-detected if not provided)
+        app: FastAPI application instance (optional, for direct database access)
 
     Returns:
         Dictionary with keys:
@@ -263,21 +261,12 @@ async def get_gns3_connector_with_llm_config(
             url = _detect_url_for_api()
 
         # Step 3: Get LLM config
-        from gns3server.agent.gns3_copilot.utils.llm_config_helper import get_user_llm_config
-
-        llm_config = await get_user_llm_config(
-            user_id=user_id,
-            jwt_token=jwt_token,
-            gns3_url=url
-        )
+        llm_config = get_llm_config(user_id=user_id, jwt_token=jwt_token, app=app)
 
         if not llm_config:
             logger.warning(f"No LLM config found for user {user_id}")
             # Still return result with connector only
-            return {
-                "connector": connector,
-                "llm_config": None
-            }
+            return {"connector": connector, "llm_config": None}
 
         logger.info(
             f"Successfully initialized GNS3 connector and LLM config for user {user_id}: "
@@ -286,14 +275,12 @@ async def get_gns3_connector_with_llm_config(
             f"llm_model={llm_config.get('model')}"
         )
 
-        return {
-            "connector": connector,
-            "llm_config": llm_config
-        }
+        return {"connector": connector, "llm_config": llm_config}
 
     except Exception as e:
         logger.error(f"Failed to get GNS3 connector with LLM config: {e}", exc_info=True)
         return None
+
 
 def _detect_url_for_api() -> Optional[str]:
     """
@@ -324,6 +311,7 @@ def _detect_url_for_api() -> Optional[str]:
     # Fallback
     logger.debug("Using fallback URL for API call: %s", DEFAULT_GNS3_URL)
     return DEFAULT_GNS3_URL
+
 
 def get_gns3_server_host() -> str:
     """
@@ -361,6 +349,7 @@ def get_gns3_server_host() -> str:
         logger.warning("Failed to extract host from URL %s: %s, using fallback", url, e)
         return DEFAULT_GNS3_URL.split("://")[1].split(":")[0]
 
+
 def get_llm_config(user_id, jwt_token: str, app=None) -> Optional[dict]:
     """
     Get LLM model configuration for a user.
@@ -394,7 +383,9 @@ def get_llm_config(user_id, jwt_token: str, app=None) -> Optional[dict]:
 
         # If app is provided, use direct database access (preferred)
         if app is not None:
-            from gns3server.agent.gns3_copilot.utils.llm_config_helper import get_user_llm_config_with_app
+            from gns3server.agent.gns3_copilot.utils.llm_config_helper import (
+                get_user_llm_config_with_app,
+            )
 
             # Run the async function in sync context
             try:
@@ -402,10 +393,7 @@ def get_llm_config(user_id, jwt_token: str, app=None) -> Optional[dict]:
                 # We're in an async context with a running loop
                 # This shouldn't happen since this is a sync function
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        get_user_llm_config_with_app(user_id, app)
-                    )
+                    future = executor.submit(asyncio.run, get_user_llm_config_with_app(user_id, app))
                     return future.result(timeout=10)
             except RuntimeError:
                 # No running event loop - we're in a sync context
@@ -417,10 +405,7 @@ def get_llm_config(user_id, jwt_token: str, app=None) -> Optional[dict]:
                 if loop.is_running():
                     # Loop is running but not the running loop (edge case)
                     with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(
-                            asyncio.run,
-                            get_user_llm_config_with_app(user_id, app)
-                        )
+                        future = executor.submit(asyncio.run, get_user_llm_config_with_app(user_id, app))
                         return future.result(timeout=10)
                 else:
                     # Loop exists but not running - use it

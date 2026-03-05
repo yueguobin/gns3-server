@@ -71,6 +71,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
 def parse_tool_content(
     content: str | dict | list | int | float | bool | None,
     fallback_to_raw: bool = True,
@@ -172,9 +173,7 @@ def parse_tool_content(
             # (higher priority as many tools return Python format strings)
             try:
                 result = ast.literal_eval(s)
-                logger.info(
-                    "Successfully parsed as Python literal, returning: %s", result
-                )
+                logger.info("Successfully parsed as Python literal, returning: %s", result)
                 return result
             except (ValueError, SyntaxError):
                 pass
@@ -211,8 +210,7 @@ def parse_tool_content(
 
     # Handle unsupported types
     error_msg = (  # type: ignore[unreachable]
-        "Content must be str, dict, list, int, float, bool, or None, got "
-        f"{type(content).__name__}"
+        "Content must be str, dict, list, int, float, bool, or None, got " f"{type(content).__name__}"
     )
     logger.error(error_msg)
 
@@ -227,9 +225,8 @@ def parse_tool_content(
     logger.info("Returning error: %s", result)
     return result
 
-def format_tool_response(
-    content: str | dict | list | int | float | bool | None, indent: int = 2
-) -> str:
+
+def format_tool_response(content: str | dict | list | int | float | bool | None, indent: int = 2) -> str:
     """
     Format tool response as a beautiful JSON string for UI display.
 
@@ -256,9 +253,7 @@ def format_tool_response(
         # If the parsed result cannot be serialized, convert to string and wrap
         logger.error("Cannot serialize parsed result to JSON: %s", e)
         try:
-            result = json.dumps(
-                {"raw": str(content)}, ensure_ascii=False, indent=indent
-            )
+            result = json.dumps({"raw": str(content)}, ensure_ascii=False, indent=indent)
             logger.info("format_tool_response returning fallback: %s", result)
             return result
         except Exception:
@@ -276,10 +271,8 @@ def format_tool_response(
         logger.info("format_tool_response returning error: %s", result)
         return result
 
-def normalize_tool_response(
-    response: dict | list | str,
-    tool_name: str = "unknown"
-) -> dict:
+
+def normalize_tool_response(response: dict | list | str, tool_name: str = "unknown") -> dict:
     """
     Normalize tool response to standard format for consistent frontend display.
 
@@ -310,10 +303,7 @@ def normalize_tool_response(
         >>> normalize_tool_response([{"device_name": "R1", "status": "success"}])
         {'success': True, 'total': 1, 'successful': 1, 'failed': 0, 'data': [...], 'metadata': {}}
     """
-    metadata = {
-        "tool_name": tool_name,
-        "normalized_at": datetime.utcnow().isoformat()
-    }
+    metadata = {"tool_name": tool_name, "normalized_at": datetime.utcnow().isoformat()}
 
     # Handle error responses
     if isinstance(response, dict) and "error" in response and len(response) == 1:
@@ -324,19 +314,12 @@ def normalize_tool_response(
             "failed": 0,
             "data": [],
             "error": str(response["error"]),
-            "metadata": metadata
+            "metadata": metadata,
         }
 
     # Handle empty responses
     if not response:
-        return {
-            "success": True,
-            "total": 0,
-            "successful": 0,
-            "failed": 0,
-            "data": [],
-            "metadata": metadata
-        }
+        return {"success": True, "total": 0, "successful": 0, "failed": 0, "data": [], "metadata": metadata}
 
     # Handle list responses (most tools return list of device results)
     if isinstance(response, list):
@@ -358,12 +341,7 @@ def normalize_tool_response(
                 normalized_data.append(normalized_item)
             else:
                 # Non-dict items in list
-                normalized_data.append({
-                    "id": "",
-                    "name": "",
-                    "status": "unknown",
-                    "result": str(item)
-                })
+                normalized_data.append({"id": "", "name": "", "status": "unknown", "result": str(item)})
 
         return {
             "success": failed == 0,
@@ -371,7 +349,7 @@ def normalize_tool_response(
             "successful": successful,
             "failed": failed,
             "data": normalized_data,
-            "metadata": metadata
+            "metadata": metadata,
         }
 
     # Handle dict responses (some tools return summary + results)
@@ -385,7 +363,7 @@ def normalize_tool_response(
                 "failed": response.get("failed", 0),
                 "data": response.get("data", []),
                 "error": response.get("error"),
-                "metadata": {**metadata, **response.get("metadata", {})}
+                "metadata": {**metadata, **response.get("metadata", {})},
             }
 
         # Legacy format: extract common fields
@@ -403,20 +381,24 @@ def normalize_tool_response(
             data = response["data"]
         elif "output" in response:
             # Single device response
-            data = [{
-                "name": response.get("device_name", ""),
-                "status": response.get("status", "success"),
-                "result": response["output"]
-            }]
+            data = [
+                {
+                    "name": response.get("device_name", ""),
+                    "status": response.get("status", "success"),
+                    "result": response["output"],
+                }
+            ]
 
         # If no data found but have status, create single item
         if not data and "status" in response:
-            data = [{
-                "name": response.get("device_name") or response.get("name") or "",
-                "status": response["status"],
-                "result": response.get("output") or response.get("result") or "",
-                "error": response.get("error") or ""
-            }]
+            data = [
+                {
+                    "name": response.get("device_name") or response.get("name") or "",
+                    "status": response["status"],
+                    "result": response.get("output") or response.get("result") or "",
+                    "error": response.get("error") or "",
+                }
+            ]
 
         # Recursively normalize data items
         if data and isinstance(data, list):
@@ -429,7 +411,7 @@ def normalize_tool_response(
                 "successful": successful,
                 "failed": failed,
                 "data": [],
-                "metadata": metadata
+                "metadata": metadata,
             }
 
     # Handle string responses (parse first)
@@ -443,14 +425,10 @@ def normalize_tool_response(
         "total": 1,
         "successful": 1,
         "failed": 0,
-        "data": [{
-            "id": "",
-            "name": "",
-            "status": "unknown",
-            "result": str(response)
-        }],
-        "metadata": metadata
+        "data": [{"id": "", "name": "", "status": "unknown", "result": str(response)}],
+        "metadata": metadata,
     }
+
 
 # Test function to verify the implementation
 def _test_parse_tool_content() -> None:
@@ -509,6 +487,7 @@ def _test_parse_tool_content() -> None:
         except Exception:
             valid = "✗"
         print(f"Format Test {i + 1}: {valid} Input: {repr(input_data)} -> {result}")
+
 
 if __name__ == "__main__":
     _test_parse_tool_content()

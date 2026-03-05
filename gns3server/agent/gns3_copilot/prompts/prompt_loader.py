@@ -42,6 +42,7 @@ from .lab_assistant_prompt import LAB_ASSISTANT_PROMPT
 
 logger = logging.getLogger(__name__)
 
+
 def load_system_prompt(llm_config: dict | None = None) -> str:
     """
     Load the system prompt for GNS3-Copilot.

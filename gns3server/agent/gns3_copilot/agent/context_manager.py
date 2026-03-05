@@ -44,11 +44,13 @@ Requirements:
 import json
 import logging
 import warnings
-from typing import Any, Callable
+from typing import Any
+from typing import Callable
 
 import tiktoken
-
-from langchain_core.messages import BaseMessage, SystemMessage, trim_messages
+from langchain_core.messages import BaseMessage
+from langchain_core.messages import SystemMessage
+from langchain_core.messages import trim_messages
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,7 @@ TOKENS_PER_K = 1000
 # ============================================================================
 # Token Counting Functions
 # ============================================================================
+
 
 def count_tokens(text: str) -> int:
     """
@@ -126,11 +129,11 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
                 "function": {
                     "name": tool.name,
                     "description": tool.description,
-                }
+                },
             }
 
             # Add parameters schema if available
-            if hasattr(tool, 'args_schema') and tool.args_schema:
+            if hasattr(tool, "args_schema") and tool.args_schema:
                 try:
                     # Try Pydantic v2 method (model_json_schema)
                     tool_schema["function"]["parameters"] = tool.args_schema.model_json_schema()
@@ -141,15 +144,15 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
                     except Exception:
                         # Both methods failed, use empty schema
                         logger.debug(
-                            "Failed to get schema for tool %s, using empty parameters",
-                            getattr(tool, 'name', 'unknown')
+                            "Failed to get schema for tool %s, using empty parameters", getattr(tool, "name", "unknown")
                         )
                         tool_schema["function"]["parameters"] = {}
                 except Exception as e:
                     # model_json_schema() raised an exception
                     logger.debug(
                         "model_json_schema() failed for tool %s: %s, trying v1 fallback",
-                        getattr(tool, 'name', 'unknown'), e
+                        getattr(tool, "name", "unknown"),
+                        e,
                     )
                     try:
                         tool_schema["function"]["parameters"] = tool.args_schema.schema()
@@ -182,7 +185,7 @@ def _count_tokens_for_message(message: BaseMessage) -> int:
         Estimated token count for the message
     """
     content = ""
-    if hasattr(message, 'content') and message.content:
+    if hasattr(message, "content") and message.content:
         content = str(message.content)
 
     return count_tokens(content)
@@ -191,6 +194,7 @@ def _count_tokens_for_message(message: BaseMessage) -> int:
 # ============================================================================
 # Pre-Model Hook Factory
 # ============================================================================
+
 
 def create_pre_model_hook(
     system_prompt: str,
@@ -246,6 +250,7 @@ def create_pre_model_hook(
         - In ReAct loops with multiple LLM calls, topology is re-injected each time
         - This is acceptable for GNS3-Copilot's usage patterns (low concurrency, short conversations)
     """
+
     def pre_model_hook(state: dict) -> dict:
         """
         LangGraph pre_model_hook - called before each LLM invocation.
@@ -284,8 +289,7 @@ def create_pre_model_hook(
 
         if "context_limit" not in llm_config:
             logger.error(
-                "context_limit not found in LLM config. "
-                "This is a required field. Please configure context_limit."
+                "context_limit not found in LLM config. " "This is a required field. Please configure context_limit."
             )
             raise ValueError("context_limit is required in LLM config")
 
@@ -313,10 +317,7 @@ def create_pre_model_hook(
 
         # Step 2: Inject topology into system prompt
         messages_with_system = _inject_topology_into_system(
-            messages=messages,
-            system_prompt=system_prompt,
-            state=state,
-            get_topology_func=get_topology_func
+            messages=messages, system_prompt=system_prompt, state=state, get_topology_func=get_topology_func
         )
 
         # Step 3: Calculate token breakdown for logging and validation
@@ -324,9 +325,7 @@ def create_pre_model_hook(
         system_tokens = _count_tokens_for_message(system_message)
 
         # Calculate tokens for messages_with_system (including system)
-        messages_with_system_tokens = sum(
-            _count_tokens_for_message(m) for m in messages_with_system
-        )
+        messages_with_system_tokens = sum(_count_tokens_for_message(m) for m in messages_with_system)
 
         # Calculate available budget
         model_limit_tokens = context_limit_k * TOKENS_PER_K
@@ -345,21 +344,29 @@ def create_pre_model_hook(
                 "This will likely cause LLM call failures. "
                 "Recommendations: 1) Reduce system prompt length, 2) Reduce number of tools, "
                 "3) Use a model with larger context window, or 4) Switch to 'conservative' strategy.",
-                system_tokens, tool_tokens, max_input_tokens
+                system_tokens,
+                tool_tokens,
+                max_input_tokens,
             )
         elif max_tokens_for_trim < system_tokens * 1.5:
             # Less than 1.5x system tokens means very little room for history
             logger.warning(
                 "System prompt (%d tokens) + tools (%d tokens) leave minimal room for conversation history (%d tokens remaining). "
                 "Consider reducing system prompt length or number of tools.",
-                system_tokens, tool_tokens, max_tokens_for_trim - system_tokens
+                system_tokens,
+                tool_tokens,
+                max_tokens_for_trim - system_tokens,
             )
 
         # Debug log with clear terminology
         logger.debug(
             "Token breakdown: system=%d, all_messages=%d (system+history), tools=%d, trim_budget=%d (limit=%dK, strategy=%s)",
-            system_tokens, messages_with_system_tokens, tool_tokens, max_tokens_for_trim,
-            context_limit_k, strategy
+            system_tokens,
+            messages_with_system_tokens,
+            tool_tokens,
+            max_tokens_for_trim,
+            context_limit_k,
+            strategy,
         )
 
         # Step 4: Trim messages to fit
@@ -380,16 +387,25 @@ def create_pre_model_hook(
             if len(trimmed) < len(messages_with_system):
                 logger.info(
                     "Messages trimmed: %d → %d msgs. Total: ~%d tokens + %d tools = %d / %dK (%.1f%%), strategy=%s",
-                    len(messages_with_system), len(trimmed),
-                    final_total, tool_tokens, final_total + tool_tokens,
-                    context_limit_k, usage_percent, strategy
+                    len(messages_with_system),
+                    len(trimmed),
+                    final_total,
+                    tool_tokens,
+                    final_total + tool_tokens,
+                    context_limit_k,
+                    usage_percent,
+                    strategy,
                 )
             else:
                 logger.info(
                     "Context ready: %d msgs, ~%d tokens + %d tools = %d / %dK (%.1f%%), strategy=%s",
-                    len(trimmed), final_total, tool_tokens,
-                    final_total + tool_tokens, context_limit_k,
-                    usage_percent, strategy
+                    len(trimmed),
+                    final_total,
+                    tool_tokens,
+                    final_total + tool_tokens,
+                    context_limit_k,
+                    usage_percent,
+                    strategy,
                 )
 
             return {"messages": trimmed}
@@ -433,19 +449,15 @@ def _inject_topology_into_system(
 
     if topology_data:
         topology_str = str(topology_data)
-        formatted_prompt = system_prompt.replace(
-            "{{topology_info}}",
-            f"\n\n## Current Topology\n{topology_str}"
-        )
-        logger.info("✓ Topology injected: %d chars, nodes: %s",
-                   len(topology_str),
-                   list(topology_data.get("nodes", {}).keys())[:5])  # Show first 5 node names
+        formatted_prompt = system_prompt.replace("{{topology_info}}", f"\n\n## Current Topology\n{topology_str}")
+        logger.info(
+            "✓ Topology injected: %d chars, nodes: %s",
+            len(topology_str),
+            list(topology_data.get("nodes", {}).keys())[:5],
+        )  # Show first 5 node names
         logger.debug("Full topology data: %s", topology_str[:500])  # First 500 chars
     else:
-        formatted_prompt = system_prompt.replace(
-            "{{topology_info}}",
-            "(No topology information available)"
-        )
+        formatted_prompt = system_prompt.replace("{{topology_info}}", "(No topology information available)")
         logger.warning("✗ Topology data is None, injecting placeholder")
 
     # Filter out existing SystemMessage instances
@@ -461,6 +473,7 @@ def _inject_topology_into_system(
 # ============================================================================
 # Legacy Compatibility (Deprecated)
 # ============================================================================
+
 
 def prepare_context_messages(
     state_messages: list[Any],
@@ -482,15 +495,9 @@ def prepare_context_messages(
     if "{{topology_info}}" not in system_prompt:
         formatted_prompt = system_prompt
     elif topology_context:
-        formatted_prompt = system_prompt.replace(
-            "{{topology_info}}",
-            f"\n\n## Current Topology\n{topology_context}"
-        )
+        formatted_prompt = system_prompt.replace("{{topology_info}}", f"\n\n## Current Topology\n{topology_context}")
     else:
-        formatted_prompt = system_prompt.replace(
-            "{{topology_info}}",
-            "(No topology information available)"
-        )
+        formatted_prompt = system_prompt.replace("{{topology_info}}", "(No topology information available)")
 
     return [SystemMessage(content=formatted_prompt)] + state_messages
 
@@ -506,7 +513,7 @@ if __name__ == "__main__":
 
     # Test token counting
     print("Test 1: Token Counting")
-    print(f"  tiktoken encoding: cl100k_base")
+    print("  tiktoken encoding: cl100k_base")
 
     test_text = "Hello world 你好世界"
     tokens = count_tokens(test_text)
@@ -537,7 +544,7 @@ if __name__ == "__main__":
     print("\nTest 3: Invoke pre_model_hook")
     test_state = {
         "messages": [HumanMessage(f"Message {i}: {'x' * 50}") for i in range(5)],
-        "topology_info": {"project_id": "test123", "nodes": 3}
+        "topology_info": {"project_id": "test123", "nodes": 3},
     }
 
     result = hook(test_state)

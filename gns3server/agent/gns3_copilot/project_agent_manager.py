@@ -32,11 +32,13 @@ Each project has its own AgentService with a dedicated SQLite checkpoint databas
 
 import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Dict
+from typing import Optional
 
 from gns3server.agent.gns3_copilot.agent_service import AgentService
 
 log = logging.getLogger(__name__)
+
 
 class ProjectAgentManager:
     """
@@ -48,12 +50,13 @@ class ProjectAgentManager:
     """
 
     _instance: Optional["ProjectAgentManager"] = None
-    _lock = asyncio.Lock()
+    _lock: asyncio.Lock = asyncio.Lock()
+    _agents: Dict[str, AgentService] = {}
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._agents: Dict[str, AgentService] = {}
+            cls._instance._agents = {}
             cls._instance._lock = asyncio.Lock()
         return cls._instance
 
@@ -124,9 +127,11 @@ class ProjectAgentManager:
         """
         return list(self._agents.keys())
 
+
 # Global singleton instance
 _project_agent_manager: Optional[ProjectAgentManager] = None
 _manager_lock = asyncio.Lock()
+
 
 async def get_project_agent_manager() -> ProjectAgentManager:
     """

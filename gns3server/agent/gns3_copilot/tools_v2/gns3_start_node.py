@@ -39,14 +39,14 @@ from typing import Any
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 
-from gns3server.agent.gns3_copilot.gns3_client import Node, get_gns3_connector
+from gns3server.agent.gns3_copilot.gns3_client import Node
+from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-def show_progress_bar(
-    duration: int = 120, interval: int = 1, node_count: int = 1
-) -> None:
+
+def show_progress_bar(duration: int = 120, interval: int = 1, node_count: int = 1) -> None:
     """
     Display a simple text progress bar for node startup.
 
@@ -63,15 +63,14 @@ def show_progress_bar(
         # Create progress bar display
         bar_length = 30
         filled_length = int(bar_length * elapsed // duration)
-        progress_string = (
-            "=" * filled_length + ">" + " " * (bar_length - filled_length - 1)
-        )
+        progress_string = "=" * filled_length + ">" + " " * (bar_length - filled_length - 1)
 
         # Print progress bar with node count
         print(f"\r[{progress_string}] {progress:.1f}%", end="", flush=True)
         time.sleep(interval)
 
     print(f"\n{node_count} node(s) startup completed!")
+
 
 class GNS3StartNodeTool(BaseTool):
     """
@@ -106,9 +105,7 @@ class GNS3StartNodeTool(BaseTool):
     Returns: A dictionary with all nodes' details including success/failure status.
     """
 
-    def _run(
-        self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None
-    ) -> dict[str, Any]:
+    def _run(self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None) -> dict[str, Any]:
         try:
             # Parse input JSON
             input_data = json.loads(tool_input)
@@ -130,9 +127,7 @@ class GNS3StartNodeTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {
-                    "error": "Failed to connect to GNS3 server. Please check your configuration."
-                }
+                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
 
             # First loop: Send start commands for all nodes
             logger.info(
@@ -142,22 +137,16 @@ class GNS3StartNodeTool(BaseTool):
             )
             for node_id in node_ids:
                 try:
-                    node = Node(
-                        project_id=project_id, node_id=node_id, connector=gns3_server
-                    )
+                    node = Node(project_id=project_id, node_id=node_id, connector=gns3_server)
                     # Verify node exists
                     node.get()
                     if node.node_id:
                         node.start()
                         logger.info("Start command sent for node %s", node_id)
                     else:
-                        logger.error(
-                            "Node %s not found in project %s", node_id, project_id
-                        )
+                        logger.error("Node %s not found in project %s", node_id, project_id)
                 except Exception as e:
-                    logger.error(
-                        "Failed to send start command for node %s: %s", node_id, e
-                    )
+                    logger.error("Failed to send start command for node %s: %s", node_id, e)
 
             # Calculate progress bar duration: 140s base + 10s per additional node
             base_duration = 140
@@ -165,18 +154,14 @@ class GNS3StartNodeTool(BaseTool):
             total_duration = base_duration + extra_duration
 
             # Show progress bar
-            show_progress_bar(
-                duration=total_duration, interval=1, node_count=len(node_ids)
-            )
+            show_progress_bar(duration=total_duration, interval=1, node_count=len(node_ids))
 
             # Second loop: Get status for all nodes
             results = []
             logger.info("Retrieving status for %d nodes...", len(node_ids))
             for node_id in node_ids:
                 try:
-                    node = Node(
-                        project_id=project_id, node_id=node_id, connector=gns3_server
-                    )
+                    node = Node(project_id=project_id, node_id=node_id, connector=gns3_server)
                     node.get()  # Get latest status
                     node_info = {
                         "node_id": node.node_id,
@@ -223,6 +208,7 @@ class GNS3StartNodeTool(BaseTool):
             logger.error("Failed to start nodes: %s", e)
             return {"error": f"Failed to start nodes: {str(e)}"}
 
+
 class GNS3StartNodeQuickTool(BaseTool):
     """
     A LangChain tool to start one or multiple nodes in a GNS3 project WITHOUT waiting.
@@ -263,9 +249,7 @@ class GNS3StartNodeQuickTool(BaseTool):
     NOTE: Nodes will continue booting in background after this tool returns.
     """
 
-    def _run(
-        self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None
-    ) -> dict[str, Any]:
+    def _run(self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None) -> dict[str, Any]:
         try:
             # Parse input JSON
             input_data = json.loads(tool_input)
@@ -287,9 +271,7 @@ class GNS3StartNodeQuickTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {
-                    "error": "Failed to connect to GNS3 server. Please check your configuration."
-                }
+                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
 
             # Send start commands for all nodes and collect initial status
             logger.info(
@@ -301,9 +283,7 @@ class GNS3StartNodeQuickTool(BaseTool):
 
             for node_id in node_ids:
                 try:
-                    node = Node(
-                        project_id=project_id, node_id=node_id, connector=gns3_server
-                    )
+                    node = Node(project_id=project_id, node_id=node_id, connector=gns3_server)
                     # Verify node exists and get current info
                     node.get()
                     if not node.node_id:
@@ -371,15 +351,14 @@ class GNS3StartNodeQuickTool(BaseTool):
             logger.error("Failed to start nodes: %s", e)
             return {"error": f"Failed to start nodes: {str(e)}"}
 
+
 if __name__ == "__main__":
     # Test with single node
     print("=== Testing single node startup ===")
     test_input_single = json.dumps(
         {
             "project_id": "<PROJECT_UUID>",  # Replace with actual project UUID
-            "node_ids": [
-                "fbeda109-9a74-4d8c-a749-cc3847911a90"
-            ],  # Replace with actual node UUID
+            "node_ids": ["fbeda109-9a74-4d8c-a749-cc3847911a90"],  # Replace with actual node UUID
         }
     )
     tool = GNS3StartNodeTool()

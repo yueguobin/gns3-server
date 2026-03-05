@@ -54,7 +54,8 @@ from .display_tools_nornir import ExecuteMultipleDeviceCommands
 from .gns3_create_link import GNS3LinkTool
 from .gns3_create_node import GNS3CreateNodeTool
 from .gns3_get_node_temp import GNS3TemplateTool
-from .gns3_start_node import GNS3StartNodeTool, GNS3StartNodeQuickTool
+from .gns3_start_node import GNS3StartNodeQuickTool
+from .gns3_start_node import GNS3StartNodeTool
 from .gns3_update_node_name import GNS3UpdateNodeNameTool
 from .vpcs_tools_telnetlib3 import VPCSMultiCommands
 

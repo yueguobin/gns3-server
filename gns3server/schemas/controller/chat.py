@@ -36,7 +36,12 @@ class ChatRequest(BaseModel):
     message: str = Field(..., description="User message content")
     session_id: Optional[str] = Field(None, description="Session ID (auto-generated if not provided)")
     stream: bool = Field(default=True, description="Enable streaming response")
-    temperature: Optional[float] = Field(None, description="LLM temperature parameter")
+    temperature: Optional[float] = Field(
+        None,
+        description="LLM temperature parameter (NOTE: currently not used. "
+        "Temperature is loaded from user's LLM config in database. "
+        "Reserved for future runtime override support.)"
+    )
     mode: Literal["text"] = Field(default="text", description="Interaction mode")
 
 

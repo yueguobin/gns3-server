@@ -97,8 +97,7 @@ def set_current_llm_config(config: dict) -> None:
         config: LLM configuration dictionary with provider, model, api_key, etc.
     """
     _llm_config_context.set(config)
-    logger.debug("LLM config set in context: provider=%s, model=%s",
-                config.get("provider"), config.get("model"))
+    logger.debug("LLM config set in context: provider=%s, model=%s", config.get("provider"), config.get("model"))
 
 
 def get_current_llm_config() -> Optional[dict]:
@@ -109,8 +108,9 @@ def get_current_llm_config() -> Optional[dict]:
     """
     config = _llm_config_context.get()
     if config:
-        logger.debug("LLM config retrieved from context: provider=%s, model=%s",
-                    config.get("provider"), config.get("model"))
+        logger.debug(
+            "LLM config retrieved from context: provider=%s, model=%s", config.get("provider"), config.get("model")
+        )
     else:
         logger.warning("LLM config not found in context")
     return config

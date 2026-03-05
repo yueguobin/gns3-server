@@ -30,7 +30,6 @@ This module provides a tool to execute configuration commands on multiple device
 
 import json
 import logging
-import os
 import re
 from typing import Any
 
@@ -39,7 +38,9 @@ from langchain_core.callbacks import CallbackManagerForToolRun
 from netmiko.exceptions import ReadTimeout
 from nornir import InitNornir
 from nornir.core import Nornir
-from nornir.core.task import AggregatedResult, Result, Task
+from nornir.core.task import AggregatedResult
+from nornir.core.task import Result
+from nornir.core.task import Task
 from nornir_netmiko.tasks import netmiko_send_config
 
 from gns3server.agent.gns3_copilot.gns3_client import get_gns3_server_host
@@ -48,15 +49,14 @@ from gns3server.agent.gns3_copilot.utils import get_device_ports_from_topology
 # config log
 logger = logging.getLogger(__name__)
 
+
 # Local Nornir configuration functions for Cisco IOS Telnet devices
 def _get_nornir_defaults() -> dict[str, Any]:
     """Get Nornir default configuration for Cisco IOS."""
     return {"data": {"location": "gns3"}}
 
-def _get_nornir_groups_config(
-    device_type: str = "cisco_ios_telnet",
-    platform: str = "cisco_ios"
-) -> dict[str, Any]:
+
+def _get_nornir_groups_config(device_type: str = "cisco_ios_telnet", platform: str = "cisco_ios") -> dict[str, Any]:
     """
     Get Nornir group configuration for Cisco IOS Telnet devices.
 
@@ -73,15 +73,12 @@ def _get_nornir_groups_config(
         "timeout": 120,
         "username": "",
         "password": "",
-        "connection_options": {
-            "netmiko": {"extras": {"device_type": device_type}}
-        },
+        "connection_options": {"netmiko": {"extras": {"device_type": device_type}}},
     }
 
+
 def _get_nornir_group(
-    group_name: str = "cisco_IOSv_telnet",
-    device_type: str = "cisco_ios_telnet",
-    platform: str = "cisco_ios"
+    group_name: str = "cisco_IOSv_telnet", device_type: str = "cisco_ios_telnet", platform: str = "cisco_ios"
 ) -> dict[str, Any]:
     """
     Get Nornir group configuration for a specific group.
@@ -95,10 +92,8 @@ def _get_nornir_group(
         Dictionary containing group configuration
     """
     # _get_nornir_groups_config now returns the group config directly
-    return _get_nornir_groups_config(
-        device_type=device_type,
-        platform=platform
-    )
+    return _get_nornir_groups_config(device_type=device_type, platform=platform)
+
 
 class ExecuteMultipleDeviceConfigCommands(BaseTool):
     """
@@ -174,11 +169,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
 
         # Validate input
         device_configs_list, project_id = self._validate_tool_input(tool_input)
-        if (
-            isinstance(device_configs_list, list)
-            and len(device_configs_list) > 0
-            and "error" in device_configs_list[0]
-        ):
+        if isinstance(device_configs_list, list) and len(device_configs_list) > 0 and "error" in device_configs_list[0]:
             return device_configs_list
 
         # Create a mapping of device names to their configuration commands
@@ -186,9 +177,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
 
         # Prepare device hosts data
         try:
-            hosts_data = self._prepare_device_hosts_data(
-                device_configs_list, project_id
-            )
+            hosts_data = self._prepare_device_hosts_data(device_configs_list, project_id)
         except ValueError as e:
             logger.error("Failed to prepare device hosts data: %s", e)
             return [{"error": str(e)}]
@@ -210,9 +199,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             )
 
             # Process results for all devices
-            results = self._process_task_results(
-                device_configs_list, hosts_data, task_result
-            )
+            results = self._process_task_results(device_configs_list, hosts_data, task_result)
 
         except Exception as e:
             # Overall execution failed
@@ -226,9 +213,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
 
         return results
 
-    def _run_all_device_configs_with_single_retry(
-        self, task: Task, device_configs_map: dict[str, list[str]]
-    ) -> Result:
+    def _run_all_device_configs_with_single_retry(self, task: Task, device_configs_map: dict[str, list[str]]) -> Result:
         """Execute configuration commands with single retry mechanism."""
         device_name = task.host.name
         config_commands = device_configs_map.get(device_name, [])
@@ -237,9 +222,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             return Result(host=task.host, result="No configuration commands to execute")
 
         try:
-            _result = task.run(
-                task=netmiko_send_config, config_commands=config_commands
-            )
+            _result = task.run(task=netmiko_send_config, config_commands=config_commands)
             return Result(host=task.host, result=_result.result)
 
         except ReadTimeout as e:
@@ -259,9 +242,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             # Handle prompt detection issues with Cisco IOSv L2 images where the '#' prompt character
             # may be delayed, causing Netmiko prompt detection failures. Implements retry logic.
             if "netmiko_send_config (failed)" in str(e):
-                _result = task.run(
-                    task=netmiko_send_config, config_commands=config_commands
-                )
+                _result = task.run(task=netmiko_send_config, config_commands=config_commands)
                 return Result(host=task.host, result=_result.result)
 
             # Log any other exceptions with full details
@@ -307,9 +288,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             # Handle standard models (like GPT/OpenAI) where the framework
             # has already parsed the JSON into a Python object (dict or list).
             parsed_input = tool_input
-            logger.info(
-                "Using tool input directly as type: %s", type(parsed_input).__name__
-            )
+            logger.info("Using tool input directly as type: %s", type(parsed_input).__name__)
 
         # Handle new format: {"project_id": "...", "device_configs": [...]}
         if isinstance(parsed_input, dict):
@@ -323,9 +302,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
                 return ([{"error": error_msg}], None)
 
             if not self._validate_project_id(project_id):
-                error_msg = (
-                    f"Invalid project_id format: {project_id}. Expected UUID format."
-                )
+                error_msg = f"Invalid project_id format: {project_id}. Expected UUID format."
                 logger.error(error_msg)
                 return ([{"error": error_msg}], None)
 
@@ -343,9 +320,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
 
         # Handle legacy format: [...]
         elif isinstance(parsed_input, list):
-            logger.warning(
-                "Using legacy input format without project_id. Please use new format with project_id."
-            )
+            logger.warning("Using legacy input format without project_id. Please use new format with project_id.")
             return parsed_input, None
 
         else:
@@ -369,9 +344,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
         uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         return bool(re.match(uuid_pattern, project_id, re.IGNORECASE))
 
-    def _configs_map(
-        self, device_config_list: list[dict[str, Any]]
-    ) -> dict[str, list[str]]:
+    def _configs_map(self, device_config_list: list[dict[str, Any]]) -> dict[str, list[str]]:
         """Create a mapping of device names to their configuration commands."""
         device_configs_map = {}
         for device_config in device_config_list:
@@ -386,9 +359,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
     ) -> dict[str, dict[str, Any]]:
         """Prepare device hosts data from topology information."""
         # Extract device names list
-        device_names = [
-            device_config["device_name"] for device_config in device_config_list
-        ]
+        device_names = [device_config["device_name"] for device_config in device_config_list]
 
         # Get device port information with project_id
         hosts_data = get_device_ports_from_topology(device_names, project_id)
@@ -424,16 +395,11 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
                 device_type = first_device_data.get("device_type", "cisco_ios_telnet")
                 platform = first_device_data.get("platform", "cisco_ios")
 
-                logger.info(
-                    "Extracted from tags: device_type=%s, platform=%s",
-                    device_type,
-                    platform
-                )
+                logger.info("Extracted from tags: device_type=%s, platform=%s", device_type, platform)
 
             # Get latest environment configuration with dynamic device_type and platform
             groups_data = _get_nornir_groups_config(
-                device_type=device_type or "cisco_ios_telnet",
-                platform=platform or "cisco_ios"
+                device_type=device_type or "cisco_ios_telnet", platform=platform or "cisco_ios"
             )
             defaults = _get_nornir_defaults()
 
@@ -484,9 +450,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
                 device_result = {
                     "device_name": device_name,
                     "status": "failed",
-                    "error": (
-                        f"Device '{device_name}' not found in topology or missing console_port"
-                    ),
+                    "error": (f"Device '{device_name}' not found in topology or missing console_port"),
                 }
                 results.append(device_result)
                 continue
@@ -508,9 +472,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             if multi_result[0].failed:
                 # Execution failed
                 device_result["status"] = "failed"
-                device_result["error"] = (
-                    f"Configuration execution failed: {multi_result[0].result}"
-                )
+                device_result["error"] = f"Configuration execution failed: {multi_result[0].result}"
                 device_result["output"] = multi_result[0].result
             else:
                 # Execution successful
@@ -521,6 +483,7 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             results.append(device_result)
 
         return results
+
 
 if __name__ == "__main__":
     # Example usage with new format

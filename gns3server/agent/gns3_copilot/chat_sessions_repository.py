@@ -33,12 +33,15 @@ checkpoint database.
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-from uuid import UUID
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 import aiosqlite
 
 log = logging.getLogger(__name__)
+
 
 class ChatSession:
     """Chat session model."""
@@ -60,7 +63,7 @@ class ChatSession:
         updated_at: Optional[str] = None,
         metadata: str = "{}",
         stats: str = "{}",
-        pinned: bool = False
+        pinned: bool = False,
     ):
         self.id = id
         self.thread_id = thread_id
@@ -100,6 +103,7 @@ class ChatSession:
             "pinned": self.pinned,
         }
 
+
 class ChatSessionsRepository:
     """
     Repository for managing chat sessions in the checkpoint database.
@@ -115,11 +119,7 @@ class ChatSessionsRepository:
         self.conn = conn
 
     async def create_session(
-        self,
-        thread_id: str,
-        user_id: str,
-        project_id: str,
-        title: str = "New Conversation"
+        self, thread_id: str, user_id: str, project_id: str, title: str = "New Conversation"
     ) -> ChatSession:
         """
         Create a new chat session.
@@ -141,7 +141,7 @@ class ChatSessionsRepository:
                 created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (thread_id, user_id, project_id, title, now, now)
+            (thread_id, user_id, project_id, title, now, now),
         )
         await self.conn.commit()
 
@@ -160,10 +160,7 @@ class ChatSessionsRepository:
         Returns:
             ChatSession or None
         """
-        cursor = await self.conn.execute(
-            "SELECT * FROM chat_sessions WHERE id = ?",
-            (session_id,)
-        )
+        cursor = await self.conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,))
         row = await cursor.fetchone()
 
         if row:
@@ -180,10 +177,7 @@ class ChatSessionsRepository:
         Returns:
             ChatSession or None
         """
-        cursor = await self.conn.execute(
-            "SELECT * FROM chat_sessions WHERE thread_id = ?",
-            (thread_id,)
-        )
+        cursor = await self.conn.execute("SELECT * FROM chat_sessions WHERE thread_id = ?", (thread_id,))
         row = await cursor.fetchone()
 
         if row:
@@ -191,10 +185,7 @@ class ChatSessionsRepository:
         return None
 
     async def list_sessions(
-        self,
-        user_id: Optional[str] = None,
-        project_id: Optional[str] = None,
-        limit: int = 100
+        self, user_id: Optional[str] = None, project_id: Optional[str] = None, limit: int = 100
     ) -> List[ChatSession]:
         """
         List sessions with optional filters.
@@ -239,7 +230,7 @@ class ChatSessionsRepository:
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
-        last_message_at: Optional[str] = None
+        last_message_at: Optional[str] = None,
     ) -> Optional[ChatSession]:
         """
         Update a session.
@@ -316,16 +307,10 @@ class ChatSessionsRepository:
             True if deleted, False if not found
         """
         # First, delete the checkpoint data
-        await self.conn.execute(
-            "DELETE FROM checkpoints WHERE thread_id = ?",
-            (thread_id,)
-        )
+        await self.conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
 
         # Then delete the session
-        cursor = await self.conn.execute(
-            "DELETE FROM chat_sessions WHERE thread_id = ?",
-            (thread_id,)
-        )
+        cursor = await self.conn.execute("DELETE FROM chat_sessions WHERE thread_id = ?", (thread_id,))
         await self.conn.commit()
 
         deleted = cursor.rowcount > 0
@@ -345,24 +330,15 @@ class ChatSessionsRepository:
             Number of sessions deleted
         """
         # Get all thread_ids for this project
-        cursor = await self.conn.execute(
-            "SELECT thread_id FROM chat_sessions WHERE project_id = ?",
-            (project_id,)
-        )
+        cursor = await self.conn.execute("SELECT thread_id FROM chat_sessions WHERE project_id = ?", (project_id,))
         rows = await cursor.fetchall()
         thread_ids = [row[0] for row in rows]
 
         # Delete checkpoints and sessions
         for thread_id in thread_ids:
-            await self.conn.execute(
-                "DELETE FROM checkpoints WHERE thread_id = ?",
-                (thread_id,)
-            )
+            await self.conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
 
-        cursor = await self.conn.execute(
-            "DELETE FROM chat_sessions WHERE project_id = ?",
-            (project_id,)
-        )
+        cursor = await self.conn.execute("DELETE FROM chat_sessions WHERE project_id = ?", (project_id,))
         await self.conn.commit()
 
         deleted_count = cursor.rowcount
@@ -385,7 +361,7 @@ class ChatSessionsRepository:
         now = datetime.utcnow().isoformat()
         await self.conn.execute(
             "UPDATE chat_sessions SET pinned = ?, updated_at = ? WHERE thread_id = ?",
-            (1 if pinned else 0, now, thread_id)
+            (1 if pinned else 0, now, thread_id),
         )
         await self.conn.commit()
 

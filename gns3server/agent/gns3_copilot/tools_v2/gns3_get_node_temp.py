@@ -43,6 +43,7 @@ from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
 class GNS3TemplateTool(BaseTool):
     """
     A LangChain tool to retrieve all available device templates from a GNS3 server.
@@ -102,9 +103,7 @@ class GNS3TemplateTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {
-                    "error": "Failed to connect to GNS3 server. Please check your configuration."
-                }
+                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
 
             # Retrieve all available templates
             templates = gns3_server.get_templates()
@@ -128,10 +127,9 @@ class GNS3TemplateTool(BaseTool):
             return result
 
         except Exception as e:
-            logger.error(
-                "Failed to connect to GNS3 server or retrieve templates: %s", e
-            )
+            logger.error("Failed to connect to GNS3 server or retrieve templates: %s", e)
             return {"error": f"Failed to retrieve templates: {str(e)}"}
+
 
 if __name__ == "__main__":
     # Test's tool locally

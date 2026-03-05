@@ -38,10 +38,12 @@ from typing import Any
 
 from langchain.tools import BaseTool
 
-from gns3server.agent.gns3_copilot.gns3_client import Project, get_gns3_connector
+from gns3server.agent.gns3_copilot.gns3_client import Project
+from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
 
 class GNS3ProjectInfoTool(BaseTool):
     """LangChain tool for retrieving GNS3 project basic information."""
@@ -88,9 +90,7 @@ class GNS3ProjectInfoTool(BaseTool):
             # Validate project_id parameter
             if not project_id:
                 logger.error("project_id parameter is required.")
-                return {
-                    "error": "project_id parameter is required. Please provide a valid project UUID."
-                }
+                return {"error": "project_id parameter is required. Please provide a valid project UUID."}
 
             # Initialize Gns3Connector using factory function
             logger.info("Connecting to GNS3 server...")
@@ -98,9 +98,7 @@ class GNS3ProjectInfoTool(BaseTool):
 
             if server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {
-                    "error": "Failed to connect to GNS3 server. Please check your configuration."
-                }
+                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
 
             # Use the provided project_id directly
             logger.info(f"Retrieving project info for project_id: {project_id}")
@@ -125,14 +123,20 @@ class GNS3ProjectInfoTool(BaseTool):
             }
 
             # Log result
-            logger.info("Project info retrieved: name=%s, status=%s, nodes=%d, links=%d",
-                        project.name, project.status, node_count, link_count)
+            logger.info(
+                "Project info retrieved: name=%s, status=%s, nodes=%d, links=%d",
+                project.name,
+                project.status,
+                node_count,
+                link_count,
+            )
 
             return result
 
         except Exception as e:
             logger.error("Error retrieving GNS3 project info: %s", str(e))
             return {"error": f"Failed to retrieve project info: {str(e)}"}
+
 
 if __name__ == "__main__":
     # Test the tool

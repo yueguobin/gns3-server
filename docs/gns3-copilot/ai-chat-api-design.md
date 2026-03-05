@@ -301,6 +301,7 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
 - message: 用户消息内容
 - session_id: 会话 ID（可选，不提供则自动创建新会话）
 - stream: 是否启用流式响应（默认 true）
+- temperature: LLM temperature 参数（注意：当前未使用，保留以备将来实现。实际 temperature 从用户的数据库 LLM 配置中读取）
 - mode: 交互模式（当前仅支持 "text"）
 
 **响应**：SSE 流，包含多种类型的消息（见上文消息格式）
@@ -366,6 +367,7 @@ Chat API 使用 Server-Sent Events (SSE) 进行流式传输。
 - message: str - 用户消息内容
 - session_id: Optional[str] - 会话 ID（可选）
 - stream: bool - 是否流式响应（默认 true）
+- temperature: Optional[float] - LLM temperature 参数（注意：当前未使用，保留以备将来实现运行时覆盖。当前 temperature 从用户的数据库 LLM 配置中读取）
 - mode: Literal["text"] - 交互模式
 
 ### ChatSession
@@ -634,6 +636,31 @@ agent_manager.remove_agent(project_id)
 - `stats`（TEXT JSON）：存储额外的统计信息
 
 ### 未来可能的扩展
+
+#### 运行时 LLM 参数覆盖
+
+当前 LLM 配置（包括 temperature、max_tokens 等）从用户的数据库配置中读取。将来可以支持在请求时覆盖这些参数：
+
+**实现方案**：
+```python
+# 在 chat.py 的 stream_chat 函数中
+if request.temperature is not None:
+    llm_config["temperature"] = str(request.temperature)
+if request.max_tokens is not None:
+    llm_config["max_tokens"] = str(request.max_tokens)
+```
+
+**当前状态**：
+- `temperature` 参数已添加到 ChatRequest schema，但未实现覆盖逻辑
+- 参数保留在 API 中以保持向后兼容性
+- 代码中已添加 TODO 注释标记实现位置
+
+**注意事项**：
+- 需要验证参数范围（如 temperature: 0.0-2.0）
+- 需要考虑是否记录覆盖值到统计信息
+- 需要在前端 UI 中提供相应的设置选项
+
+#### 其他扩展方向
 
 - 多模态支持（图片、文件）
 - 语音输入/输出

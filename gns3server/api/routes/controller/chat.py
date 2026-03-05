@@ -134,6 +134,12 @@ async def stream_chat(
         llm_config.get("model"),
     )
 
+    # TODO: Support runtime temperature override from request.temperature
+    # Currently, temperature is loaded from the user's LLM config in the database.
+    # To enable runtime override, uncomment the following:
+    # if request.temperature is not None:
+    #     llm_config["temperature"] = str(request.temperature)
+
     # Get or create AgentService for this project
     agent_manager = await get_project_agent_manager()
     agent_service = await agent_manager.get_agent(str(project.id), project.path)

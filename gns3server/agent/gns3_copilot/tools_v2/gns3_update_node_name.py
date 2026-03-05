@@ -37,10 +37,12 @@ from typing import Any
 from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 
-from gns3server.agent.gns3_copilot.gns3_client import Node, get_gns3_connector
+from gns3server.agent.gns3_copilot.gns3_client import Node
+from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
 
 class GNS3UpdateNodeNameTool(BaseTool):
     """
@@ -78,9 +80,7 @@ class GNS3UpdateNodeNameTool(BaseTool):
     Returns: A dictionary with all nodes' update results including success/failure status.
     """
 
-    def _run(
-        self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None
-    ) -> dict[str, Any]:
+    def _run(self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None) -> dict[str, Any]:
         try:
             # Parse input JSON
             input_data = json.loads(tool_input)
@@ -111,9 +111,7 @@ class GNS3UpdateNodeNameTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {
-                    "error": "Failed to connect to GNS3 server. Please check your configuration."
-                }
+                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
 
             # Update node names
             logger.info("Updating names for %d nodes in project %s...", len(nodes), project_id)
@@ -133,9 +131,7 @@ class GNS3UpdateNodeNameTool(BaseTool):
                     )
 
                     # Get node to retrieve current name
-                    node = Node(
-                        project_id=project_id, node_id=node_id, connector=gns3_server
-                    )
+                    node = Node(project_id=project_id, node_id=node_id, connector=gns3_server)
                     node.get()
                     old_name = node.name
 
@@ -152,9 +148,7 @@ class GNS3UpdateNodeNameTool(BaseTool):
                             "status": "success",
                         }
                         results.append(node_info)
-                        logger.info(
-                            "Successfully updated node name: %s -> %s", old_name, new_name
-                        )
+                        logger.info("Successfully updated node name: %s -> %s", old_name, new_name)
                     else:
                         error_info = {
                             "node_id": node_id,
@@ -204,6 +198,7 @@ class GNS3UpdateNodeNameTool(BaseTool):
         except Exception as e:
             logger.error("Failed to update node names: %s", e)
             return {"error": f"Failed to update node names: {str(e)}"}
+
 
 if __name__ == "__main__":
     # Test with single node
