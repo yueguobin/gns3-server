@@ -56,7 +56,7 @@ from gns3server.agent.gns3_copilot.agent.model_factory import (
     create_title_model,
 )
 from gns3server.agent.gns3_copilot.agent.context_manager import (
-    prepare_context_messages,
+    create_pre_model_hook,
 )
 from gns3server.agent.gns3_copilot.gns3_client import GNS3TopologyTool
 from gns3server.agent.gns3_copilot.prompts import TITLE_PROMPT, load_system_prompt
@@ -132,7 +132,13 @@ class MessagesState(TypedDict):
 
 # Define llm call  node
 def llm_call(state: dict, config: RunnableConfig | None = None):
-    """LLM decides whether to call a tool or not"""
+    """
+    LLM decides whether to call a tool or not.
+
+    Uses pre_model_hook pattern for automatic topology injection and
+    message trimming, ensuring separation of concerns and complete
+    history preservation in state["messages"].
+    """
 
     logger.info("LLM call node invoked")
 
@@ -161,22 +167,14 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
             "topology_info": None,
         }
 
-    # Get system prompt based on ENGLISH_LEVEL configuration
-    # load_system_prompt() will select base_prompt.py or english_level_prompt_a1-c2.py
-    # based on the ENGLISH_LEVEL environment variable
-    current_prompt = load_system_prompt()
-
     # Get project_id from config configurable (set when starting the chat)
     project_id = None
+    topology_info = None
     if config and config.get("configurable"):
         project_id = config["configurable"].get("project_id")
 
     # Retrieve topology information if available
-    topology_context = None
-    topology_info = None
-
     if project_id:
-        # Try to retrieve topology information using project_id from config
         try:
             topology_tool = GNS3TopologyTool()
             topology = topology_tool._run(project_id=project_id)
@@ -187,8 +185,6 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
                     "Successfully retrieved topology for project_id: %s, name: %s",
                     project_id, topology.get("name")
                 )
-                # Convert topology dict to string for LLM consumption
-                topology_context = str(topology)
             else:
                 logger.warning(
                     "Failed to retrieve topology for project_id %s: %s",
@@ -197,18 +193,16 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         except Exception as e:
             logger.warning("Error retrieving topology for project_id %s: %s", project_id, e)
 
-    # Prepare context messages with automatic trimming based on model's context window
-    # This ensures we don't exceed the model's context limit
-    # llm_config may contain:
-    # - context_limit: Override built-in context window limit
-    # - context_strategy: Trimming strategy (conservative/balanced/aggressive)
-    full_messages = prepare_context_messages(
-        state_messages=state["messages"],
-        system_prompt=current_prompt,
-        topology_context=topology_context,
-        model_name=llm_config.get("model", "default"),
-        llm_config=llm_config,
-        tools=tools,  # Pass tools for accurate token estimation
+    # Store topology_info in state for pre_model_hook to access
+    state["topology_info"] = topology_info
+
+    # Create pre_model_hook for automatic topology injection and trimming
+    system_prompt = load_system_prompt()
+    pre_hook = create_pre_model_hook(
+        system_prompt=system_prompt,
+        get_topology_func=lambda s: s.get("topology_info"),
+        get_llm_config_func=get_current_llm_config,
+        get_tools_func=lambda: tools,  # Pass tools for token estimation
     )
 
     # Create fresh model with tools for each LLM call
@@ -219,8 +213,15 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         llm_config=llm_config
     )
 
-    logger.info("Invoking LLM with %d messages", len(full_messages))
-    response = model_with_tools.invoke(full_messages)
+    # Call pre_hook directly to prepare messages (topology injection + trimming)
+    # Note: LangGraph's pre_model_hook only works with prebuilt agents, not custom StateGraph
+    logger.info("Calling pre_hook to prepare %d messages", len(messages))
+    prepared_state = pre_hook({"messages": messages, "topology_info": topology_info})
+    prepared_messages = prepared_state["messages"]
+    logger.info("Messages prepared: %d → %d", len(messages), len(prepared_messages))
+
+    # Invoke model with prepared messages
+    response = model_with_tools.invoke(prepared_messages)
 
     logger.info("LLM call completed: tool_calls=%d",
                 len(response.tool_calls) if hasattr(response, 'tool_calls') else 0)
