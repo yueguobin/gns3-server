@@ -650,14 +650,23 @@ The API implements strict API key visibility controls to protect sensitive crede
 
 | Scenario | User Configs | Group Configs |
 |----------|-------------|---------------|
-| User viewing own configs | **Visible** | **Hidden** |
-| Admin viewing other users' configs | **Hidden** | **Hidden** |
-| Viewing group configs directly | N/A | **Visible** |
+| User viewing own configs | **Visible (Plaintext)** | N/A |
+| User viewing inherited group configs | N/A | **Hidden (null)** |
+| Admin viewing other users' configs | **Hidden (null)** | N/A |
+| Viewing group configs directly (with `Group.Audit`) | N/A | **Visible (Encrypted)** |
 
 **Rules:**
-1. **Users viewing their own configs**: Can see API keys in their own configurations, but NOT in inherited group configurations
-2. **Admins viewing other users' configs**: Cannot see API keys in any user configurations (user privacy)
-3. **Viewing group configs**: Users with `Group.Audit` privilege can see API keys in group configurations
+1. **Users viewing their own configs**: Can see **decrypted (plaintext)** API keys in their own configurations
+2. **Users viewing inherited group configs**: API keys are **hidden** (set to `null`) in the inherited configs
+3. **Admins viewing other users' configs**: Cannot see API keys in any user configurations (set to `null`) - user privacy protection
+4. **Viewing group configs directly**: Users with `Group.Audit` privilege can see **encrypted** API keys in group configurations (not decrypted)
+5. **Super admins**: While application-layer restrictions apply, super admins can access the database directly and decrypt any API key using the encryption key. This is by design as super admins have system-level access.
+
+**Important Notes:**
+- API keys are stored in the database in **encrypted** format using Fernet symmetric encryption
+- User configs are **decrypted on-the-fly** when retrieved by the owner
+- Group configs return the **encrypted value** as stored in the database (no automatic decryption)
+- Super admins have database access and can retrieve & decrypt any API key - this is intentional and reflects their system-level privileges
 
 **Example:**
 ```json
@@ -669,7 +678,7 @@ The API implements strict API key visibility controls to protect sensitive crede
       "name": "GPT-4",
       "source": "user",
       "config": {
-        "api_key": "sk-xxx"  // Visible (own config)
+        "api_key": "sk-ant-xxxxx"  // Decrypted (own config)
       }
     },
     {
@@ -677,7 +686,7 @@ The API implements strict API key visibility controls to protect sensitive crede
       "name": "Claude-3",
       "source": "group",
       "config": {
-        "api_key": null      // Hidden (inherited from group)
+        "api_key": null  // Hidden (inherited from group)
       }
     }
   ]
@@ -691,7 +700,21 @@ The API implements strict API key visibility controls to protect sensitive crede
       "name": "GPT-4",
       "source": "user",
       "config": {
-        "api_key": null      // Hidden (another user's config)
+        "api_key": null  // Hidden (another user's config)
+      }
+    }
+  ]
+}
+
+// User with Group.Audit viewing group configs directly
+{
+  "configs": [
+    {
+      "config_id": "uuid-3",
+      "name": "Gemini Pro",
+      "source": "group",
+      "config": {
+        "api_key": "gAAAAABl1a2b3c4d5e6f7..."  // Encrypted (as stored in DB)
       }
     }
   ]
