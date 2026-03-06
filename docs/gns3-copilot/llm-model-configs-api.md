@@ -668,6 +668,21 @@ The API implements strict API key visibility controls to protect sensitive crede
 - Group configs return the **encrypted value** as stored in the database (no automatic decryption)
 - Super admins have database access and can retrieve & decrypt any API key - this is intentional and reflects their system-level privileges
 
+**⚠️ Key Point: No Plaintext Group API Keys via API**
+> **Nobody (including super admins) can see plaintext API keys for group configurations through the application API.**
+>
+> - Group configs always return the **encrypted** API key value (e.g., `gAAAAABl1a2b3c4d5e6f7...`)
+> - There is **no API endpoint** that decrypts and returns group config API keys as plaintext
+> - Even super admins with `Group.Audit` privilege receive encrypted values via the API
+> - This is an application-layer restriction that applies to all users
+>
+> **Design Rationale**: Group configs are intended to be **inherited** automatically, not viewed/copied manually. The encrypted values protect API keys while still allowing the inheritance mechanism to function (the system decrypts them internally when needed).
+>
+> **Access Paths**:
+> - ✅ **Inheritance**: Users inherit group configs → Agent uses them with internal decryption
+> - ✅ **Database Direct Access**: Super admins can query DB and decrypt using the encryption key
+> - ❌ **API Viewing**: No endpoint returns plaintext group config API keys
+
 **Example:**
 ```json
 // User viewing their own configs
