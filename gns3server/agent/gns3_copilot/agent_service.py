@@ -276,7 +276,13 @@ class AgentService:
 
         # Build inputs
         inputs = {
-            "messages": [HumanMessage(content=message, id=str(uuid4()))],
+            "messages": [
+                HumanMessage(
+                    content=message,
+                    id=str(uuid4()),
+                    metadata={"created_at": datetime.utcnow().isoformat()},
+                )
+            ],
             "llm_calls": 0,
             "remaining_steps": 20,
             "mode": mode,

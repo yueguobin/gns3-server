@@ -75,8 +75,7 @@ class OpenAIMessage(BaseModel):
     name: Optional[str] = Field(None, description="Tool message name")
     tool_call_id: Optional[str] = Field(None, description="Associated tool call ID (for tool messages)")
     tool_calls: Optional[List[OpenAIToolCall]] = Field(None, description="Tool calls (for assistant messages)")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Message metadata")
-    created_at: str = Field(..., description="Message timestamp (ISO 8601)")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Message metadata (includes created_at)")
 
 
 class ConversationHistory(BaseModel):

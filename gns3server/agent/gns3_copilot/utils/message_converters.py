@@ -31,7 +31,6 @@ Converts between LangChain messages and OpenAI-compatible format.
 
 import json
 import uuid
-from datetime import datetime
 from typing import Any
 from typing import Dict
 
@@ -66,15 +65,13 @@ def convert_langchain_to_openai(lc_message) -> Dict[str, Any]:
     if msg_id is None:
         msg_id = str(uuid.uuid4())
 
-    # Get timestamp
-    timestamp = getattr(lc_message, "created_at", None)
-    if timestamp is None:
-        timestamp = datetime.utcnow().isoformat()
-    elif hasattr(timestamp, "isoformat"):
-        timestamp = timestamp.isoformat()
+    # Get metadata from message (including created_at)
+    metadata = getattr(lc_message, "metadata", None) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
 
-    # Base message structure
-    base_msg = {"id": msg_id, "created_at": timestamp, "metadata": {}}
+    # Base message structure (no top-level created_at, only metadata)
+    base_msg = {"id": msg_id, "metadata": metadata}
 
     # Convert based on message type
     if isinstance(lc_message, HumanMessage):

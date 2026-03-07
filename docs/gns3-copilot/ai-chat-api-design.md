@@ -404,42 +404,152 @@ All endpoints are under `/v3/projects/{project_id}/chat/` path.
 **Function**: Streaming conversation interface
 
 **Request Parameters**:
-- message: User message content
-- session_id: Session ID (optional, creates new session if not provided)
-- stream: Enable streaming response (default true)
-- temperature: LLM temperature parameter (Note: currently unused, reserved for future implementation. Actual temperature is read from user's database LLM configuration)
-- mode: Interaction mode (currently only supports "text")
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| message | string | Yes | User message content |
+| session_id | string | No | Session ID (creates new session if not provided) |
+| stream | boolean | No | Enable streaming response (default true) |
+| temperature | float | No | LLM temperature (reserved, currently unused) |
+| mode | string | No | Interaction mode (fixed as "text", reserved for future expansion) |
 
-**Response**: SSE stream, contains multiple types of messages (see message format above)
+**Request Example**:
+```json
+// First message (new session)
+{
+  "message": "Hello, can you help me?",
+  "stream": true
+}
+
+// Subsequent messages (continue session)
+{
+  "message": "Show me the network topology",
+  "session_id": "d7e76375-6960-419a-9367-211ef64af877",
+  "stream": true
+}
+```
+
+**Response**: SSE stream, contains multiple types of messages (see message format section)
+
+**Session ID Management**:
+- **First message**: Do not send `session_id` in request, backend generates a new UUID
+- **Retrieve session_id**: Each SSE message (including `done` message) contains `session_id` field
+- **Subsequent messages**: Include the saved `session_id` in request body to continue conversation
+- **Example flow**:
+  1. First request: `{"message": "hello", "stream": true}` → generates new session
+  2. Get `session_id` from SSE response: `{"type": "done", "session_id": "xxx-xxx-xxx"}`
+  3. Second request: `{"message": "how are you?", "session_id": "xxx-xxx-xxx", "stream": true}`
 
 **Project Status Check**: Only allows conversation when project status is "opened"
+
+**Response Example** (SSE stream):
+```
+data: {"type": "content", "content": "Hello", "session_id": "d7e76375-6960-419a-9367-211ef64af877"}
+
+data: {"type": "content", "content": "! I can help", "session_id": "d7e76375-6960-419a-9367-211ef64af877"}
+
+data: {"type": "done", "session_id": "d7e76375-6960-419a-9367-211ef64af877"}
+```
 
 ### GET /v3/projects/{project_id}/chat/sessions
 
 **Function**: List all sessions in a project
 
+**Query Parameters**:
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| user_id | string | No | Filter by user ID |
+| limit | int | No | Maximum number of sessions (default 100) |
+
 **Response**: Session list, includes statistics (message count, token usage, etc.), sorted by pin status and update time
+
+**Response Example**:
+```json
+[
+  {
+    "id": 1,
+    "thread_id": "d7e76375-6960-419a-9367-211ef64af877",
+    "user_id": "admin",
+    "project_id": "a0f46d81-e564-443c-b321-2cdebe80e321",
+    "title": "GNS3 Topology Assistance",
+    "message_count": 4,
+    "llm_calls_count": 2,
+    "input_tokens": 8500,
+    "output_tokens": 1200,
+    "total_tokens": 9700,
+    "last_message_at": "2026-03-08T01:34:07",
+    "created_at": "2026-03-07T17:48:07",
+    "updated_at": "2026-03-08T01:34:07",
+    "metadata": {},
+    "stats": {},
+    "pinned": false
+  }
+]
+```
 
 ### GET /v3/projects/{project_id}/chat/sessions/{session_id}/history
 
 **Function**: Get complete history of a session
 
-**Parameters**:
+**Path Parameters**:
 - session_id: Session ID
-- limit: Maximum number of messages (default 100)
 
-**Response**:
-- thread_id: Session ID
-- title: Session title
-- messages: Message list (OpenAI format)
-- llm_calls: Number of LLM calls
+**Query Parameters**:
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| limit | int | No | Maximum number of messages (default 100) |
+
+**Response Example**:
+```json
+{
+  "thread_id": "d7e76375-6960-419a-9367-211ef64af877",
+  "title": "GNS3 Topology Assistance",
+  "messages": [
+    {
+      "id": "f0247568-071d-412f-9e3e-4cbe815834ea",
+      "role": "user",
+      "content": "你能干点啥。",
+      "metadata": {
+        "created_at": "2026-03-07T17:48:07.848519"
+      }
+    },
+    {
+      "id": "lc_run--019cc969-eb81-7dd1-a894-e819daf81cd0",
+      "role": "assistant",
+      "content": "我可以作为GNS3网络实验的助教...",
+      "tool_calls": [
+        {
+          "id": "call_00_xxx",
+          "type": "function",
+          "function": {
+            "name": "get_gns3_topology",
+            "arguments": {}
+          }
+        }
+      ],
+      "metadata": {}
+    }
+  ],
+  "created_at": null,
+  "updated_at": null,
+  "llm_calls": 2
+}
+```
 
 ### PATCH /v3/projects/{project_id}/chat/sessions/{session_id}
 
 **Function**: Rename session
 
 **Request Parameters**:
-- title: New title (1-255 characters)
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| title | string | Yes | New title (1-255 characters) |
+
+**Request Example**:
+```json
+{
+  "title": "New Session Title"
+}
+```
 
 **Response**: Updated session information
 
@@ -453,13 +563,31 @@ All endpoints are under `/v3/projects/{project_id}/chat/` path.
 
 **Function**: Pin session to top of list
 
-**Response**: Updated session information (includes pinned=true)
+**Response Example**:
+```json
+{
+  "id": 1,
+  "thread_id": "d7e76375-6960-419a-9367-211ef64af877",
+  "title": "GNS3 Topology Assistance",
+  "pinned": true,
+  ...
+}
+```
 
 ### DELETE /v3/projects/{project_id}/chat/sessions/{session_id}/pin
 
 **Function**: Unpin session
 
-**Response**: Updated session information (includes pinned=false)
+**Response Example**:
+```json
+{
+  "id": 1,
+  "thread_id": "d7e76375-6960-419a-9367-211ef64af877",
+  "title": "GNS3 Topology Assistance",
+  "pinned": false,
+  ...
+}
+```
 
 **Sorting Rules**:
 - Pinned sessions (pinned=true) appear at the front
@@ -523,7 +651,9 @@ OpenAI-compatible message model.
 - id: str - Message unique identifier (auto-generated or inherited from LangChain message)
 - role: Literal["user", "assistant", "system", "tool"] - Message role
 - content: str - Message content (supports text, JSON string)
-- created_at: str - Creation time (ISO 8601)
+- metadata: Optional[Dict] - Message metadata (includes created_at and other custom fields)
+  - created_at: str - Message creation time (ISO 8601 format)
+  - Other custom fields can be added as needed
 
 **Tool-related Fields**:
 - name: Optional[str] - Tool message name (tool message)
@@ -533,8 +663,10 @@ OpenAI-compatible message model.
   - type: Literal["function"] - Fixed as "function"
   - function: Dict - Contains name and arguments (dict or JSON string)
 
-**Metadata**:
-- metadata: Optional[Dict] - Additional message metadata
+**Important Notes**:
+- Message creation time is stored in `metadata.created_at` field
+- Frontend should read `metadata.created_at` for message timestamp
+- Historical messages may not have `created_at` in metadata (empty `{}`)
 
 ## Core Components
 
@@ -555,12 +687,19 @@ OpenAI-compatible message model.
    - Auto-generate UUID if message has no ID
    - Ensure all returned messages have unique identifier
 
-2. **Tool Calls Format Conversion**
+2. **Metadata and Timestamp Handling**
+   - Extract entire `metadata` dict from LangChain message
+   - Message creation time stored in `metadata.created_at` field (ISO 8601 format)
+   - No top-level `created_at` field in returned message
+   - Frontend should read `message.metadata.created_at` for timestamp
+   - Historical messages without metadata will have empty `{}`
+
+3. **Tool Calls Format Conversion**
    - LangChain format: `{'name': 'xxx', 'args': {...}, 'id': 'yyy', 'type': 'tool_call'}`
    - OpenAI format: `{'id': 'yyy', 'type': 'function', 'function': {'name': 'xxx', 'arguments': '{...}'}}`
    - Automatically convert `args` object to JSON string (if needed)
 
-3. **Content Type Handling**
+4. **Content Type Handling**
    - Supports string, dict, list types
    - Non-string types automatically converted to JSON string
 
@@ -583,7 +722,7 @@ OpenAI-compatible message model.
 2. Get or create chat session (from `chat_sessions` table)
 3. Set ContextVars (JWT token, LLM config)
 4. Build LangGraph config
-5. Create initial message with ID: `HumanMessage(content=message, id=str(uuid4()))`
+5. Create initial message with ID and timestamp: `HumanMessage(content=message, id=str(uuid4()), metadata={"created_at": datetime.utcnow().isoformat()})`
 6. Stream Agent execution, collecting statistics simultaneously
 7. Update session statistics to database after stream ends
 8. Sync auto-generated title
@@ -666,6 +805,55 @@ Handle different types based on SSE message's `type` field:
 | error | Display error message |
 | done | Mark stream end, stop loading state |
 | heartbeat | Ignore (keepalive signal) |
+
+### Session ID Management (Important)
+
+The frontend must properly manage session_id to maintain conversation continuity:
+
+1. **First request**: Do not include `session_id` in request body
+2. **Save session_id**: Extract `session_id` from each SSE message (especially the `done` message)
+3. **Subsequent requests**: Include the saved `session_id` in request body to continue the conversation
+4. **State management**: Store `session_id` in React state/localStorage to persist across page refreshes
+
+**Example**:
+```javascript
+// First message
+const response = await fetch('/chat/stream', {
+  method: 'POST',
+  body: JSON.stringify({ message: 'Hello', stream: true })
+});
+
+// Get session_id from first done message
+let sessionId = null;
+for await (const chunk of reader) {
+  const data = JSON.parse(chunk.data);
+  if (data.type === 'done') {
+    sessionId = data.session_id;
+    break;
+  }
+}
+
+// Subsequent messages - include session_id
+await fetch('/chat/stream', {
+  method: 'POST',
+  body: JSON.stringify({ message: 'Continue conversation', session_id: sessionId, stream: true })
+});
+```
+
+### Message Timestamp
+
+Each message includes a timestamp in the `metadata` field:
+
+- **Field location**: `message.metadata.created_at`
+- **Format**: ISO 8601 (e.g., `"2026-03-08T01:33:17.848519"`)
+- **Note**: Historical messages may have empty `metadata` ({}) if created before this feature was added
+
+**Example**:
+```javascript
+// Read message timestamp
+const timestamp = message.metadata?.created_at;
+const displayTime = timestamp ? new Date(timestamp).toLocaleString() : 'Unknown';
+```
 
 ### Error Handling
 

@@ -47,6 +47,7 @@ Copilot Modes:
 # Standard library imports
 import logging
 import operator
+from datetime import datetime
 from typing import Annotated
 from typing import Literal
 
@@ -262,6 +263,17 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     # Invoke model with prepared messages
     response = model_with_tools.invoke(prepared_messages)
 
+    # Add metadata with created_at timestamp to AI response
+    if hasattr(response, "metadata"):
+        existing_metadata = response.metadata or {}
+        response.metadata = {**existing_metadata, "created_at": datetime.utcnow().isoformat()}
+    else:
+        # LangChain messages should have metadata attribute, but defensive fallback
+        try:
+            response.metadata = {"created_at": datetime.utcnow().isoformat()}
+        except Exception:
+            logger.warning("Could not add metadata to AI response")
+
     logger.info("LLM call completed: tool_calls=%d", len(response.tool_calls) if hasattr(response, "tool_calls") else 0)
 
     return {
@@ -371,7 +383,16 @@ def tool_node(state: dict, config: RunnableConfig | None = None):
         except Exception as e:
             logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
             observation = f"Error: {str(e)}"
-        result.append(ToolMessage(content=observation, tool_call_id=tool_call["id"], name=tool_call["name"]))
+
+        # Create ToolMessage with metadata including created_at
+        tool_msg = ToolMessage(
+            content=observation,
+            tool_call_id=tool_call["id"],
+            name=tool_call["name"],
+            metadata={"created_at": datetime.utcnow().isoformat()}
+        )
+        result.append(tool_msg)
+
     return {"messages": result}
 
 
