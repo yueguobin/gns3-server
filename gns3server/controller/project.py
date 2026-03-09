@@ -15,7 +15,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import sys
 import re
 import os
 import json
@@ -526,7 +525,7 @@ class Project:
                     name = base_name.format(number, id=number, name="Node")
                 except KeyError as e:
                     raise ControllerError("{" + e.args[0] + "} is not a valid replacement string in the node name")
-                except (ValueError, IndexError) as e:
+                except (ValueError, IndexError):
                     raise ControllerError(f"{base_name} is not a valid replacement string in the node name")
                 if name not in self._allocated_node_names:
                     self._allocated_node_names.add(name)
