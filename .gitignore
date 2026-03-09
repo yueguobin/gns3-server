@@ -70,3 +70,4 @@ venv
 
 # Claude Code settings (may contain API keys)
 .claude/
+PROJECT_CONTEXT.md
