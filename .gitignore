@@ -70,4 +70,5 @@ venv
 
 # Claude Code settings (may contain API keys)
 .claude/
-PROJECT_CONTEXT.md
+!.claude/development.md  # Exception: allow development docs
+# PROJECT_CONTEXT.md  # Commented out: allow tracking project context

@@ -20,7 +20,6 @@ Uses Fernet symmetric encryption.
 """
 
 import os
-import secrets
 import logging
 from typing import Optional
 from cryptography.fernet import Fernet
@@ -43,7 +42,10 @@ def init_encryption(secrets_dir: str) -> None:
     encryption_key_path = os.path.join(secrets_dir, "gns3_encryption_key")
 
     if not os.path.exists(encryption_key_path):
-        log.info(f"No encryption key found, generating one in '{encryption_key_path}'...")
+        log.info(
+            f"No encryption key found, generating one in "
+            f"'{encryption_key_path}'..."
+        )
         try:
             key = Fernet.generate_key()
             os.makedirs(secrets_dir, exist_ok=True)
@@ -53,16 +55,26 @@ def init_encryption(secrets_dir: str) -> None:
             # Set restrictive permissions (owner read/write only)
             os.chmod(encryption_key_path, 0o600)
         except OSError as e:
-            log.error(f"Could not create encryption key file '{encryption_key_path}': {e}")
+            log.error(
+                "Could not create encryption key file "
+                f"'{encryption_key_path}': {e}"
+            )
             raise
 
     try:
         with open(encryption_key_path, encoding="utf-8") as f:
             key_content = f.read().strip()
-        _fernet = Fernet(key_content.encode() if isinstance(key_content, str) else key_content)
+        key_bytes = (
+            key_content.encode()
+            if isinstance(key_content, str)
+            else key_content
+        )
+        _fernet = Fernet(key_bytes)
         log.debug("Encryption initialized successfully")
     except OSError as e:
-        log.error(f"Could not read encryption key file '{encryption_key_path}': {e}")
+        log.error(
+            f"Could not read encryption key file '{encryption_key_path}': {e}"
+        )
         raise
 
 
@@ -76,7 +88,9 @@ def encrypt(plaintext: str) -> str:
     """
 
     if _fernet is None:
-        raise RuntimeError("Encryption not initialized. Call init_encryption() first.")
+        raise RuntimeError(
+            "Encryption not initialized. Call init_encryption() first."
+        )
 
     if not plaintext:
         return ""
@@ -96,7 +110,9 @@ def decrypt(ciphertext: str) -> str:
     """
 
     if _fernet is None:
-        raise RuntimeError("Encryption not initialized. Call init_encryption() first.")
+        raise RuntimeError(
+            "Encryption not initialized. Call init_encryption() first."
+        )
 
     if not ciphertext:
         return ""
@@ -142,8 +158,6 @@ def re_encrypt(old_key_path: str, new_key_path: str) -> None:
     :param new_key_path: Path to the new encryption key
     """
 
-    global _fernet
-
     # Load old key and decrypt all data
     with open(old_key_path, encoding="utf-8") as f:
         old_key = f.read().strip().encode()
@@ -153,3 +167,5 @@ def re_encrypt(old_key_path: str, new_key_path: str) -> None:
     # This would be used during a key rotation migration
     # Implementation depends on how data is stored
     log.warning("Key rotation not yet implemented")
+    # Mark old_fernet as intentionally unused for now
+    _ = old_fernet
