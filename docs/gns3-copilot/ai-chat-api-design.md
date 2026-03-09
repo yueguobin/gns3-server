@@ -247,6 +247,13 @@ Chat API uses Server-Sent Events (SSE) for streaming transmission.
 | tool_end | Tool execution complete | tool_name, tool_output, session_id |
 | error | Error message | error, session_id |
 | done | Stream end | session_id |
+
+**Tool Output Format** (`tool_output` field):
+- If the tool returns a non-string type (dict, list), it is automatically serialized to JSON format using `json.dumps(obj, ensure_ascii=False, indent=2)`
+- If the tool returns a string type, it is passed through as-is
+- This ensures all structured data is in standard JSON format, making it easy for the frontend to parse with `JSON.parse()`
+- Chinese and other non-ASCII characters are preserved (not escaped to `\uXXXX`)
+
 | heartbeat | Heartbeat keepalive | session_id |
 
 ### Message Examples
@@ -317,7 +324,7 @@ Chat API uses Server-Sent Events (SSE) for streaming transmission.
 {
   "type": "tool_end",
   "tool_name": "execute_multiple_device_commands",
-  "tool_output": "{...}",
+  "tool_output": "[\n  {\n    \"device_name\": \"R-1\",\n    \"status\": \"success\",\n    \"output\": \"Cisco IOS Software, \\n   IOSv Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 15.2(1.90)\"\n  },\n  {\n    \"device_name\": \"R-2\",\n    \"status\": \"failed\",\n    \"error\": \"Connection timeout\"\n  }\n]",
   "session_id": "xxx"
 }
 

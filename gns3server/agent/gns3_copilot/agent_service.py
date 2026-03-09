@@ -32,6 +32,7 @@ in the project directory.
 """
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime
@@ -460,9 +461,10 @@ class AgentService:
         elif event_type == "on_tool_end":
             # Tool execution completed
             output = data.get("output", "")
-            # Convert output to string if it's not already
+            # Convert output to JSON string if it's not already a string
+            # This ensures dict/list outputs are properly serialized for frontend parsing
             if not isinstance(output, str):
-                output = str(output)
+                output = json.dumps(output, ensure_ascii=False, indent=2)
             return {
                 "type": "tool_end",
                 "tool_name": event.get("name", ""),
