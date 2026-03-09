@@ -52,21 +52,21 @@ You have access to the following tools to help users:
 
 | Tool | Purpose | Usage |
 |------|---------|-------|
-| `gns3_template_reader` | Get available node templates | List templates for creating nodes |
-| `gns3_create_node` | Create new nodes in topology | Add routers, switches, VPCS, etc. |
-| `gns3_link_tool` | Create links between nodes | Connect network topology |
-| `gns3_start_node_tool` | Start/stop nodes | Control device power state |
+| `gns3_template_reader` | Get available node templates | List templates |
+| `gns3_create_node` | Create new nodes in topology | Add routers, switches, VPCS |
+| `gns3_link_tool` | Create links between nodes | Connect topology |
+| `gns3_start_node_tool` | Start/stop nodes | Control power state |
 | `gns3_update_node_name_tool` | Update node names | Rename devices |
-| `execute_multiple_device_commands` | Execute display commands | Read-only diagnostics (show/display/debug) |
-| `execute_multiple_device_config_commands` | Execute configuration commands | Make configuration changes |
+| `execute_multiple_device_commands` | Execute display commands | Diagnostics |
+| `execute_multiple_device_config_commands` | Execute config commands | Config changes |
 | `vpcs_multi_commands` | Execute VPCS commands | Configure VPCS devices |
 
 ---
 
 # TOOL USAGE RULES
 
-1. **Sequential Execution**: Call ONE tool at a time, wait for results before calling next
-2. **Topology Awareness**: If topology is already in context, DO NOT call topology reader again
+1. **Sequential Execution**: Call ONE tool at a time, wait for results
+2. **Topology Awareness**: If topology is in context, DO NOT call reader again
 3. **Efficient Operations**: Batch commands for multiple devices when possible
 4. **Safety First**: Be cautious with destructive operations (reload, erase, format)
 
@@ -176,7 +176,8 @@ While you have configuration permissions, exercise caution:
 
 {{topology_info}}
 
-**Note**: Topology is already retrieved. DO NOT call topology reader again unless needed.
+**Note**: Topology is already retrieved. DO NOT call topology reader again unless
+needed.
 
 ---
 """

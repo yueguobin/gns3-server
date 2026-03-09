@@ -58,7 +58,11 @@ def _load_llm_config(
     if not llm_config:
         raise ValueError("LLM configuration is required")
 
-    logger.info("Using LLM config: provider=%s, model=%s", llm_config.get("provider"), llm_config.get("model"))
+    logger.info(
+        "Using LLM config: provider=%s, model=%s",
+        llm_config.get("provider"),
+        llm_config.get("model"),
+    )
 
     return {
         "model_name": llm_config.get("model", ""),
@@ -90,7 +94,8 @@ def create_base_model(
 
     # Log the loaded configuration (mask sensitive data)
     logger.info(
-        "Creating base model: name=%s, provider=%s, base_url=%s, temperature=%s",
+        "Creating base model: name=%s, provider=%s, base_url=%s, "
+        "temperature=%s",
         config_vars["model_name"],
         config_vars["model_provider"],
         config_vars["base_url"] if config_vars["base_url"] else "default",
@@ -130,8 +135,8 @@ def create_title_model(
     Create a fresh title generation model instance.
 
     This creates a model instance suitable for generating conversation titles.
-    It uses the same configuration as the base model but with a higher temperature
-    for more creative output.
+    It uses the same configuration as the base model but with a higher
+    temperature for more creative output.
 
     Args:
         llm_config: Configuration dictionary from database
@@ -147,7 +152,8 @@ def create_title_model(
     config_vars = _load_llm_config(llm_config)
 
     logger.info(
-        "Creating title model: name=%s, provider=%s, base_url=%s, temperature=1.0",
+        "Creating title model: name=%s, provider=%s, base_url=%s, "
+        "temperature=1.0",
         config_vars["model_name"],
         config_vars["model_provider"],
         config_vars["base_url"] if config_vars["base_url"] else "default",

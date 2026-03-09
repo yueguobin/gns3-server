@@ -32,7 +32,6 @@ availability.
 """
 
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -44,6 +43,7 @@ def _get_gns3_copilot_root() -> Path:
     current_file = Path(__file__).resolve()
     # Go up to the gns3_copilot directory (utils parent)
     return current_file.parent.parent
+
 
 # Default forbidden commands (fallback if file not found)
 DEFAULT_FORBIDDEN_COMMANDS = [
@@ -101,7 +101,10 @@ def _load_forbidden_commands() -> list[str]:
                 forbidden_commands.append(line.lower())
 
         if not forbidden_commands:
-            logger.warning("No forbidden commands found in %s. Using default list.", file_path)
+            logger.warning(
+                "No forbidden commands found in %s. Using default list.",
+                file_path,
+            )
             _forbidden_commands_cache = DEFAULT_FORBIDDEN_COMMANDS.copy()
         else:
             logger.info(
@@ -135,7 +138,9 @@ def reload_forbidden_commands() -> None:
     """
     global _forbidden_commands_cache
     _forbidden_commands_cache = None
-    logger.info("Forbidden commands cache cleared. Will reload on next access.")
+    logger.info(
+        "Forbidden commands cache cleared. Will reload on next access."
+    )
 
 
 def get_forbidden_commands() -> list[str]:

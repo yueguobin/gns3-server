@@ -27,7 +27,8 @@
 GNS3 Topology Reader Tool
 
 This module provides a LangChain BaseTool to retrieve the topology of a
-specific GNS3 project by project ID. Returns nodes, links, and project metadata.
+specific GNS3 project by project ID. Returns nodes, links, and project
+metadata.
 
 """
 
@@ -57,7 +58,8 @@ class GNS3TopologyTool(BaseTool):
 
     Output: Dictionary with:
     - `project_id`, `name`, `status`: Project metadata
-    - `nodes`: Dict of node details (node_id, name, ports, console_port, type, etc.)
+    - `nodes`: Dict of node details (node_id, name, ports, console_port,
+               type, etc.)
     - `links`: List of link connections
 
     Use this to understand network structure before making changes.
@@ -73,23 +75,31 @@ class GNS3TopologyTool(BaseTool):
         Synchronous method to retrieve the topology of a specific GNS3 project.
 
         Args:
-            tool_input : Input parameters, typically a dict or Pydantic model containing server_url.
-            run_manager : Callback manager for tool run.
-            project_id : The UUID of the specific GNS3 project to retrieve topology from.
+            tool_input: Input parameters, typically a dict or Pydantic model
+                       containing server_url.
+            run_manager: Callback manager for tool run.
+            project_id: The UUID of the specific GNS3 project to retrieve
+                        topology from.
 
         Returns:
-            dict: A dictionary containing the project ID, name, status, nodes, and links,
-                  or an error dictionary if an exception occurs or project_id is not provided.
+            dict: A dictionary containing the project ID, name, status, nodes,
+                  and links, or an error dictionary if an exception occurs
+                  or project_id is not provided.
         """
 
         # Log received input
-        logger.info("Received tool_input: %s, project_id: %s", tool_input, project_id)
+        logger.info(
+            "Received tool_input: %s, project_id: %s", tool_input, project_id
+        )
 
         try:
             # Validate project_id parameter
             if not project_id:
                 logger.error("project_id parameter is required.")
-                return {"error": "project_id parameter is required. Please provide a valid project UUID."}
+                return {
+                    "error": "project_id parameter is required. "
+                    "Please provide a valid project UUID."
+                }
 
             # Initialize Gns3Connector using factory function
             logger.info("Connecting to GNS3 server...")
@@ -97,7 +107,10 @@ class GNS3TopologyTool(BaseTool):
 
             if server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
+                return {
+                    "error": "Failed to connect to GNS3 server. Please check "
+                    "your configuration."
+                }
 
             # Use the provided project_id directly
             logger.info(f"Retrieving topology for project_id: {project_id}")
@@ -109,13 +122,16 @@ class GNS3TopologyTool(BaseTool):
                 "project_id": project.project_id,
                 "name": project.name,
                 "status": project.status,
-                "nodes": self._clean_nodes_ports(copy.deepcopy(project.nodes_inventory())),
+                "nodes": self._clean_nodes_ports(
+                    copy.deepcopy(project.nodes_inventory())
+                ),
                 "links": project.links_summary(is_print=False),
             }
 
             # Log topology result
             logger.info(
-                "Topology retrieved: project_id=%s, name=%s, nodes=%d, links=%d",
+                "Topology retrieved: project_id=%s, name=%s, nodes=%d, "
+                "links=%d",
                 topology.get("project_id"),
                 topology.get("name"),
                 len(topology.get("nodes", {})),
@@ -132,11 +148,16 @@ class GNS3TopologyTool(BaseTool):
     def _clean_nodes_ports(self, data: dict) -> dict:
         """
         Clean and simplify the nodes data structure.
-        Simplify each node's ports list to only keep name and short_name fields.
+
+        Simplify each node's ports list to only keep name and short_name
+        fields.
         """
         for node in data.values():  # Iterate through R-1, R-2, R-3, R-4
             if "ports" in node and isinstance(node["ports"], list):
-                node["ports"] = [{"name": port["name"], "short_name": port["short_name"]} for port in node["ports"]]
+                node["ports"] = [
+                    {"name": port["name"], "short_name": port["short_name"]}
+                    for port in node["ports"]
+                ]
         return data
 
 

@@ -57,7 +57,9 @@ def get_device_ports_from_topology(
         Devices that don't exist or missing console_port will not be included
     """
     # Log received parameters
-    logger.info("Called with device_names=%s, project_id=%s", device_names, project_id)
+    logger.info(
+        "Called with device_names=%s, project_id=%s", device_names, project_id
+    )
 
     try:
         # Lazy import to avoid circular dependency
@@ -77,7 +79,9 @@ def get_device_ports_from_topology(
         for device_name in device_names:
             # Check if device exists in topology
             if device_name not in topology.get("nodes", {}):
-                logger.warning("Device '%s' not found in topology", device_name)
+                logger.warning(
+                    "Device '%s' not found in topology", device_name
+                )
                 continue
 
             node_info = topology["nodes"][device_name]
@@ -99,15 +103,30 @@ def get_device_ports_from_topology(
             # Use defaults if not found in tags
             if device_type is None:
                 device_type = "cisco_ios_telnet"
-                logger.debug("Device '%s': device_type not found in tags, using default: cisco_ios_telnet", device_name)
+                logger.debug(
+                    "Device '%s': device_type not found in tags, using default: "
+                    "cisco_ios_telnet",
+                    device_name,
+                )
             else:
-                logger.debug("Device '%s': extracted device_type=%s from tags", device_name, device_type)
+                logger.debug(
+                    "Device '%s': extracted device_type=%s from tags",
+                    device_name,
+                    device_type,
+                )
 
             if platform is None:
                 platform = "cisco_ios"
-                logger.debug("Device '%s': platform not found in tags, using default: cisco_ios", device_name)
+                logger.debug(
+                    "Device '%s': platform not found in tags, using default: cisco_ios",
+                    device_name,
+                )
             else:
-                logger.debug("Device '%s': extracted platform=%s from tags", device_name, platform)
+                logger.debug(
+                    "Device '%s': extracted platform=%s from tags",
+                    device_name,
+                    platform,
+                )
 
             # Add device to hosts_data
             hosts_data[device_name] = {

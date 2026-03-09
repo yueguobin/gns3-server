@@ -26,7 +26,8 @@
 
 GNS3 node name update tool for renaming network devices.
 
-Provides functionality to update the name of one or multiple nodes in GNS3 projects.
+Provides functionality to update the name of one or multiple nodes
+    in GNS3 projects.
 """
 
 import json
@@ -46,10 +47,12 @@ logger = logging.getLogger(__name__)
 
 class GNS3UpdateNodeNameTool(BaseTool):
     """
-    A LangChain tool to update the name of one or multiple nodes in a GNS3 project.
+    A LangChain tool to update the name of one or multiple nodes
+        in a GNS3 project.
 
     **Input**:
-    A JSON object with project_id and nodes array containing node_id and new_name.
+    A JSON object with project_id and nodes array containing
+        node_id and new_name.
     Example:
         {
             "project_id": "uuid-of-project",
@@ -67,8 +70,18 @@ class GNS3UpdateNodeNameTool(BaseTool):
         "successful": 2,
         "failed": 0,
         "nodes": [
-            {"node_id": "...", "old_name": "...", "new_name": "...", "status": "success"},
-            {"node_id": "...", "old_name": "...", "new_name": "...", "status": "success"}
+            {
+                "node_id": "...",
+                "old_name": "...",
+                "new_name": "...",
+                "status": "success"
+            },
+            {
+                "node_id": "...",
+                "old_name": "...",
+                "new_name": "...",
+                "status": "success"
+            }
         ]
     }
     """
@@ -76,11 +89,17 @@ class GNS3UpdateNodeNameTool(BaseTool):
     name: str = "update_gns3_node_name"
     description: str = """
     Updates the name of one or multiple nodes in a GNS3 project.
-    Input: JSON with project_id and nodes array. Each node must have node_id and new_name.
-    Returns: A dictionary with all nodes' update results including success/failure status.
+    Input: JSON with project_id and nodes array.
+    Each node must have node_id and new_name.
+    Returns: A dictionary with all nodes' update results
+        including success/failure status.
     """
 
-    def _run(self, tool_input: str, run_manager: CallbackManagerForToolRun | None = None) -> dict[str, Any]:
+    def _run(
+        self,
+        tool_input: str,
+        run_manager: CallbackManagerForToolRun | None = None,
+    ) -> dict[str, Any]:
         try:
             # Parse input JSON
             input_data = json.loads(tool_input)
@@ -103,7 +122,9 @@ class GNS3UpdateNodeNameTool(BaseTool):
                     return {"error": f"Node {i + 1} must be a dictionary."}
                 if "node_id" not in node_data or "new_name" not in node_data:
                     logger.error("Node %d missing node_id or new_name.", i + 1)
-                    return {"error": f"Node {i + 1} missing node_id or new_name."}
+                    return {
+                        "error": f"Node {i + 1} missing node_id or new_name."
+                    }
 
             # Initialize Gns3Connector
             logger.info("Connecting to GNS3 server...")
@@ -111,10 +132,17 @@ class GNS3UpdateNodeNameTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
+                return {
+                    "error": "Failed to connect to GNS3 server. "
+                    "Please check your configuration."
+                }
 
             # Update node names
-            logger.info("Updating names for %d nodes in project %s...", len(nodes), project_id)
+            logger.info(
+                "Updating names for %d nodes in project %s...",
+                len(nodes),
+                project_id,
+            )
             results = []
 
             for i, node_data in enumerate(nodes):
@@ -131,7 +159,11 @@ class GNS3UpdateNodeNameTool(BaseTool):
                     )
 
                     # Get node to retrieve current name
-                    node = Node(project_id=project_id, node_id=node_id, connector=gns3_server)
+                    node = Node(
+                        project_id=project_id,
+                        node_id=node_id,
+                        connector=gns3_server,
+                    )
                     node.get()
                     old_name = node.name
 
@@ -148,7 +180,11 @@ class GNS3UpdateNodeNameTool(BaseTool):
                             "status": "success",
                         }
                         results.append(node_info)
-                        logger.info("Successfully updated node name: %s -> %s", old_name, new_name)
+                        logger.info(
+                            "Successfully updated node name: %s -> %s",
+                            old_name,
+                            new_name,
+                        )
                     else:
                         error_info = {
                             "node_id": node_id,
@@ -159,7 +195,9 @@ class GNS3UpdateNodeNameTool(BaseTool):
                             "error": "Name verification failed",
                         }
                         results.append(error_info)
-                        logger.error("Failed to update node name for %s", node_id)
+                        logger.error(
+                            "Failed to update node name for %s", node_id
+                        )
 
                 except Exception as e:
                     error_info = {
@@ -172,7 +210,9 @@ class GNS3UpdateNodeNameTool(BaseTool):
                     logger.error("Failed to update node %d: %s", i + 1, e)
 
             # Analyze results
-            successful_nodes = [r for r in results if r.get("status") == "success"]
+            successful_nodes = [
+                r for r in results if r.get("status") == "success"
+            ]
             failed_nodes = [r for r in results if r.get("status") == "failed"]
 
             # Construct final response
@@ -205,10 +245,12 @@ if __name__ == "__main__":
     print("=== Testing single node name update ===")
     test_input_single = json.dumps(
         {
-            "project_id": "your-project-uuid",  # Replace with actual project UUID
+            # Replace with actual project UUID
+            "project_id": "your-project-uuid",
             "nodes": [
                 {
-                    "node_id": "your-node-uuid",  # Replace with actual node UUID
+                    # Replace with actual node UUID
+                    "node_id": "your-node-uuid",
                     "new_name": "Router1",
                 }
             ],
@@ -222,7 +264,8 @@ if __name__ == "__main__":
     print("\n=== Testing multiple nodes name update ===")
     test_input_multiple = json.dumps(
         {
-            "project_id": "your-project-uuid",  # Replace with actual project UUID
+            # Replace with actual project UUID
+            "project_id": "your-project-uuid",
             "nodes": [
                 {"node_id": "node-uuid-1", "new_name": "Router1"},
                 {"node_id": "node-uuid-2", "new_name": "Switch1"},

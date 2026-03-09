@@ -62,8 +62,12 @@ logger = logging.getLogger(__name__)
 
 # Context variables for request-scoped data
 # Automatically cleaned up when request context ends
-_jwt_token_context: ContextVar[Optional[str]] = ContextVar("_jwt_token_context", default=None)
-_llm_config_context: ContextVar[Optional[dict]] = ContextVar("_llm_config_context", default=None)
+_jwt_token_context: ContextVar[Optional[str]] = ContextVar(
+    "_jwt_token_context", default=None
+)
+_llm_config_context: ContextVar[Optional[dict]] = ContextVar(
+    "_llm_config_context", default=None
+)
 
 
 def set_current_jwt_token(token: str) -> None:
@@ -94,10 +98,15 @@ def set_current_llm_config(config: dict) -> None:
     """Set the LLM config for the current request context.
 
     Args:
-        config: LLM configuration dictionary with provider, model, api_key, etc.
+        config: LLM configuration dictionary with provider, model, api_key,
+                etc.
     """
     _llm_config_context.set(config)
-    logger.debug("LLM config set in context: provider=%s, model=%s", config.get("provider"), config.get("model"))
+    logger.debug(
+        "LLM config set in context: provider=%s, model=%s",
+        config.get("provider"),
+        config.get("model"),
+    )
 
 
 def get_current_llm_config() -> Optional[dict]:
@@ -109,7 +118,9 @@ def get_current_llm_config() -> Optional[dict]:
     config = _llm_config_context.get()
     if config:
         logger.debug(
-            "LLM config retrieved from context: provider=%s, model=%s", config.get("provider"), config.get("model")
+            "LLM config retrieved from context: provider=%s, model=%s",
+            config.get("provider"),
+            config.get("model"),
         )
     else:
         logger.warning("LLM config not found in context")

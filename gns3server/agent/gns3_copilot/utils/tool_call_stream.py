@@ -79,10 +79,11 @@ class ToolCallStreamAccumulator:
                         tc_id = getattr(tool_call, "id", None)
                         tc_name = getattr(tool_call, "name", "")
 
-                    # Only when ID is not empty, consider it as the start of a new tool call
+                    # Only when ID is not empty, consider it as the start of a new
+                    # tool call
                     if tc_id:
-                        # Initialize current tool state (this is the only time to get ID)
-                        # Note: only one tool can be called at a time
+                        # Initialize current tool state (this is the only time to
+                        # get ID). Note: only one tool can be called at a time
                         self._current_tool_call = {
                             "id": tc_id,
                             "name": tc_name if tc_name else "UNKNOWN_TOOL",
@@ -90,19 +91,24 @@ class ToolCallStreamAccumulator:
                         }
 
                         # Send initial tool_call event with empty args
-                        chunks.append({
-                            "type": "tool_call",
-                            "tool_call": {
-                                "id": tc_id,
-                                "type": "function",
-                                "function": {
-                                    "name": self._current_tool_call["name"],
-                                    "arguments": ""
-                                }
+                        chunks.append(
+                            {
+                                "type": "tool_call",
+                                "tool_call": {
+                                    "id": tc_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": self._current_tool_call[
+                                            "name"
+                                        ],
+                                        "arguments": "",
+                                    },
+                                },
                             }
-                        })
+                        )
 
-            # ========== Phase 2: Concatenate parameter strings from tool_call_chunks ==========
+            # ========== Phase 2: Concatenate parameter strings from
+            # tool_call_chunks ==========
             # Concatenate parameter strings from tool_call_chunk
             if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
                 if self._current_tool_call:
@@ -116,43 +122,58 @@ class ToolCallStreamAccumulator:
 
                         # Core: string concatenation
                         if isinstance(args_chunk, str):
-                            tool_data["args_string"] += args_chunk
+                            tool_data[
+                                "args_string"
+                            ] += args_chunk
 
                             # Send updated tool_call event with accumulated args
-                            chunks.append({
-                                "type": "tool_call",
-                                "tool_call": {
-                                    "id": tool_data["id"],
-                                    "type": "function",
-                                    "function": {
-                                        "name": tool_data["name"],
-                                        "arguments": tool_data["args_string"]
-                                    }
+                            chunks.append(
+                                {
+                                    "type": "tool_call",
+                                    "tool_call": {
+                                        "id": tool_data["id"],
+                                        "type": "function",
+                                        "function": {
+                                            "name": tool_data["name"],
+                                            "arguments": tool_data[
+                                                "args_string"
+                                            ],
+                                        },
+                                    },
                                 }
-                            })
+                            )
 
-            # ========== Phase 3: Determine if tool_calls_chunks output is complete ==========
+            # ========== Phase 3: Determine if tool_calls_chunks output is
+            # complete ==========
             # Check finish_reason == "tool_calls" or "STOP"
             response_metadata = getattr(chunk, "response_metadata", {})
-            finish_reason = response_metadata.get("finish_reason") if isinstance(response_metadata, dict) else None
+            finish_reason = (
+                response_metadata.get("finish_reason")
+                if isinstance(response_metadata, dict)
+                else None
+            )
 
-            if (finish_reason == "tool_calls") or (finish_reason == "stop" and self._current_tool_call is not None):
+            if (finish_reason == "tool_calls") or (
+                finish_reason == "stop" and self._current_tool_call is not None
+            ):
                 if self._current_tool_call:
                     tool_data = self._current_tool_call
 
                     # Send final complete tool_call event
-                    chunks.append({
-                        "type": "tool_call",
-                        "tool_call": {
-                            "id": tool_data["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tool_data["name"],
-                                "arguments": tool_data["args_string"],
-                                "complete": True  # Mark as complete
-                            }
+                    chunks.append(
+                        {
+                            "type": "tool_call",
+                            "tool_call": {
+                                "id": tool_data["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tool_data["name"],
+                                    "arguments": tool_data["args_string"],
+                                    "complete": True,  # Mark as complete
+                                },
+                            },
                         }
-                    })
+                    )
 
                     # Clear the current tool call state
                     self._current_tool_call = None
@@ -160,11 +181,13 @@ class ToolCallStreamAccumulator:
             # Also handle regular content (when not in tool call mode)
             content = getattr(chunk, "content", "")
             if content and not self._current_tool_call:
-                chunks.append({
-                    "type": "content",
-                    "content": content,
-                    "message_id": event.get("metadata", {}).get("msg_id")
-                })
+                chunks.append(
+                    {
+                        "type": "content",
+                        "content": content,
+                        "message_id": event.get("metadata", {}).get("msg_id"),
+                    }
+                )
 
         return chunks
 

@@ -55,7 +55,8 @@ def convert_langchain_to_openai(lc_message) -> Dict[str, Any]:
     Convert LangChain message to OpenAI-compatible format.
 
     Args:
-        lc_message: LangChain message (HumanMessage, AIMessage, SystemMessage, ToolMessage)
+        lc_message: LangChain message (HumanMessage, AIMessage, SystemMessage,
+                    ToolMessage)
 
     Returns:
         Dictionary in OpenAI-compatible format
@@ -90,7 +91,10 @@ def convert_langchain_to_openai(lc_message) -> Dict[str, Any]:
                     {
                         "id": tc_dict.get("id", str(uuid.uuid4())),
                         "type": "function",
-                        "function": {"name": tc_dict.get("name", ""), "arguments": tc_dict.get("args", {})},
+                        "function": {
+                            "name": tc_dict.get("name", ""),
+                            "arguments": tc_dict.get("args", {}),
+                        },
                     }
                 )
             msg["tool_calls"] = tool_calls
@@ -149,7 +153,11 @@ def convert_openai_to_langchain(msg: Dict[str, Any]):
         return ai_msg
 
     elif role == "tool":
-        return ToolMessage(content=content, name=msg.get("name", ""), tool_call_id=msg.get("tool_call_id", ""))
+        return ToolMessage(
+            content=content,
+            name=msg.get("name", ""),
+            tool_call_id=msg.get("tool_call_id", ""),
+        )
 
     elif role == "system":
         return SystemMessage(content=content)
@@ -176,7 +184,11 @@ def convert_stream_event_to_openai(event: Dict[str, Any]) -> Dict[str, Any]:
         content = getattr(chunk, "content", "")
 
         if content:
-            return {"type": "content", "content": content, "message_id": event.get("metadata", {}).get("msg_id")}
+            return {
+                "type": "content",
+                "content": content,
+                "message_id": event.get("metadata", {}).get("msg_id"),
+            }
 
         # Check for tool call chunks
         if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
@@ -191,12 +203,19 @@ def convert_stream_event_to_openai(event: Dict[str, Any]) -> Dict[str, Any]:
                         "tool_call": {
                             "id": tc_id,
                             "type": "function",
-                            "function": {"name": tc_name or "", "arguments": tc_args or ""},
+                            "function": {
+                                "name": tc_name or "",
+                                "arguments": tc_args or "",
+                            },
                         },
                     }
 
     elif event_type == "on_tool_start":
-        return {"type": "tool_start", "tool_name": event.get("name", ""), "metadata": event.get("metadata", {})}
+        return {
+            "type": "tool_start",
+            "tool_name": event.get("name", ""),
+            "metadata": event.get("metadata", {}),
+        }
 
     elif event_type == "on_tool_end":
         tool_output = event.get("data", {}).get("output", "")

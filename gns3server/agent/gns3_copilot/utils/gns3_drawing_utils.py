@@ -135,9 +135,14 @@ def calculate_two_node_shape(
     node2_center_x = node2["x"] + (node2_width / 2)
     node2_center_y = node2["y"] + (node2_height / 2)
 
-    distance = math.sqrt((node2_center_x - node1_center_x) ** 2 + (node2_center_y - node1_center_y) ** 2)
+    distance = math.sqrt(
+        (node2_center_x - node1_center_x) ** 2
+        + (node2_center_y - node1_center_y) ** 2
+    )
 
-    angle_rad = math.atan2(node2_center_y - node1_center_y, node2_center_x - node1_center_x)
+    angle_rad = math.atan2(
+        node2_center_y - node1_center_y, node2_center_x - node1_center_x
+    )
     angle_deg = round(math.degrees(angle_rad))
     angle_rad = math.radians(angle_deg)
 
@@ -157,10 +162,16 @@ def calculate_two_node_shape(
         shape_width = rx * 2
         shape_height = ry * 2
 
-        svg_x = center_x - (rx * math.cos(angle_rad) - ry * math.sin(angle_rad))
-        svg_y = center_y - (rx * math.sin(angle_rad) + ry * math.cos(angle_rad))
+        svg_x = center_x - (
+            rx * math.cos(angle_rad) - ry * math.sin(angle_rad)
+        )
+        svg_y = center_y - (
+            rx * math.sin(angle_rad) + ry * math.cos(angle_rad)
+        )
 
-        shape_svg = generate_ellipse_svg(int(rx), int(ry), color_scheme, int(shape_width), int(shape_height))
+        shape_svg = generate_ellipse_svg(
+            int(rx), int(ry), color_scheme, int(shape_width), int(shape_height)
+        )
 
         offset_distance = ry * text_offset_ratio
 
@@ -177,12 +188,22 @@ def calculate_two_node_shape(
 
     else:  # rectangle
         shape_width = distance
-        shape_height = max(node1_width, node1_height, node2_width, node2_height)
+        shape_height = max(
+            node1_width, node1_height, node2_width, node2_height
+        )
 
-        svg_x = center_x - ((shape_width / 2) * math.cos(angle_rad) - (shape_height / 2) * math.sin(angle_rad))
-        svg_y = center_y - ((shape_width / 2) * math.sin(angle_rad) + (shape_height / 2) * math.cos(angle_rad))
+        svg_x = center_x - (
+            (shape_width / 2) * math.cos(angle_rad)
+            - (shape_height / 2) * math.sin(angle_rad)
+        )
+        svg_y = center_y - (
+            (shape_width / 2) * math.sin(angle_rad)
+            + (shape_height / 2) * math.cos(angle_rad)
+        )
 
-        shape_svg = generate_rectangle_svg(int(shape_width), int(shape_height), color_scheme)
+        shape_svg = generate_rectangle_svg(
+            int(shape_width), int(shape_height), color_scheme
+        )
 
         offset_distance = (shape_height / 2) * text_offset_ratio
 
@@ -238,7 +259,7 @@ def generate_ellipse_svg(
     svg_height: int,
 ) -> str:
     """Generate SVG for ellipse."""
-    return f"""<svg width="{svg_width}" height="{svg_height}"><ellipse cx="{rx}" cy="{ry}" rx="{rx}" ry="{ry}" fill="{color_scheme["fill"]}" fill-opacity="{color_scheme["fill_opacity"]}"/></svg>"""
+    return f"""<svg width="{svg_width}" height="{svg_height}"><ellipse cx="{rx}" cy="{ry}" rx="{rx}" ry="{ry}" fill="{color_scheme["fill"]}" fill-opacity="{color_scheme["fill_opacity"]}"/></svg>"""  # noqa: E501
 
 
 def generate_rectangle_svg(
@@ -247,7 +268,7 @@ def generate_rectangle_svg(
     color_scheme: dict[str, Any],
 ) -> str:
     """Generate SVG for rectangle."""
-    return f"""<svg width="{width}" height="{height}"><rect x="0" y="0" width="{width}" height="{height}" fill="{color_scheme["fill"]}" fill-opacity="{color_scheme["fill_opacity"]}"/></svg>"""
+    return f"""<svg width="{width}" height="{height}"><rect x="0" y="0" width="{width}" height="{height}" fill="{color_scheme["fill"]}" fill-opacity="{color_scheme["fill_opacity"]}"/></svg>"""  # noqa: E501
 
 
 def generate_text_svg(text: str, color_scheme: dict[str, Any]) -> str:
@@ -255,7 +276,7 @@ def generate_text_svg(text: str, color_scheme: dict[str, Any]) -> str:
     text_width = len(text) * 8 + 20
     text_height = DEFAULT_FONT_SIZE + 16
 
-    return f"""<svg width="{text_width}" height="{text_height}"><text font-family="TypeWriter" font-size="{DEFAULT_FONT_SIZE}.0" font-weight="bold" fill="{color_scheme["stroke"]}" text-anchor="middle" x="{text_width / 2}" y="{text_height / 2 + 4}">{text}</text></svg>"""
+    return f"""<svg width="{text_width}" height="{text_height}"><text font-family="TypeWriter" font-size="{DEFAULT_FONT_SIZE}.0" font-weight="bold" fill="{color_scheme["stroke"]}" text-anchor="middle" x="{text_width / 2}" y="{text_height / 2 + 4}">{text}</text></svg>"""  # noqa: E501
 
 
 def _hsv_to_hex(h: int, s: int, v: int) -> str:
@@ -333,15 +354,33 @@ def _get_color_scheme(area_name: str) -> dict[str, Any]:
         return COLOR_SCHEMES["NORMAL_AREA"]
 
     # 3. Logical Isolation
-    if "VRF" in label or "VLAN" in label or "MSTP" in label or "VXLAN" in label or "MPLS" in label:
+    if (
+        "VRF" in label
+        or "VLAN" in label
+        or "MSTP" in label
+        or "VXLAN" in label
+        or "MPLS" in label
+    ):
         return COLOR_SCHEMES["ISOLATION"]
 
     # 4. High Availability
-    if "VRRP" in label or "HSRP" in label or "HA" in label or "STACK" in label or "M-LAG" in label:
+    if (
+        "VRRP" in label
+        or "HSRP" in label
+        or "HA" in label
+        or "STACK" in label
+        or "M-LAG" in label
+    ):
         return COLOR_SCHEMES["HIGH_AVAILABILITY"]
 
     # 5. External/Internet
-    if "INET" in label or "OUT" in label or "EXTERNAL" in label or "INTERNET" in label or "DMZ" in label:
+    if (
+        "INET" in label
+        or "OUT" in label
+        or "EXTERNAL" in label
+        or "INTERNET" in label
+        or "DMZ" in label
+    ):
         return COLOR_SCHEMES["EXTERNAL"]
 
     # 6. Management
@@ -353,7 +392,12 @@ def _get_color_scheme(area_name: str) -> dict[str, Any]:
         return COLOR_SCHEMES["SECURITY_TRUSTED"]
 
     # 8. Cloud/Tunnel
-    if "TUNNEL" in label or "CLOUD" in label or "GRE" in label or "IPSEC" in label:
+    if (
+        "TUNNEL" in label
+        or "CLOUD" in label
+        or "GRE" in label
+        or "IPSEC" in label
+    ):
         return COLOR_SCHEMES["CLOUD_TUNNEL"]
 
     # Legacy keyword matching for backward compatibility
@@ -392,7 +436,9 @@ def calculate_two_node_ellipse(
 
     Wrapper around calculate_two_node_shape with shape_type="ellipse".
     """
-    result = calculate_two_node_shape(node1, node2, area_name, "ellipse", text_offset_ratio)
+    result = calculate_two_node_shape(
+        node1, node2, area_name, "ellipse", text_offset_ratio
+    )
     return {
         "ellipse": result["shape"],
         "text": result["text"],
@@ -411,7 +457,9 @@ def calculate_two_node_rectangle(
 
     Wrapper around calculate_two_node_shape with shape_type="rectangle".
     """
-    result = calculate_two_node_shape(node1, node2, area_name, "rectangle", text_offset_ratio)
+    result = calculate_two_node_shape(
+        node1, node2, area_name, "rectangle", text_offset_ratio
+    )
     metadata = result["metadata"]
     return {
         "rectangle": result["shape"],

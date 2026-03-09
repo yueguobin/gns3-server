@@ -46,39 +46,23 @@ logger = logging.getLogger(__name__)
 
 class GNS3TemplateTool(BaseTool):
     """
-    A LangChain tool to retrieve all available device templates from a GNS3 server.
-    The tool connects to the GNS3 server and extracts the name, template_id, and template_type
-    for each template.
+    LangChain tool to retrieve available device templates from GNS3 server.
+    Connects to GNS3 server and extracts name, template_id, and template_type.
 
     **Input:**
-    No input is required for this tool. It connects to the GNS3 server at the default URL
-    (http://localhost:3080) and retrieves all templates.
+    No input required. Connects to GNS3 server at default URL.
 
     **Output:**
-    A dictionary containing a list of dictionaries, each with the name, template_id, and
-    template_type of a template. Example output:
-        {
-            "templates": [
-                {"name": "Router1", "template_id": "uuid1", "template_type": "qemu"},
-                {"name": "Switch1", "template_id": "uuid2", "template_type": "ethernet_switch"}
-            ]
-        }
-    If an error occurs, returns a dictionary with an error message.
+    Dict with list of dicts (name, template_id, template_type).
+    If error, returns dict with error message.
     """
 
     name: str = "get_gns3_templates"
     description: str = """
-    Retrieves all available device templates from a GNS3 server.
-    Returns a dictionary containing a list of dictionaries, each with the name, template_id,
-    and template_type of a template. No input is required.
-    Example output:
-        {
-            "templates": [
-                {"name": "Router1", "template_id": "uuid1", "template_type": "qemu"},
-                {"name": "Switch1", "template_id": "uuid2", "template_type": "ethernet_switch"}
-            ]
-        }
-    If the connection fails, returns a dictionary with an error message.
+    Retrieves available device templates from GNS3 server.
+    Returns dict with list of dicts (name, template_id, template_type).
+    No input required.
+    If connection fails, returns dict with error message.
     """
 
     def _run(
@@ -87,14 +71,14 @@ class GNS3TemplateTool(BaseTool):
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> dict[str, Any]:
         """
-        Connects to the GNS3 server and retrieves a list of all available device templates.
+        Connects to GNS3 server and retrieves available device templates.
 
         Args:
-            tool_input (str): Optional input (not used in this tool).
+            tool_input: Optional input (not used).
             run_manager: LangChain run manager (unused).
 
         Returns:
-            dict: A dictionary containing the list of templates or an error message.
+            dict: Dict with templates list or error message.
         """
         try:
             # Initialize Gns3Connector using factory function
@@ -103,7 +87,12 @@ class GNS3TemplateTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
+                return {
+                    "error": (
+                        "Failed to connect to GNS3 server. "
+                        "Please check your configuration."
+                    )
+                }
 
             # Retrieve all available templates
             templates = gns3_server.get_templates()
@@ -120,14 +109,16 @@ class GNS3TemplateTool(BaseTool):
             # Return JSON-formatted result with full logging
             result = {"templates": template_info}
             logger.info(
-                "Template retrieval completed. Total templates: %d. Result: %s",
+                "Template retrieval completed. Total: %d. Result: %s",
                 len(template_info),
                 json.dumps(result, indent=2, ensure_ascii=False),
             )
             return result
 
         except Exception as e:
-            logger.error("Failed to connect to GNS3 server or retrieve templates: %s", e)
+            logger.error(
+                "Failed to connect to GNS3 server or retrieve templates: %s", e
+            )
             return {"error": f"Failed to retrieve templates: {str(e)}"}
 
 

@@ -45,14 +45,17 @@ from nornir_netmiko.tasks import netmiko_multiline
 
 from gns3server.agent.gns3_copilot.gns3_client import get_gns3_server_host
 from gns3server.agent.gns3_copilot.utils import get_device_ports_from_topology
-from gns3server.agent.gns3_copilot.utils.command_filter import filter_forbidden_commands
+from gns3server.agent.gns3_copilot.utils.command_filter import (
+    filter_forbidden_commands,
+)
 
 # config log
 logger = logging.getLogger(__name__)
 
 # Suppress nornir INFO logs in console (reduce verbosity)
-# The logging={"enabled": False} in InitNornir only disables plugin internal logs,
-# but nornir.core still logs task execution at INFO level. Set to WARNING to suppress these.
+# The logging={"enabled": False} in InitNornir only disables plugin
+# internal logs, but nornir.core still logs task execution at INFO level.
+# Set to WARNING to suppress these.
 logging.getLogger("nornir.core").setLevel(logging.WARNING)
 logging.getLogger("nornir").setLevel(logging.WARNING)
 
@@ -63,7 +66,9 @@ def _get_nornir_defaults() -> dict[str, Any]:
     return {"data": {"location": "gns3"}}
 
 
-def _get_nornir_groups_config(device_type: str = "cisco_ios_telnet", platform: str = "cisco_ios") -> dict[str, Any]:
+def _get_nornir_groups_config(
+    device_type: str = "cisco_ios_telnet", platform: str = "cisco_ios"
+) -> dict[str, Any]:
     """
     Get Nornir group configuration for Cisco IOS Telnet devices.
 
@@ -80,12 +85,16 @@ def _get_nornir_groups_config(device_type: str = "cisco_ios_telnet", platform: s
         "timeout": 120,
         "username": "",
         "password": "",
-        "connection_options": {"netmiko": {"extras": {"device_type": device_type}}},
+        "connection_options": {
+            "netmiko": {"extras": {"device_type": device_type}}
+        },
     }
 
 
 def _get_nornir_group(
-    group_name: str = "cisco_IOSv_telnet", device_type: str = "cisco_ios_telnet", platform: str = "cisco_ios"
+    group_name: str = "cisco_IOSv_telnet",
+    device_type: str = "cisco_ios_telnet",
+    platform: str = "cisco_ios",
 ) -> dict[str, Any]:
     """
     Get Nornir group configuration for a specific group.
@@ -99,17 +108,19 @@ def _get_nornir_group(
         Dictionary containing group configuration
     """
     # _get_nornir_groups_config now returns the group config directly
-    return _get_nornir_groups_config(device_type=device_type, platform=platform)
+    return _get_nornir_groups_config(
+        device_type=device_type, platform=platform
+    )
 
 
 class ExecuteMultipleDeviceCommands(BaseTool):
     """
-    A READ-ONLY diagnostic tool for viewing network device configurations and protocol states.
+    A READ-ONLY diagnostic tool for viewing network device configurations.
 
     **CRITICAL: DIAGNOSIS ONLY - NO CONFIGURATION PERMISSIONS**
 
-    This tool is exclusively designed for read-only operations to inspect and diagnose
-    network devices. It CANNOT and MUST NOT be used for any configuration changes.
+    This tool is exclusively designed for read-only operations to inspect and
+    diagnose network devices. It CANNOT and MUST NOT be used for configuration.
 
     **Allowed Command Types:**
     - Display commands: show, display (Cisco/Huawei)
@@ -126,21 +137,21 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
     name: str = "execute_multiple_device_commands"
     description: str = """
-    **READ-ONLY DIAGNOSTIC TOOL** - View network device configurations and protocol states.
+    **READ-ONLY DIAGNOSTIC TOOL** - View network device configurations.
 
     Use this tool to inspect device information without making any changes.
 
     **PERMITTED USE CASES:**
-    - View device status: show version, show running-config, show startup-config
+    - View device status: show version, show running-config
     - Check routing: show ip route, show ip ospf neighbor, show bgp summary
     - Interface status: show ip interface brief, show interfaces
     - Protocol diagnostics: show ospf database, show bgp routes, debug commands
     - Connectivity testing: ping, traceroute
 
     **STRICTLY FORBIDDEN:**
-    - NO configuration commands (configure terminal, interface, router, ip address, etc.)
+    - NO configuration commands (configure terminal, interface, router, etc.)
     - NO commands that modify device state
-    - If you need to configure devices, provide guidance to the student instead
+    - If you need to configure, provide guidance to the student instead
 
     **Input Format:**
         {
@@ -167,28 +178,34 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """
-        Executes READ-ONLY diagnostic commands on multiple devices in current GNS3 topology.
+        Executes READ-ONLY diagnostic commands on multiple devices in GNS3.
 
-        This method only permits display/show commands and does not allow any configuration
-        changes to network devices.
+        This method only permits display/show commands and does not allow
+        configuration changes to network devices.
 
         Args:
-            tool_input (str): A JSON string containing project_id and diagnostic commands to execute.
+            tool_input: JSON string with project_id and diagnostic commands.
 
         Returns:
-            List[Dict[str, Any]]: A list of dictionaries containing device names and command outputs.
+            List[Dict]: A list of dicts with device names and outputs.
         """
         # Log received input
         logger.debug("Received input: %s", tool_input)
 
         # Validate input
         device_configs_list, project_id = self._validate_tool_input(tool_input)
-        if isinstance(device_configs_list, list) and len(device_configs_list) > 0 and "error" in device_configs_list[0]:
+        if (
+            isinstance(device_configs_list, list)
+            and len(device_configs_list) > 0
+            and "error" in device_configs_list[0]
+        ):
             return device_configs_list
 
         # Filter forbidden commands and store blocked commands info
-        device_configs_list, blocked_commands_map = self._filter_forbidden_commands_from_device_configs(
-            device_configs_list
+        device_configs_list, blocked_commands_map = (
+            self._filter_forbidden_commands_from_device_configs(
+                device_configs_list
+            )
         )
 
         # Create a mapping of device names to their display commands
@@ -196,7 +213,9 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
         # Prepare device hosts data
         try:
-            hosts_data = self._prepare_device_hosts_data(device_configs_list, project_id)
+            hosts_data = self._prepare_device_hosts_data(
+                device_configs_list, project_id
+            )
         except ValueError as e:
             logger.error("Failed to prepare device hosts data: %s", e)
             return [{"error": str(e)}]
@@ -218,7 +237,12 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             )
 
             # Process results for all devices
-            results = self._process_task_results(device_configs_list, hosts_data, task_result, blocked_commands_map)
+            results = self._process_task_results(
+                device_configs_list,
+                hosts_data,
+                task_result,
+                blocked_commands_map,
+            )
 
         except Exception as e:
             # Overall execution failed
@@ -232,13 +256,17 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
         return results
 
-    def _run_all_device_configs_with_single_retry(self, task: Task, device_configs_map: dict[str, list[str]]) -> Result:
-        """Execute READ-ONLY diagnostic commands with single retry mechanism."""
+    def _run_all_device_configs_with_single_retry(
+        self, task: Task, device_configs_map: dict[str, list[str]]
+    ) -> Result:
+        """Execute READ-ONLY diagnostic commands with single retry."""
         device_name = task.host.name
         diagnostic_commands = device_configs_map.get(device_name, [])
 
         if not diagnostic_commands:
-            return Result(host=task.host, result="No diagnostic commands to execute")
+            return Result(
+                host=task.host, result="No diagnostic commands to execute"
+            )
 
         try:
             _result = task.run(
@@ -258,13 +286,13 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             )
             return Result(
                 host=task.host,
-                result=f"diagnostic command execution failed (ReadTimeout): {str(e)}",
+                result=f"diagnostic command failed (ReadTimeout): {str(e)}",
                 failed=True,
             )
 
         except Exception as e:
-            # Handle prompt detection issues with Cisco IOSv L2 images where the '#' prompt character
-            # may be delayed, causing Netmiko prompt detection failures. Implements retry logic.
+            # Handle Cisco IOSv L2 where '#' prompt char may be delayed,
+            # causing Netmiko failures. Implements retry logic.
             if "netmiko_multiline (failed)" in str(e):
                 _result = task.run(
                     task=netmiko_multiline,
@@ -276,14 +304,14 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
             # Log any other exceptions with full details
             logger.error(
-                "diagnostic command execution failed for device %s: %s (Exception type: %s)",
+                "diagnostic command failed for device %s: %s (Exception: %s)",
                 device_name,
                 str(e),
                 type(e).__name__,
             )
             return Result(
                 host=task.host,
-                result=f"diagnostic command execution failed (Unhandled Exception): {str(e)}",
+                result=f"diagnostic command failed (Unhandled): {str(e)}",
                 failed=True,
             )
 
@@ -293,14 +321,14 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         """
         Validate diagnostic command input for read-only device inspection.
 
-        Handles both new and legacy input formats. Supports new format with project_id
-        and device_configs, as well as legacy array format.
+        Handles both new and legacy input formats. Supports new format with
+        project_id and device_configs, as well as legacy array format.
 
         Args:
-            tool_input: The input received from the LangChain/LangGraph tool call.
+            tool_input: Input from LangChain/LangGraph tool call.
 
         Returns:
-            Tuple containing (device_configs_list, project_id) or (error_list, None)
+            Tuple of (device_configs_list, project_id) or (error_list, None)
         """
 
         parsed_input = None
@@ -308,18 +336,26 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         # Compatibility Check and Parsing ---
         # Check if the input is a string (or bytes) which needs to be parsed.
         if isinstance(tool_input, (str, bytes, bytearray)):
-            # Handle models (like potentially DeepSeek) that return a raw JSON string.
+            # Handle models (like DeepSeek) that return a raw JSON string.
             try:
                 parsed_input = json.loads(tool_input)
                 logger.info("Successfully parsed tool input from JSON string.")
             except json.JSONDecodeError as e:
-                logger.error("Invalid JSON string received as tool input: %s", e)
-                return ([{"error": f"Invalid JSON string input from model: {e}"}], None)
+                logger.error(
+                    "Invalid JSON string received as tool input: %s", e
+                )
+                return (
+                    [{"error": f"Invalid JSON string input from model: {e}"}],
+                    None,
+                )
         else:
             # Handle standard models (like GPT/OpenAI) where the framework
             # has already parsed the JSON into a Python object (dict or list).
             parsed_input = tool_input
-            logger.info("Using tool input directly as type: %s", type(parsed_input).__name__)
+            logger.info(
+                "Using tool input directly as type: %s",
+                type(parsed_input).__name__,
+            )
 
         # Handle new format: {"project_id": "...", "device_configs": [...]}
         if isinstance(parsed_input, dict):
@@ -333,7 +369,7 @@ class ExecuteMultipleDeviceCommands(BaseTool):
                 return ([{"error": error_msg}], None)
 
             if not self._validate_project_id(project_id):
-                error_msg = f"Invalid project_id format: {project_id}. Expected UUID format."
+                error_msg = f"Invalid project_id: {project_id}. Expected UUID."
                 logger.error(error_msg)
                 return ([{"error": error_msg}], None)
 
@@ -351,13 +387,15 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
         # Handle legacy format: [...]
         elif isinstance(parsed_input, list):
-            logger.warning("Using legacy input format without project_id. Please use new format with project_id.")
+            logger.warning(
+                "Legacy input format without project_id. Use new format."
+            )
             return parsed_input, None
 
         else:
             error_msg = (
-                "Tool input must be a JSON object with 'project_id' and 'device_configs' fields, "
-                f"or a legacy JSON array, but got {type(parsed_input).__name__}"
+                "Tool input must be JSON with project_id and device_configs, "
+                f"or legacy JSON array, got {type(parsed_input).__name__}"
             )
             logger.error(error_msg)
             return ([{"error": error_msg}], None)
@@ -372,7 +410,9 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         Returns:
             True if valid UUID format, False otherwise
         """
-        uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        uuid_pattern = (
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        )
         return bool(re.match(uuid_pattern, project_id, re.IGNORECASE))
 
     def _filter_forbidden_commands_from_device_configs(
@@ -385,9 +425,9 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             device_configs_list: List of device configurations with commands.
 
         Returns:
-            A tuple of (filtered_device_configs_list, blocked_commands_map):
-            - filtered_device_configs_list: Device configs with forbidden commands removed.
-            - blocked_commands_map: Dict mapping device names to their blocked commands info.
+            Tuple of (filtered_configs, blocked_map):
+            - filtered_configs: Device configs with forbidden removed.
+            - blocked_map: Dict mapping device names to blocked commands.
         """
         filtered_list = []
         blocked_commands_map: dict[str, dict[str, str]] = {}
@@ -397,7 +437,9 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             commands = device_config["commands"]
 
             # Filter commands
-            allowed_commands, blocked_info = filter_forbidden_commands(commands)
+            allowed_commands, blocked_info = filter_forbidden_commands(
+                commands
+            )
 
             # Update device config with allowed commands only
             filtered_config = device_config.copy()
@@ -416,7 +458,9 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
         return filtered_list, blocked_commands_map
 
-    def _configs_map(self, device_config_list: list[dict[str, Any]]) -> dict[str, list[str]]:
+    def _configs_map(
+        self, device_config_list: list[dict[str, Any]]
+    ) -> dict[str, list[str]]:
         """Create a mapping of device names to their diagnostic commands."""
         device_diagnostic_map = {}
         for device_config in device_config_list:
@@ -427,19 +471,24 @@ class ExecuteMultipleDeviceCommands(BaseTool):
         return device_diagnostic_map
 
     def _prepare_device_hosts_data(
-        self, device_config_list: list[dict[str, Any]], project_id: str | None = None
+        self,
+        device_config_list: list[dict[str, Any]],
+        project_id: str | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Prepare device hosts data from topology information."""
         # Extract device names list
-        device_names = [device_config["device_name"] for device_config in device_config_list]
+        device_names = [
+            device_config["device_name"]
+            for device_config in device_config_list
+        ]
 
         # Get device port information with project_id
         hosts_data = get_device_ports_from_topology(device_names, project_id)
 
         if not hosts_data:
             error_msg = (
-                f"Failed to get device information from topology or no valid devices found. "
-                f"Project ID: {project_id}, Devices: {device_names}"
+                f"Failed to get device info from topology. "
+                f"Project: {project_id}, Devices: {device_names}"
             )
             raise ValueError(error_msg)
 
@@ -454,7 +503,9 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
         return hosts_data
 
-    def _initialize_nornir(self, hosts_data: dict[str, dict[str, Any]]) -> Nornir:
+    def _initialize_nornir(
+        self, hosts_data: dict[str, dict[str, Any]]
+    ) -> Nornir:
         """Initialize Nornir with the provided hosts data."""
         try:
             # Extract device_type and platform from hosts_data
@@ -464,14 +515,21 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
             if hosts_data:
                 first_device_data = next(iter(hosts_data.values()), {})
-                device_type = first_device_data.get("device_type", "cisco_ios_telnet")
+                device_type = first_device_data.get(
+                    "device_type", "cisco_ios_telnet"
+                )
                 platform = first_device_data.get("platform", "cisco_ios")
 
-                logger.info("Extracted from tags: device_type=%s, platform=%s", device_type, platform)
+                logger.info(
+                    "Extracted from tags: device_type=%s, platform=%s",
+                    device_type,
+                    platform,
+                )
 
-            # Get latest environment configuration with dynamic device_type and platform
+            # Get environment config with dynamic device_type and platform
             groups_data = _get_nornir_groups_config(
-                device_type=device_type or "cisco_ios_telnet", platform=platform or "cisco_ios"
+                device_type=device_type or "cisco_ios_telnet",
+                platform=platform or "cisco_ios",
             )
             defaults = _get_nornir_defaults()
 
@@ -479,7 +537,7 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             gns3_host = get_gns3_server_host()
 
             logger.info(
-                "Initializing Nornir with account: host=%s, platform=%s, timeout=%d",
+                "Initializing Nornir: host=%s, platform=%s, timeout=%d",
                 gns3_host,
                 groups_data.get("platform"),
                 groups_data.get("timeout"),
@@ -524,11 +582,16 @@ class ExecuteMultipleDeviceCommands(BaseTool):
                 device_result = {
                     "device_name": device_name,
                     "status": "failed",
-                    "error": (f"Device '{device_name}' not found in topology or missing console_port"),
+                    "error": (
+                        f"Device '{device_name}' not found in topology "
+                        "or missing console_port"
+                    ),
                 }
                 # Add blocked commands info if any
                 if blocked_commands_info:
-                    device_result["blocked_commands"] = list(blocked_commands_info.keys())
+                    device_result["blocked_commands"] = list(
+                        blocked_commands_info.keys()
+                    )
                     device_result["blocked_info"] = blocked_commands_info
                 results.append(device_result)
                 continue
@@ -538,11 +601,15 @@ class ExecuteMultipleDeviceCommands(BaseTool):
                 device_result = {
                     "device_name": device_name,
                     "status": "failed",
-                    "error": (f"Device '{device_name}' not found in task results"),
+                    "error": (
+                        f"Device '{device_name}' not found in task results"
+                    ),
                 }
                 # Add blocked commands info if any
                 if blocked_commands_info:
-                    device_result["blocked_commands"] = list(blocked_commands_info.keys())
+                    device_result["blocked_commands"] = list(
+                        blocked_commands_info.keys()
+                    )
                     device_result["blocked_info"] = blocked_commands_info
                 results.append(device_result)
                 continue
@@ -554,7 +621,9 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             if multi_result[0].failed:
                 # Execution failed
                 device_result["status"] = "failed"
-                device_result["error"] = f"Diagnostic command execution failed: {multi_result[0].result}"
+                device_result["error"] = (
+                    f"Diagnostic command failed: {multi_result[0].result}"
+                )
                 device_result["output"] = multi_result[0].result
             else:
                 # Execution successful
@@ -564,9 +633,11 @@ class ExecuteMultipleDeviceCommands(BaseTool):
 
             # Add blocked commands info if any
             if blocked_commands_info:
-                device_result["blocked_commands"] = list(blocked_commands_info.keys())
+                device_result["blocked_commands"] = list(
+                    blocked_commands_info.keys()
+                )
                 device_result["blocked_info"] = blocked_commands_info
-                # Update status if some commands were blocked but execution succeeded
+                # Update status if some commands were blocked but succeeded
                 if device_result["status"] == "success":
                     device_result["status"] = "partial_success"
 

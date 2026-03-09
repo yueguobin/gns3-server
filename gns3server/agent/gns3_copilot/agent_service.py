@@ -108,7 +108,9 @@ class AgentService:
                 return self._checkpointer
 
             checkpoint_dir = self._get_checkpoint_dir()
-            checkpointer_path = os.path.join(checkpoint_dir, "copilot_checkpoints.db")
+            checkpointer_path = os.path.join(
+                checkpoint_dir, "copilot_checkpoints.db"
+            )
 
             log.debug("Creating checkpointer at: %s", checkpointer_path)
 
@@ -118,13 +120,17 @@ class AgentService:
                     await self._checkpointer_conn.close()
                     log.debug("Closed previous checkpointer connection")
                 except Exception as e:
-                    log.warning("Error closing old checkpointer connection: %s", e)
+                    log.warning(
+                        "Error closing old checkpointer connection: %s", e
+                    )
 
             # Create new connection
             conn = await aiosqlite.connect(checkpointer_path)
             # Enable WAL mode for better concurrent performance
             await conn.execute("PRAGMA journal_mode=WAL;")
-            self._checkpointer_conn = conn  # Save connection reference to prevent GC
+            self._checkpointer_conn = (
+                conn  # Save connection reference to prevent GC
+            )
             self._checkpointer = AsyncSqliteSaver(conn)
 
             # CRITICAL: Initialize database schema
@@ -176,22 +182,33 @@ class AgentService:
         """)
 
         # Create indexes
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_thread_id ON chat_sessions(thread_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_project ON chat_sessions(user_id, project_id)")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_thread_id ON "
+            "chat_sessions(thread_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_project ON "
+            "chat_sessions(user_id, project_id)"
+        )
 
-        # Check if pinned column exists, add it if not (migration for existing databases)
+        # Check if pinned column exists, add it if not (migration for existing
+        # databases)
         cursor = await conn.execute("PRAGMA table_info(chat_sessions)")
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
 
         if "pinned" not in column_names:
             log.debug("Adding pinned column to existing chat_sessions table")
-            await conn.execute("ALTER TABLE chat_sessions ADD COLUMN pinned BOOLEAN DEFAULT FALSE")
+            await conn.execute(
+                "ALTER TABLE chat_sessions ADD COLUMN pinned BOOLEAN DEFAULT "
+                "FALSE"
+            )
             await conn.commit()
 
         # Create pinned index (after column is guaranteed to exist)
         await conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pinned_updated ON chat_sessions(pinned DESC, updated_at DESC)"
+            "CREATE INDEX IF NOT EXISTS idx_pinned_updated ON "
+            "chat_sessions(pinned DESC, updated_at DESC)"
         )
 
         await conn.commit()
@@ -202,7 +219,9 @@ class AgentService:
         if self._graph is None:
             checkpointer = await self._get_checkpointer()
             self._graph = agent_builder.compile(checkpointer=checkpointer)
-            log.info("LangGraph agent compiled for project: %s", self.project_path)
+            log.info(
+                "LangGraph agent compiled for project: %s", self.project_path
+            )
         return self._graph
 
     async def stream_chat(
@@ -225,13 +244,15 @@ class AgentService:
             user_id: User ID for metadata tracking
             jwt_token: JWT token for API authentication (optional)
             mode: Interaction mode (default: "text")
-            llm_config: LLM configuration dict (provider, model, api_key, etc.)
+            llm_config: LLM configuration dict (provider, model, api_key,
+                       etc.)
 
         Yields:
             Dict containing SSE-compatible response chunks
         """
         log.info(
-            "Stream chat started: project_id=%s, user_id=%s, session_id=%s, mode=%s",
+            "Stream chat started: project_id=%s, user_id=%s, session_id=%s, "
+            "mode=%s",
             project_id,
             user_id,
             session_id,
@@ -250,7 +271,10 @@ class AgentService:
         if is_new_session:
             # Create new session
             session = await repo.create_session(
-                thread_id=session_id, user_id=user_id or "", project_id=project_id or "", title="New Conversation"
+                thread_id=session_id,
+                user_id=user_id or "",
+                project_id=project_id or "",
+                title="New Conversation",
             )
             log.debug("Created new chat session: thread_id=%s", session_id)
 
@@ -261,7 +285,9 @@ class AgentService:
         if llm_config:
             set_current_llm_config(llm_config)
             log.debug(
-                "LLM config set in context: provider=%s, model=%s", llm_config.get("provider"), llm_config.get("model")
+                "LLM config set in context: provider=%s, model=%s",
+                llm_config.get("provider"),
+                llm_config.get("model"),
             )
 
         # Build config - only thread-safe identifiers
@@ -304,33 +330,49 @@ class AgentService:
         ai_response_counted = False
         tool_messages_counted = 0
 
-        # Initialize tool call stream accumulator for handling progressive tool call arguments
+        # Initialize tool call stream accumulator for handling progressive
+        # tool call arguments
         tool_call_accumulator = ToolCallStreamAccumulator()
 
         # Stream events
         try:
-            async for event in graph.astream_events(inputs, config=config, version="v2"):
+            async for event in graph.astream_events(
+                inputs, config=config, version="v2"
+            ):
                 event_type = event.get("event", "")
                 data = event.get("data", {})
 
                 # Track LLM calls and tokens
                 if event_type == "on_chat_model_start":
                     # Filter out title_generator_node from statistics
-                    langgraph_node = event.get("metadata", {}).get("langgraph_node", "")
+                    langgraph_node = event.get("metadata", {}).get(
+                        "langgraph_node", ""
+                    )
                     if langgraph_node != "title_generator_node":
                         llm_calls_count += 1
-                        log.debug("LLM call started, count=%d", llm_calls_count)
+                        log.debug(
+                            "LLM call started, count=%d", llm_calls_count
+                        )
                     else:
-                        log.debug("Skipping LLM call count for internal node: title_generator_node")
+                        log.debug(
+                            "Skipping LLM call count for internal node: "
+                            "title_generator_node"
+                        )
 
                 elif event_type == "on_chat_model_end":
                     # Filter out title_generator_node from token counting
-                    langgraph_node = event.get("metadata", {}).get("langgraph_node", "")
+                    langgraph_node = event.get("metadata", {}).get(
+                        "langgraph_node", ""
+                    )
                     if langgraph_node == "title_generator_node":
-                        log.debug("Skipping token counting for internal node: title_generator_node")
+                        log.debug(
+                            "Skipping token counting for internal node: "
+                            "title_generator_node"
+                        )
                     else:
                         # Extract token usage from response metadata
-                        # Try multiple possible locations where token usage might be stored
+                        # Try multiple possible locations where token usage
+                        # might be stored
                         token_info_found = False
 
                         # Method 1: response.usage_metadata
@@ -348,8 +390,12 @@ class AgentService:
                             if hasattr(output_msg, "usage_metadata"):
                                 usage = output_msg.usage_metadata
                                 if usage:
-                                    input_tokens += usage.get("input_tokens", 0)
-                                    output_tokens += usage.get("output_tokens", 0)
+                                    input_tokens += usage.get(
+                                        "input_tokens", 0
+                                    )
+                                    output_tokens += usage.get(
+                                        "output_tokens", 0
+                                    )
                                     token_info_found = True
 
                         # Method 3: Check data directly for token usage fields
@@ -358,7 +404,10 @@ class AgentService:
                                 input_tokens += data.get("input_tokens", 0)
                             if "output_tokens" in data:
                                 output_tokens += data.get("output_tokens", 0)
-                            if "input_tokens" in data or "output_tokens" in data:
+                            if (
+                                "input_tokens" in data
+                                or "output_tokens" in data
+                            ):
                                 token_info_found = True
 
                         # Count AI response as one message (only once per turn)
@@ -370,16 +419,26 @@ class AgentService:
                 elif event_type == "on_tool_end":
                     message_count += 1  # Tool result message
                     tool_messages_counted += 1
-                    log.debug("Tool message counted, message_count=%d", message_count)
+                    log.debug(
+                        "Tool message counted, message_count=%d", message_count
+                    )
 
                 # Convert event to chunk for SSE streaming
-                # Use accumulator for on_chat_model_stream events to handle progressive tool calls
+                # Use accumulator for on_chat_model_stream events to handle
+                # progressive tool calls
 
-                # Filter out internal nodes (title_generator_node) from streaming to frontend
-                langgraph_node = event.get("metadata", {}).get("langgraph_node", "")
+                # Filter out internal nodes (title_generator_node) from
+                # streaming to frontend
+                langgraph_node = event.get("metadata", {}).get(
+                    "langgraph_node", ""
+                )
                 if langgraph_node == "title_generator_node":
-                    # Skip all events from the title_generator_node (internal use only)
-                    log.debug("Skipping event from internal node: title_generator_node")
+                    # Skip all events from the title_generator_node (internal
+                    # use only)
+                    log.debug(
+                        "Skipping event from internal node: "
+                        "title_generator_node"
+                    )
                     continue
 
                 if event_type == "on_chat_model_stream":
@@ -387,7 +446,10 @@ class AgentService:
                     for chunk in chunks:
                         # Add session_id to each chunk
                         chunk["session_id"] = session_id
-                        log.debug("Yielding accumulated chunk: type=%s", chunk.get("type"))
+                        log.debug(
+                            "Yielding accumulated chunk: type=%s",
+                            chunk.get("type"),
+                        )
                         yield chunk
                 else:
                     # Use stateless converter for other events
@@ -407,7 +469,8 @@ class AgentService:
                 last_message_at=last_message_at,
             )
             log.info(
-                "Session statistics updated: thread_id=%s, messages=%d, llm_calls=%d, tokens=%d+%d=%d",
+                "Session statistics updated: thread_id=%s, messages=%d, "
+                "llm_calls=%d, tokens=%d+%d=%d",
                 session_id,
                 message_count,
                 llm_calls_count,
@@ -421,15 +484,26 @@ class AgentService:
             if final_state and "conversation_title" in final_state.values:
                 generated_title = final_state.values["conversation_title"]
                 current_session = await repo.get_session_by_thread(session_id)
-                if current_session and current_session.title != generated_title:
-                    await repo.update_session(thread_id=session_id, title=generated_title)
-                    log.info("Auto-generated title synced: thread_id=%s, title=%s", session_id, generated_title)
+                if (
+                    current_session
+                    and current_session.title != generated_title
+                ):
+                    await repo.update_session(
+                        thread_id=session_id, title=generated_title
+                    )
+                    log.info(
+                        "Auto-generated title synced: thread_id=%s, title=%s",
+                        session_id,
+                        generated_title,
+                    )
 
         except Exception as e:
             log.error("Error in stream_chat: %s", e, exc_info=True)
             yield {"type": "error", "error": str(e), "session_id": session_id}
 
-    def _convert_event_to_chunk(self, event: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
+    def _convert_event_to_chunk(
+        self, event: Dict[str, Any], session_id: str
+    ) -> Optional[Dict[str, Any]]:
         """
         Convert LangGraph event to API response chunk.
 
@@ -441,15 +515,17 @@ class AgentService:
             Dict for SSE response or None if event should be filtered
 
         Note:
-            on_chat_model_stream events are handled by ToolCallStreamAccumulator
-            before calling this method, so they are not processed here.
+            on_chat_model_stream events are handled by
+            ToolCallStreamAccumulator before calling this method, so they are
+            not processed here.
         """
         event_type = event.get("event", "")
         data = event.get("data", {})
 
         if event_type == "on_tool_start":
             # Tool execution started
-            # Extract tool_call_id from event metadata to associate with tool_call event
+            # Extract tool_call_id from event metadata to associate with
+            # tool_call event
             tool_call_id = event.get("metadata", {}).get("tool_call_id", "")
             return {
                 "type": "tool_start",
@@ -460,9 +536,11 @@ class AgentService:
 
         elif event_type == "on_tool_end":
             # Tool execution completed
+            # Extract tool output and convert to JSON string
             output = data.get("output", "")
             # Convert output to JSON string if it's not already a string
-            # This ensures dict/list outputs are properly serialized for frontend parsing
+            # This ensures dict/list outputs are properly serialized for
+            # frontend parsing
             if not isinstance(output, str):
                 output = json.dumps(output, ensure_ascii=False, indent=2)
             return {
@@ -474,7 +552,9 @@ class AgentService:
 
         return None
 
-    async def get_history(self, session_id: str, limit: int = 100) -> Dict[str, Any]:
+    async def get_history(
+        self, session_id: str, limit: int = 100
+    ) -> Dict[str, Any]:
         """
         Get conversation history for a session.
 
@@ -496,19 +576,31 @@ class AgentService:
                 for msg in state.values["messages"][-limit:]:
                     messages.append(self._convert_message_to_dict(msg))
 
-                title = state.values.get("conversation_title", "New Conversation")
+                title = state.values.get(
+                    "conversation_title", "New Conversation"
+                )
 
-                return {"thread_id": session_id, "title": title, "messages": messages}
+                return {
+                    "thread_id": session_id,
+                    "title": title,
+                    "messages": messages,
+                }
         except Exception as e:
             log.error("Error getting history: %s", e, exc_info=True)
 
-        return {"thread_id": session_id, "title": "New Conversation", "messages": []}
+        return {
+            "thread_id": session_id,
+            "title": "New Conversation",
+            "messages": [],
+        }
 
     def _convert_message_to_dict(self, msg) -> Dict[str, Any]:
         """Convert a LangChain message to OpenAI-compatible dict format."""
         return convert_langchain_to_openai(msg)
 
-    async def list_sessions(self, user_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    async def list_sessions(
+        self, user_id: Optional[str] = None, limit: int = 100
+    ) -> List[Dict[str, Any]]:
         """
         List chat sessions for this project.
 
@@ -542,7 +634,9 @@ class AgentService:
         repo = ChatSessionsRepository(self._checkpointer_conn)
         return await repo.delete_session(session_id)
 
-    async def rename_session(self, session_id: str, new_title: str) -> Optional[Dict[str, Any]]:
+    async def rename_session(
+        self, session_id: str, new_title: str
+    ) -> Optional[Dict[str, Any]]:
         """
         Rename a chat session.
 
@@ -557,10 +651,14 @@ class AgentService:
             await self._get_checkpointer()
 
         repo = ChatSessionsRepository(self._checkpointer_conn)
-        session = await repo.update_session(thread_id=session_id, title=new_title)
+        session = await repo.update_session(
+            thread_id=session_id, title=new_title
+        )
         return session.to_dict() if session else None
 
-    async def pin_session(self, session_id: str, pinned: bool = True) -> Optional[Dict[str, Any]]:
+    async def pin_session(
+        self, session_id: str, pinned: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """
         Pin or unpin a chat session.
 
@@ -586,7 +684,10 @@ class AgentService:
             if self._checkpointer_conn:
                 try:
                     await self._checkpointer_conn.close()
-                    log.debug("Checkpointer connection closed for: %s", self.project_path)
+                    log.debug(
+                        "Checkpointer connection closed for: %s",
+                        self.project_path,
+                    )
                 except Exception as e:
                     log.warning("Error closing checkpointer connection: %s", e)
                 finally:

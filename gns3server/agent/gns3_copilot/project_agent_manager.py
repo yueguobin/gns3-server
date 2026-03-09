@@ -27,7 +27,8 @@
 Project Agent Manager
 
 Manages AgentService instances for GNS3 projects using a singleton pattern.
-Each project has its own AgentService with a dedicated SQLite checkpoint database.
+Each project has its own AgentService with a dedicated SQLite checkpoint
+database.
 """
 
 import asyncio
@@ -60,7 +61,9 @@ class ProjectAgentManager:
             cls._instance._lock = asyncio.Lock()
         return cls._instance
 
-    async def get_agent(self, project_id: str, project_path: str) -> AgentService:
+    async def get_agent(
+        self, project_id: str, project_path: str
+    ) -> AgentService:
         """
         Get or create an AgentService for a project.
 
@@ -73,7 +76,11 @@ class ProjectAgentManager:
         """
         async with self._lock:
             if project_id not in self._agents:
-                log.info("Creating new AgentService for project: %s at %s", project_id, project_path)
+                log.info(
+                    "Creating new AgentService for project: %s at %s",
+                    project_id,
+                    project_path,
+                )
                 self._agents[project_id] = AgentService(project_path)
             return self._agents[project_id]
 
@@ -99,7 +106,10 @@ class ProjectAgentManager:
         Should be called on server shutdown.
         """
         async with self._lock:
-            log.info("Closing all AgentService instances (%d projects)", len(self._agents))
+            log.info(
+                "Closing all AgentService instances (%d projects)",
+                len(self._agents),
+            )
             for project_id, agent in self._agents.items():
                 log.debug("Closing AgentService for project: %s", project_id)
                 await agent.close()

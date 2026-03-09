@@ -30,8 +30,8 @@ This package contains system prompts and prompt loading utilities for
 the GNS3-Copilot AI agent.
 
 Available prompts:
-- teaching_assistant_prompt: Teaching assistant mode (diagnostics only, no configuration)
-- lab_automation_assistant_prompt: Lab automation assistant mode (diagnostics + configuration)
+- teaching_assistant_prompt: Teaching assistant mode (diagnostics only)
+- lab_automation_assistant_prompt: Lab automation mode (diagnostics + config)
 
 """
 

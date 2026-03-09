@@ -51,7 +51,7 @@ class GNS3CreateNodeTool(BaseTool):
     using specified templates and coordinates.
 
     **Input:**
-    A JSON object containing the project_id and an array of nodes with template_id,
+    A JSON object with project_id and array of nodes with template_id,
     x and y coordinates.
 
     Example input:
@@ -92,13 +92,13 @@ class GNS3CreateNodeTool(BaseTool):
             "successful_nodes": 2,
             "failed_nodes": 0
         }
-    If an error occurs during input validation, returns a dictionary with an error message.
+    If error occurs during validation, returns dict with error message.
     """
 
     name: str = "create_gns3_node"
     description: str = """
-    Creates multiple nodes in a GNS3 project using specified templates and coordinates.
-    Input is a JSON object with project_id and an array of nodes, each containing template_id, x, and y coordinates.
+    Creates multiple nodes in a GNS3 project using templates and coordinates.
+    Input is a JSON object with project_id and array of nodes.
     Example input:
         {
             "project_id": "uuid-of-project",
@@ -115,10 +115,13 @@ class GNS3CreateNodeTool(BaseTool):
                 }
             ]
         }
-    IMPORTANT: Ensure the distance between any two nodes is greater than 250 pixels.
-    This spacing is necessary to display interface numbers clearly for better topology visualization.
-    Returns a dictionary with creation results for all nodes, including success/failure status.
-    If the operation fails during input validation, returns a dictionary with an error message.
+    IMPORTANT: Ensure distance between any two nodes is greater than 250 px.
+    This spacing is necessary to display interface numbers clearly for better
+    topology visualization.
+    Returns a dictionary with creation results for all nodes, including
+    success/failure status.
+    If the operation fails during input validation, returns a dictionary with
+    an error message.
     """
 
     def _run(
@@ -128,14 +131,15 @@ class GNS3CreateNodeTool(BaseTool):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """
-        Creates multiple nodes in a GNS3 project using the provided templates and coordinates.
+        Creates nodes in a GNS3 project with templates and coordinates.
 
         Args:
-            tool_input (str): A JSON string containing project_id and an array of nodes.
+            tool_input: A JSON string with project_id and an array of nodes.
             run_manager: LangChain run manager (unused).
 
         Returns:
-            dict: A dictionary with creation results for all nodes or an error message.
+            dict: A dictionary with creation results for all nodes or an error
+                message.
         """
         # Log received input
         logger.info("Received input: %s", tool_input)
@@ -158,7 +162,9 @@ class GNS3CreateNodeTool(BaseTool):
             # Validate each node in the array
             for i, node_data in enumerate(nodes):
                 if not isinstance(node_data, dict):
-                    logger.error("Invalid input: Node %d must be a dictionary.", i + 1)
+                    logger.error(
+                        "Invalid input: Node %d must be a dictionary.", i + 1
+                    )
                     return {"error": f"Node {i + 1} must be a dictionary."}
 
                 template_id = node_data.get("template_id")
@@ -173,10 +179,14 @@ class GNS3CreateNodeTool(BaseTool):
                     ]
                 ):
                     logger.error(
-                        "Invalid input: Node %d missing or invalid template_id, x, or y.",
+                        "Invalid input: Node %d missing or invalid "
+                        "template_id, x, or y.",
                         i + 1,
                     )
-                    return {"error": f"Node {i + 1} missing or invalid template_id, x, or y."}
+                    return {
+                        "error": f"Node {i + 1} missing or invalid "
+                        f"template_id, x, or y."
+                    }
 
             # Initialize Gns3Connector using factory function
             logger.info("Connecting to GNS3 server...")
@@ -184,10 +194,15 @@ class GNS3CreateNodeTool(BaseTool):
 
             if gns3_server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
+                return {
+                    "error": "Failed to connect to GNS3 server. "
+                    "Please check your configuration."
+                }
 
             # Create nodes
-            logger.info("Creating %d nodes in project %s...", len(nodes), project_id)
+            logger.info(
+                "Creating %d nodes in project %s...", len(nodes), project_id
+            )
             results: list[dict[str, Any]] = []
 
             for i, node_data in enumerate(nodes):
@@ -197,7 +212,7 @@ class GNS3CreateNodeTool(BaseTool):
                     y = node_data.get("y")
 
                     logger.info(
-                        "Creating node %d/%d with template %s at coordinates (%s, %s)...",
+                        "Creating node %d/%d with template %s at (%s, %s)...",
                         i + 1,
                         len(nodes),
                         template_id,
@@ -235,8 +250,12 @@ class GNS3CreateNodeTool(BaseTool):
                     # Continue with next node even if one fails
 
             # Calculate summary statistics
-            successful_nodes = len([r for r in results if r.get("status") == "success"])
-            failed_nodes = len([r for r in results if r.get("status") == "failed"])
+            successful_nodes = len(
+                [r for r in results if r.get("status") == "success"]
+            )
+            failed_nodes = len(
+                [r for r in results if r.get("status") == "failed"]
+            )
 
             # Prepare final result
             final_result = {
@@ -249,7 +268,7 @@ class GNS3CreateNodeTool(BaseTool):
 
             # Log the final result
             logger.info(
-                "Node creation completed: %d successful, %d failed out of %d total nodes.",
+                "Node creation completed: %d successful, %d failed, %d total.",
                 successful_nodes,
                 failed_nodes,
                 len(nodes),
@@ -263,22 +282,27 @@ class GNS3CreateNodeTool(BaseTool):
             return {"error": f"Invalid JSON input: {e}"}
         except Exception as e:
             logger.error("Failed to process node creation request: %s", e)
-            return {"error": f"Failed to process node creation request: {str(e)}"}
+            return {
+                "error": f"Failed to process node creation request: {str(e)}"
+            }
 
 
 if __name__ == "__main__":
     # Test the tool locally with multiple nodes
     test_input = json.dumps(
         {
-            "project_id": "d7fc094c-685e-4db1-ac11-5e33a1b2e066",  # Replace with actual project UUID
+            # TODO: Replace with actual project UUID
+            "project_id": "d7fc094c-685e-4db1-ac11-5e33a1b2e066",
             "nodes": [
                 {
-                    "template_id": "b923a635-b7cc-4cb5-9a86-9357e04c02f7",  # Replace with actual template UUID
+                    # TODO: Replace with actual template UUID
+                    "template_id": "b923a635-b7cc-4cb5-9a86-9357e04c02f7",
                     "x": 100,
                     "y": -200,
                 },
                 {
-                    "template_id": "b923a635-b7cc-4cb5-9a86-9357e04c02f7",  # Replace with actual template UUID
+                    # TODO: Replace with actual template UUID
+                    "template_id": "b923a635-b7cc-4cb5-9a86-9357e04c02f7",
                     "x": 200,
                     "y": -300,
                 },

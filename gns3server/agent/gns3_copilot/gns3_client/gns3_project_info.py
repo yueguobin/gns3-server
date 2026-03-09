@@ -50,7 +50,8 @@ class GNS3ProjectInfoTool(BaseTool):
 
     name: str = "gns3_project_info"
     description: str = """
-    Retrieves basic information of a GNS3 project including name, status, node count and link count.
+    Retrieves basic information of a GNS3 project including name, status,
+    node count and link count.
 
     Input: `project_id` (str, required): UUID of the GNS3 project.
 
@@ -79,18 +80,26 @@ class GNS3ProjectInfoTool(BaseTool):
             project_id : The UUID of the specific GNS3 project.
 
         Returns:
-            dict: A dictionary containing project info (name, project_id, node_count, link_count, status),
-                  or an error dictionary if an exception occurs or project_id is not provided.
+            dict: A dictionary containing project info (name, project_id, node_count,
+                  link_count, status), or an error dictionary if an exception occurs
+                  or project_id is not provided.
         """
 
         # Log received input
-        logger.info("Received tool_input: %s, project_id: %s", tool_input, project_id)
+        logger.info(
+            "Received tool_input: %s, project_id: %s", tool_input, project_id
+        )
 
         try:
             # Validate project_id parameter
             if not project_id:
                 logger.error("project_id parameter is required.")
-                return {"error": "project_id parameter is required. Please provide a valid project UUID."}
+                return {
+                    "error": (
+                        "project_id parameter is required. Please provide a valid "
+                        "project UUID."
+                    )
+                }
 
             # Initialize Gns3Connector using factory function
             logger.info("Connecting to GNS3 server...")
@@ -98,10 +107,17 @@ class GNS3ProjectInfoTool(BaseTool):
 
             if server is None:
                 logger.error("Failed to create GNS3 connector")
-                return {"error": "Failed to connect to GNS3 server. Please check your configuration."}
+                return {
+                    "error": (
+                        "Failed to connect to GNS3 server. Please check your "
+                        "configuration."
+                    )
+                }
 
             # Use the provided project_id directly
-            logger.info(f"Retrieving project info for project_id: {project_id}")
+            logger.info(
+                f"Retrieving project info for project_id: {project_id}"
+            )
             project = Project(project_id=project_id, connector=server)
             project.get()  # Load project details
 
@@ -119,7 +135,13 @@ class GNS3ProjectInfoTool(BaseTool):
                 "status": project.status,
                 "node_count": node_count,
                 "link_count": link_count,
-                "tuple": (project.name, project.project_id, node_count, link_count, project.status),
+                "tuple": (
+                    project.name,
+                    project.project_id,
+                    node_count,
+                    link_count,
+                    project.status,
+                ),
             }
 
             # Log result

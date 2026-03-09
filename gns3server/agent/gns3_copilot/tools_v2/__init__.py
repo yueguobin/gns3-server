@@ -26,7 +26,7 @@
 
 GNS3-Copilot Tools Package
 
-This package provides various tools for interacting with GNS3 network simulator, including:
+This package provides various tools for interacting with GNS3 network simulator:
 - Device configuration command execution
 - Display command execution
 - Multiple device command execution using Nornir
@@ -36,7 +36,7 @@ This package provides various tools for interacting with GNS3 network simulator,
 Main modules:
 - config_tools_nornir: Multiple device configuration command execution tool using Nornir
 - display_tools_nornir: Multiple device command execution tool using Nornir
-- vpcs_tools_telnetlib3: VPCS device configuration tool using telnetlib3 (concurrent execution)
+- vpcs_tools_telnetlib3: VPCS device configuration tool using telnetlib3
 - gns3_create_node: GNS3 node creation tool
 - gns3_create_link: GNS3 link creation tool
 - gns3_start_node: GNS3 node startup tool

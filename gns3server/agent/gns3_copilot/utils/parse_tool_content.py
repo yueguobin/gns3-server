@@ -85,12 +85,14 @@ def parse_tool_content(
     by json.dumps.
 
     Args:
-        content: Content returned by tools (can be str, dict, list, int, float, bool, or None)
+        content: Content returned by tools (can be str, dict, list, int, float, bool,
+                 or None)
         fallback_to_raw: Whether to return raw content when parsing fails, default True
         strict_mode: Strict mode, raises exceptions when parsing fails, default False
 
     Returns:
-        Union[Dict[str, Any], List[Any], Any]: Parsed data that can be serialized by json.dumps:
+        Union[Dict[str, Any], List[Any], Any]: Parsed data that can be serialized by
+        json.dumps:
         - Successfully parsed JSON/Python literal data
         - Original dict/list objects (passed through)
         - Primitive types (int, float, bool, str)
@@ -158,7 +160,9 @@ def parse_tool_content(
             # Empty string handling
             if not content.strip():
                 result = {}
-                logger.info("Content is empty or whitespace, returning: %s", result)
+                logger.info(
+                    "Content is empty or whitespace, returning: %s", result
+                )
                 return result
 
             s = content.strip()
@@ -166,14 +170,19 @@ def parse_tool_content(
             # Handle empty dictionary case
             if s == "{}":
                 result = {}
-                logger.info("Content is empty dictionary, returning: %s", result)
+                logger.info(
+                    "Content is empty dictionary, returning: %s", result
+                )
                 return result
 
             # Try to parse as Python literal
             # (higher priority as many tools return Python format strings)
             try:
                 result = ast.literal_eval(s)
-                logger.info("Successfully parsed as Python literal, returning: %s", result)
+                logger.info(
+                    "Successfully parsed as Python literal, returning: %s",
+                    result,
+                )
                 return result
             except (ValueError, SyntaxError):
                 pass
@@ -181,7 +190,9 @@ def parse_tool_content(
             # Try to parse as JSON
             try:
                 result = json.loads(s)
-                logger.info("Successfully parsed as JSON, returning: %s", result)
+                logger.info(
+                    "Successfully parsed as JSON, returning: %s", result
+                )
                 return result
             except json.JSONDecodeError:
                 pass
@@ -210,7 +221,8 @@ def parse_tool_content(
 
     # Handle unsupported types
     error_msg = (  # type: ignore[unreachable]
-        "Content must be str, dict, list, int, float, bool, or None, got " f"{type(content).__name__}"
+        "Content must be str, dict, list, int, float, bool, or None, got "
+        f"{type(content).__name__}"
     )
     logger.error(error_msg)
 
@@ -226,7 +238,9 @@ def parse_tool_content(
     return result
 
 
-def format_tool_response(content: str | dict | list | int | float | bool | None, indent: int = 2) -> str:
+def format_tool_response(
+    content: str | dict | list | int | float | bool | None, indent: int = 2
+) -> str:
     """
     Format tool response as a beautiful JSON string for UI display.
 
@@ -234,7 +248,8 @@ def format_tool_response(content: str | dict | list | int | float | bool | None,
     properly displayed in UI interfaces.
 
     Args:
-        content: Content returned by tools (can be str, dict, list, int, float, bool, or None)
+        content: Content returned by tools (can be str, dict, list, int, float, bool,
+                 or None)
         indent: JSON indentation spaces, default 2
 
     Returns:
@@ -244,7 +259,9 @@ def format_tool_response(content: str | dict | list | int | float | bool | None,
     logger.info("format_tool_response parameter indent: %s", indent)
 
     try:
-        parsed = parse_tool_content(content, fallback_to_raw=True, strict_mode=False)
+        parsed = parse_tool_content(
+            content, fallback_to_raw=True, strict_mode=False
+        )
         # Ensure the result can be serialized to JSON
         result = json.dumps(parsed, ensure_ascii=False, indent=indent)
         logger.info("format_tool_response returning: %s", result)
@@ -253,7 +270,9 @@ def format_tool_response(content: str | dict | list | int | float | bool | None,
         # If the parsed result cannot be serialized, convert to string and wrap
         logger.error("Cannot serialize parsed result to JSON: %s", e)
         try:
-            result = json.dumps({"raw": str(content)}, ensure_ascii=False, indent=indent)
+            result = json.dumps(
+                {"raw": str(content)}, ensure_ascii=False, indent=indent
+            )
             logger.info("format_tool_response returning fallback: %s", result)
             return result
         except Exception:
@@ -267,12 +286,16 @@ def format_tool_response(content: str | dict | list | int | float | bool | None,
             return result
     except Exception as e:
         logger.error("Error formatting tool response: %s", e)
-        result = json.dumps({"error": str(e)}, ensure_ascii=False, indent=indent)
+        result = json.dumps(
+            {"error": str(e)}, ensure_ascii=False, indent=indent
+        )
         logger.info("format_tool_response returning error: %s", result)
         return result
 
 
-def normalize_tool_response(response: dict | list | str, tool_name: str = "unknown") -> dict:
+def normalize_tool_response(
+    response: dict | list | str, tool_name: str = "unknown"
+) -> dict:
     """
     Normalize tool response to standard format for consistent frontend display.
 
@@ -298,15 +321,24 @@ def normalize_tool_response(response: dict | list | str, tool_name: str = "unkno
 
     Examples:
         >>> normalize_tool_response({"status": "success", "output": "OK"})
-        {'success': True, 'total': 1, 'successful': 1, 'failed': 0, 'data': [{'status': 'success', 'result': 'OK'}], 'metadata': {}}
+        {'success': True, 'total': 1, 'successful': 1, 'failed': 0,
+         'data': [{'status': 'success', 'result': 'OK'}], 'metadata': {}}
 
         >>> normalize_tool_response([{"device_name": "R1", "status": "success"}])
-        {'success': True, 'total': 1, 'successful': 1, 'failed': 0, 'data': [...], 'metadata': {}}
+        {'success': True, 'total': 1, 'successful': 1, 'failed': 0,
+         'data': [...], 'metadata': {}}
     """
-    metadata = {"tool_name": tool_name, "normalized_at": datetime.utcnow().isoformat()}
+    metadata = {
+        "tool_name": tool_name,
+        "normalized_at": datetime.utcnow().isoformat(),
+    }
 
     # Handle error responses
-    if isinstance(response, dict) and "error" in response and len(response) == 1:
+    if (
+        isinstance(response, dict)
+        and "error" in response
+        and len(response) == 1
+    ):
         return {
             "success": False,
             "total": 0,
@@ -319,29 +351,56 @@ def normalize_tool_response(response: dict | list | str, tool_name: str = "unkno
 
     # Handle empty responses
     if not response:
-        return {"success": True, "total": 0, "successful": 0, "failed": 0, "data": [], "metadata": metadata}
+        return {
+            "success": True,
+            "total": 0,
+            "successful": 0,
+            "failed": 0,
+            "data": [],
+            "metadata": metadata,
+        }
 
     # Handle list responses (most tools return list of device results)
     if isinstance(response, list):
-        successful = sum(1 for item in response if isinstance(item, dict) and item.get("status") == "success")
+        successful = sum(
+            1
+            for item in response
+            if isinstance(item, dict) and item.get("status") == "success"
+        )
         failed = len(response) - successful
 
         normalized_data = []
         for item in response:
             if isinstance(item, dict):
                 normalized_item = {
-                    "id": item.get("device_id") or item.get("node_id") or item.get("id") or "",
+                    "id": item.get("device_id")
+                    or item.get("node_id")
+                    or item.get("id")
+                    or "",
                     "name": item.get("device_name") or item.get("name") or "",
                     "status": item.get("status", "unknown"),
                 }
                 if normalized_item["status"] == "success":
-                    normalized_item["result"] = item.get("output") or item.get("result") or ""
+                    normalized_item["result"] = (
+                        item.get("output") or item.get("result") or ""
+                    )
                 else:
-                    normalized_item["error"] = item.get("error") or item.get("output") or "Unknown error"
+                    normalized_item["error"] = (
+                        item.get("error")
+                        or item.get("output")
+                        or "Unknown error"
+                    )
                 normalized_data.append(normalized_item)
             else:
                 # Non-dict items in list
-                normalized_data.append({"id": "", "name": "", "status": "unknown", "result": str(item)})
+                normalized_data.append(
+                    {
+                        "id": "",
+                        "name": "",
+                        "status": "unknown",
+                        "result": str(item),
+                    }
+                )
 
         return {
             "success": failed == 0,
@@ -367,8 +426,14 @@ def normalize_tool_response(response: dict | list | str, tool_name: str = "unkno
             }
 
         # Legacy format: extract common fields
-        total = response.get("total_nodes") or response.get("total") or response.get("count", 1)
-        successful = response.get("successful_nodes") or response.get("successful") or 0
+        total = (
+            response.get("total_nodes")
+            or response.get("total")
+            or response.get("count", 1)
+        )
+        successful = (
+            response.get("successful_nodes") or response.get("successful") or 0
+        )
         failed = response.get("failed_nodes") or response.get("failed") or 0
 
         # Extract data from various possible locations
@@ -393,9 +458,13 @@ def normalize_tool_response(response: dict | list | str, tool_name: str = "unkno
         if not data and "status" in response:
             data = [
                 {
-                    "name": response.get("device_name") or response.get("name") or "",
+                    "name": response.get("device_name")
+                    or response.get("name")
+                    or "",
                     "status": response["status"],
-                    "result": response.get("output") or response.get("result") or "",
+                    "result": response.get("output")
+                    or response.get("result")
+                    or "",
                     "error": response.get("error") or "",
                 }
             ]
@@ -425,14 +494,23 @@ def normalize_tool_response(response: dict | list | str, tool_name: str = "unkno
         "total": 1,
         "successful": 1,
         "failed": 0,
-        "data": [{"id": "", "name": "", "status": "unknown", "result": str(response)}],
+        "data": [
+            {
+                "id": "",
+                "name": "",
+                "status": "unknown",
+                "result": str(response),
+            }
+        ],
         "metadata": metadata,
     }
 
 
 # Test function to verify the implementation
 def _test_parse_tool_content() -> None:
-    """Test function to verify parse_tool_content works correctly with all input types"""
+    """Test function to verify parse_tool_content works correctly with all input
+    types
+    """
     test_cases: list[tuple[Any, Any]] = [
         # String inputs
         (
@@ -486,7 +564,9 @@ def _test_parse_tool_content() -> None:
             valid = "✓"
         except Exception:
             valid = "✗"
-        print(f"Format Test {i + 1}: {valid} Input: {repr(input_data)} -> {result}")
+        print(
+            f"Format Test {i + 1}: {valid} Input: {repr(input_data)} -> {result}"
+        )
 
 
 if __name__ == "__main__":

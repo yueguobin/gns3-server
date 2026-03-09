@@ -30,7 +30,9 @@ This module provides utility functions to retrieve LLM model configurations
 with decrypted API keys by directly accessing the database.
 
 Usage:
-    from gns3server.agent.gns3_copilot.utils.llm_config_helper import get_user_llm_config_with_app
+    from gns3server.agent.gns3_copilot.utils.llm_config_helper import (
+        get_user_llm_config_with_app,
+    )
 
     # Get user's default LLM config (with API key)
     config = await get_user_llm_config_with_app(user_id, app)
@@ -51,7 +53,9 @@ from fastapi import FastAPI
 logger = logging.getLogger(__name__)
 
 
-async def get_user_llm_config_with_app(user_id: UUID, app: FastAPI) -> Optional[Dict[str, Any]]:
+async def get_user_llm_config_with_app(
+    user_id: UUID, app: FastAPI
+) -> Optional[Dict[str, Any]]:
     """
     Get user's default LLM model configuration with decrypted API key.
 
@@ -91,5 +95,8 @@ async def get_user_llm_config_with_app(user_id: UUID, app: FastAPI) -> Optional[
         return config
 
     except Exception as e:
-        logger.error(f"Failed to retrieve LLM config for user {user_id}: {e}", exc_info=True)
+        logger.error(
+            f"Failed to retrieve LLM config for user {user_id}: {e}",
+            exc_info=True,
+        )
         return None

@@ -136,26 +136,37 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
             if hasattr(tool, "args_schema") and tool.args_schema:
                 try:
                     # Try Pydantic v2 method (model_json_schema)
-                    tool_schema["function"]["parameters"] = tool.args_schema.model_json_schema()
+                    tool_schema["function"]["parameters"] = (
+                        tool.args_schema.model_json_schema()
+                    )
                 except AttributeError:
                     # Fallback to Pydantic v1 method (schema)
                     try:
-                        tool_schema["function"]["parameters"] = tool.args_schema.schema()
+                        tool_schema["function"]["parameters"] = (
+                            tool.args_schema.schema()
+                        )
                     except Exception:
                         # Both methods failed, use empty schema
+                        tool_name = getattr(tool, "name", "unknown")
                         logger.debug(
-                            "Failed to get schema for tool %s, using empty parameters", getattr(tool, "name", "unknown")
+                            "Failed to get schema for tool %s, using empty "
+                            "parameters",
+                            tool_name,
                         )
                         tool_schema["function"]["parameters"] = {}
                 except Exception as e:
                     # model_json_schema() raised an exception
+                    tool_name = getattr(tool, "name", "unknown")
                     logger.debug(
-                        "model_json_schema() failed for tool %s: %s, trying v1 fallback",
-                        getattr(tool, "name", "unknown"),
+                        "model_json_schema() failed for tool %s: %s, "
+                        "trying v1 fallback",
+                        tool_name,
                         e,
                     )
                     try:
-                        tool_schema["function"]["parameters"] = tool.args_schema.schema()
+                        tool_schema["function"]["parameters"] = (
+                            tool.args_schema.schema()
+                        )
                     except Exception:
                         tool_schema["function"]["parameters"] = {}
 
@@ -165,7 +176,12 @@ def estimate_tool_tokens(tools: list[Any]) -> int:
             total_tokens += tokens
 
         except Exception as e:
-            logger.debug(f"Failed to estimate tokens for tool {getattr(tool, 'name', 'unknown')}: {e}")
+            tool_name = getattr(tool, "name", "unknown")
+            logger.debug(
+                "Failed to estimate tokens for tool %s: %s",
+                tool_name,
+                e,
+            )
             # Rough fallback: 1000 tokens per tool
             total_tokens += 1000
 
@@ -179,7 +195,8 @@ def _count_tokens_for_message(message: BaseMessage) -> int:
     This function is called by trim_messages for each message.
 
     Args:
-        message: A single message (HumanMessage, AIMessage, SystemMessage, etc.)
+        message: A single message (HumanMessage, AIMessage, SystemMessage,
+                 etc.)
 
     Returns:
         Estimated token count for the message
@@ -206,13 +223,16 @@ def create_pre_model_hook(
     Create a pre_model_hook function for LangGraph agent.
 
     This hook will be automatically called before each LLM invocation,
-    handling topology injection, tool token estimation, and message trimming.
+    handling topology injection, tool token estimation, and message
+    trimming.
 
     IMPORTANT USAGE REQUIREMENTS:
-        This hook MUST be passed via model.invoke() config, NOT used as a Node return value.
+        This hook MUST be passed via model.invoke() config, NOT used as
+        a Node return value.
 
         CORRECT Usage:
-            model.invoke(messages, config={"configurable": {"pre_model_hook": pre_hook}})
+            model.invoke(messages,
+                        config={"configurable": {"pre_model_hook": pre_hook}})
 
         INCORRECT Usage:
             # ❌ Don't use as Node return value
@@ -224,56 +244,69 @@ def create_pre_model_hook(
             messages: Annotated[list, add_messages]  # Incompatible!
 
     COMPATIBILITY:
-        - Works with: model.invoke(config={"configurable": {"pre_model_hook": ...}})
+        - Works with: model.invoke(config={"configurable":
+                                       {"pre_model_hook": ...}})
         - Does NOT work as: StateGraph Node return value
         - Does NOT work with: Annotated[list, add_messages] state reducers
 
-    The hook returns a complete message list that overwrites the model input,
-    which is correct for invoke() but wrong for state updates with add_messages.
+    The hook returns a complete message list that overwrites the model
+    input, which is correct for invoke() but wrong for state updates with
+    add_messages.
 
     Args:
-        system_prompt: System prompt template (must contain {{topology_info}} placeholder)
+        system_prompt: System prompt template (must contain
+                       {{topology_info}} placeholder)
         get_topology_func: Function to extract topology from state
         get_llm_config_func: Function to get LLM config from context
-        get_tools_func: Optional function to get tools list for token estimation
+        get_tools_func: Optional function to get tools list for token
+                       estimation
 
     Returns:
         A pre_model_hook function for use with model.invoke(config=...)
 
     Thread Safety:
-        Thread-safe if get_llm_config_func uses request-scoped context (e.g., contextvars)
+        Thread-safe if get_llm_config_func uses request-scoped context
+        (e.g., contextvars)
 
     Performance Notes:
-        - SystemMessage is reconstructed on each LLM call (intentional design)
+        - SystemMessage is reconstructed on each LLM call (intentional
+          design)
         - Overhead: ~1-2ms per call (negligible compared to LLM latency)
         - Trade-off: Simplicity > micro-optimization
-        - In ReAct loops with multiple LLM calls, topology is re-injected each time
-        - This is acceptable for GNS3-Copilot's usage patterns (low concurrency, short conversations)
+        - In ReAct loops with multiple LLM calls, topology is re-injected
+          each time
+        - This is acceptable for GNS3-Copilot's usage patterns (low
+          concurrency, short conversations)
     """
 
     def pre_model_hook(state: dict) -> dict:
         """
         LangGraph pre_model_hook - called before each LLM invocation.
 
-        This function is NOT a StateGraph Node. It is a preprocessing hook that
-        modifies the input to the LLM, not the agent state.
+        This function is NOT a StateGraph Node. It is a preprocessing hook
+        that modifies the input to the LLM, not the agent state.
 
         Usage Context:
             Called automatically by LangChain when passed via:
-                model.invoke(messages, config={"configurable": {"pre_model_hook": this}})
+                model.invoke(messages,
+                            config={"configurable":
+                                   {"pre_model_hook": this}})
 
         Args:
             state: Current agent state containing messages and topology_info
 
         Returns:
             dict with 'messages' key containing prepared and trimmed messages
-            Note: This return value is used by LangChain to replace the model input,
-                  NOT to update the agent state.
+            Note: This return value is used by LangChain to replace the model
+                  input, NOT to update the agent state.
 
         Raises:
             ValueError: If context_limit is missing or invalid
         """
-        logger.debug("pre_model_hook invoked: messages=%d", len(state.get("messages", [])))
+        logger.debug(
+            "pre_model_hook invoked: messages=%d",
+            len(state.get("messages", [])),
+        )
 
         messages = state.get("messages", [])
         if not messages:
@@ -285,11 +318,14 @@ def create_pre_model_hook(
 
         if not llm_config:
             logger.error("LLM config not found. context_limit is required.")
-            raise ValueError("LLM config not found. context_limit is required.")
+            raise ValueError(
+                "LLM config not found. context_limit is required."
+            )
 
         if "context_limit" not in llm_config:
             logger.error(
-                "context_limit not found in LLM config. " "This is a required field. Please configure context_limit."
+                "context_limit not found in LLM config. "
+                "This is a required field. Please configure context_limit."
             )
             raise ValueError("context_limit is required in LLM config")
 
@@ -302,7 +338,11 @@ def create_pre_model_hook(
         strategy = llm_config.get("context_strategy", DEFAULT_CONTEXT_STRATEGY)
 
         if strategy not in CONTEXT_STRATEGY_RATIOS:
-            logger.warning("Invalid context_strategy '%s', using '%s'", strategy, DEFAULT_CONTEXT_STRATEGY)
+            logger.warning(
+                "Invalid context_strategy '%s', using '%s'",
+                strategy,
+                DEFAULT_CONTEXT_STRATEGY,
+            )
             strategy = DEFAULT_CONTEXT_STRATEGY
 
         # Step 1: Estimate tool tokens
@@ -311,13 +351,20 @@ def create_pre_model_hook(
             try:
                 tools = get_tools_func()
                 tool_tokens = estimate_tool_tokens(tools)
-                logger.debug("Tool definitions estimated at ~%d tokens (%d tools)", tool_tokens, len(tools))
+                logger.debug(
+                    "Tool definitions estimated at ~%d tokens (%d tools)",
+                    tool_tokens,
+                    len(tools),
+                )
             except Exception as e:
                 logger.warning("Failed to estimate tool tokens: %s", e)
 
         # Step 2: Inject topology into system prompt
         messages_with_system = _inject_topology_into_system(
-            messages=messages, system_prompt=system_prompt, state=state, get_topology_func=get_topology_func
+            messages=messages,
+            system_prompt=system_prompt,
+            state=state,
+            get_topology_func=get_topology_func,
         )
 
         # Step 3: Calculate token breakdown for logging and validation
@@ -325,7 +372,9 @@ def create_pre_model_hook(
         system_tokens = _count_tokens_for_message(system_message)
 
         # Calculate tokens for messages_with_system (including system)
-        messages_with_system_tokens = sum(_count_tokens_for_message(m) for m in messages_with_system)
+        messages_with_system_tokens = sum(
+            _count_tokens_for_message(m) for m in messages_with_system
+        )
 
         # Calculate available budget
         model_limit_tokens = context_limit_k * TOKENS_PER_K
@@ -333,17 +382,19 @@ def create_pre_model_hook(
         max_input_tokens = int(model_limit_tokens * strategy_ratio)
 
         # Calculate max tokens for trim_messages
-        # Important: trim_messages counts ALL messages (including system), so we only
-        # subtract tool_tokens here, NOT system_tokens. Let trim_messages handle system.
+        # Important: trim_messages counts ALL messages (including system),
+        # so we only subtract tool_tokens here, NOT system_tokens.
+        # Let trim_messages handle system.
         max_tokens_for_trim = max_input_tokens - tool_tokens
 
         # Validate budget and provide actionable warnings
-        if system_tokens + tool_tokens > max_input_tokens:
+        if system_tokens + tool_tokens > max_input_tokens:  # noqa: E501
             logger.error(
-                "System prompt (%d tokens) + tools (%d tokens) EXCEED input budget (%d tokens). "
-                "This will likely cause LLM call failures. "
-                "Recommendations: 1) Reduce system prompt length, 2) Reduce number of tools, "
-                "3) Use a model with larger context window, or 4) Switch to 'conservative' strategy.",
+                "System prompt (%d tokens) + tools (%d tokens) EXCEED input "
+                "budget (%d tokens). This will likely cause LLM call failures. "  # noqa: E501
+                "Recommendations: 1) Reduce system prompt length, 2) Reduce "
+                "number of tools, 3) Use a model with larger context window, "
+                "or 4) Switch to 'conservative' strategy.",
                 system_tokens,
                 tool_tokens,
                 max_input_tokens,
@@ -351,7 +402,8 @@ def create_pre_model_hook(
         elif max_tokens_for_trim < system_tokens * 1.5:
             # Less than 1.5x system tokens means very little room for history
             logger.warning(
-                "System prompt (%d tokens) + tools (%d tokens) leave minimal room for conversation history (%d tokens remaining). "
+                "System prompt (%d tokens) + tools (%d tokens) leave minimal "
+                "room for conversation history (%d tokens remaining). "
                 "Consider reducing system prompt length or number of tools.",
                 system_tokens,
                 tool_tokens,
@@ -360,7 +412,8 @@ def create_pre_model_hook(
 
         # Debug log with clear terminology
         logger.debug(
-            "Token breakdown: system=%d, all_messages=%d (system+history), tools=%d, trim_budget=%d (limit=%dK, strategy=%s)",
+            "Token breakdown: system=%d, all_messages=%d (system+history), "
+            "tools=%d, trim_budget=%d (limit=%dK, strategy=%s)",
             system_tokens,
             messages_with_system_tokens,
             tool_tokens,
@@ -370,7 +423,8 @@ def create_pre_model_hook(
         )
 
         # Step 4: Trim messages to fit
-        # Note: max_tokens_for_trim INCLUDES system message, trim_messages will handle it
+        # Note: max_tokens_for_trim INCLUDES system message, trim_messages
+        # will handle it
         try:
             trimmed = trim_messages(
                 messages=messages_with_system,
@@ -382,11 +436,14 @@ def create_pre_model_hook(
 
             # Calculate final token counts
             final_total = sum(_count_tokens_for_message(m) for m in trimmed)
-            usage_percent = (final_total + tool_tokens) / model_limit_tokens * 100
+            usage_percent = (
+                (final_total + tool_tokens) / model_limit_tokens * 100
+            )
 
             if len(trimmed) < len(messages_with_system):
                 logger.info(
-                    "Messages trimmed: %d → %d msgs. Total: ~%d tokens + %d tools = %d / %dK (%.1f%%), strategy=%s",
+                    "Messages trimmed: %d → %d msgs. Total: ~%d tokens + %d "
+                    "tools = %d / %dK (%.1f%%), strategy=%s",
                     len(messages_with_system),
                     len(trimmed),
                     final_total,
@@ -398,7 +455,8 @@ def create_pre_model_hook(
                 )
             else:
                 logger.info(
-                    "Context ready: %d msgs, ~%d tokens + %d tools = %d / %dK (%.1f%%), strategy=%s",
+                    "Context ready: %d msgs, ~%d tokens + %d tools = %d / %dK "
+                    "(%.1f%%), strategy=%s",
                     len(trimmed),
                     final_total,
                     tool_tokens,
@@ -449,23 +507,33 @@ def _inject_topology_into_system(
 
     if topology_data:
         topology_str = str(topology_data)
-        formatted_prompt = system_prompt.replace("{{topology_info}}", f"\n\n## Current Topology\n{topology_str}")
+        formatted_prompt = system_prompt.replace(
+            "{{topology_info}}", f"\n\n## Current Topology\n{topology_str}"
+        )
         logger.info(
             "✓ Topology injected: %d chars, nodes: %s",
             len(topology_str),
             list(topology_data.get("nodes", {}).keys())[:5],
         )  # Show first 5 node names
-        logger.debug("Full topology data: %s", topology_str[:500])  # First 500 chars
+        logger.debug(
+            "Full topology data: %s", topology_str[:500]
+        )  # First 500 chars
     else:
-        formatted_prompt = system_prompt.replace("{{topology_info}}", "(No topology information available)")
+        formatted_prompt = system_prompt.replace(
+            "{{topology_info}}", "(No topology information available)"
+        )
         logger.warning("✗ Topology data is None, injecting placeholder")
 
     # Filter out existing SystemMessage instances
-    non_system_messages = [m for m in messages if not isinstance(m, SystemMessage)]
+    non_system_messages = [
+        m for m in messages if not isinstance(m, SystemMessage)
+    ]
 
     filtered_count = len(messages) - len(non_system_messages)
     if filtered_count > 0:
-        logger.debug("Filtered out %d existing SystemMessage(s)", filtered_count)
+        logger.debug(
+            "Filtered out %d existing SystemMessage(s)", filtered_count
+        )
 
     return [SystemMessage(content=formatted_prompt)] + non_system_messages
 
@@ -487,7 +555,8 @@ def prepare_context_messages(
     **DEPRECATED**: Use create_pre_model_hook() instead.
     """
     warnings.warn(
-        "prepare_context_messages() is deprecated. Use create_pre_model_hook() instead.",
+        "prepare_context_messages() is deprecated. Use "
+        "create_pre_model_hook() instead.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -495,9 +564,13 @@ def prepare_context_messages(
     if "{{topology_info}}" not in system_prompt:
         formatted_prompt = system_prompt
     elif topology_context:
-        formatted_prompt = system_prompt.replace("{{topology_info}}", f"\n\n## Current Topology\n{topology_context}")
+        formatted_prompt = system_prompt.replace(
+            "{{topology_info}}", f"\n\n## Current Topology\n{topology_context}"
+        )
     else:
-        formatted_prompt = system_prompt.replace("{{topology_info}}", "(No topology information available)")
+        formatted_prompt = system_prompt.replace(
+            "{{topology_info}}", "(No topology information available)"
+        )
 
     return [SystemMessage(content=formatted_prompt)] + state_messages
 
@@ -543,7 +616,9 @@ if __name__ == "__main__":
     # Test invocation
     print("\nTest 3: Invoke pre_model_hook")
     test_state = {
-        "messages": [HumanMessage(f"Message {i}: {'x' * 50}") for i in range(5)],
+        "messages": [
+            HumanMessage(f"Message {i}: {'x' * 50}") for i in range(5)
+        ],
         "topology_info": {"project_id": "test123", "nodes": 3},
     }
 

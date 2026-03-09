@@ -39,7 +39,8 @@ The agent provides:
 - Integration with GNS3 topology management
 
 Copilot Modes:
-- "teaching_assistant" (default): Diagnostic tools only, no configuration changes
+- "teaching_assistant" (default): Diagnostic tools only, no configuration
+  changes
 - "lab_automation_assistant": Full diagnostic and configuration tools
 
 """
@@ -64,19 +65,27 @@ from langgraph.managed.is_last_step import RemainingSteps
 from typing_extensions import TypedDict
 
 # Local imports
-from gns3server.agent.gns3_copilot.agent.context_manager import create_pre_model_hook
+from gns3server.agent.gns3_copilot.agent.context_manager import (
+    create_pre_model_hook,
+)
 from gns3server.agent.gns3_copilot.agent.model_factory import (
     create_base_model_with_tools,
 )
-from gns3server.agent.gns3_copilot.agent.model_factory import create_title_model
+from gns3server.agent.gns3_copilot.agent.model_factory import (
+    create_title_model,
+)
 from gns3server.agent.gns3_copilot.gns3_client import GNS3TopologyTool
 from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
     get_current_llm_config,
 )
 from gns3server.agent.gns3_copilot.prompts import TITLE_PROMPT
 from gns3server.agent.gns3_copilot.prompts import load_system_prompt
-from gns3server.agent.gns3_copilot.tools_v2 import ExecuteMultipleDeviceCommands
-from gns3server.agent.gns3_copilot.tools_v2 import ExecuteMultipleDeviceConfigCommands
+from gns3server.agent.gns3_copilot.tools_v2 import (
+    ExecuteMultipleDeviceCommands,
+)
+from gns3server.agent.gns3_copilot.tools_v2 import (
+    ExecuteMultipleDeviceConfigCommands,
+)
 from gns3server.agent.gns3_copilot.tools_v2 import GNS3CreateNodeTool
 from gns3server.agent.gns3_copilot.tools_v2 import GNS3LinkTool
 from gns3server.agent.gns3_copilot.tools_v2 import GNS3StartNodeTool
@@ -87,8 +96,9 @@ from gns3server.agent.gns3_copilot.tools_v2 import VPCSMultiCommands
 # Set up logger for GNS3-Copilot
 logger = logging.getLogger(__name__)
 
-# Note: LLM model configuration is now managed by the new llm_model_configs system.
-# The model_factory module handles model creation with configuration from the database.
+# Note: LLM model configuration is now managed by the new llm_model_configs
+# system. The model_factory module handles model creation with configuration
+# from the database.
 
 # Define tools for different copilot modes
 # Teaching assistant mode: READ-ONLY diagnostic tools only
@@ -98,7 +108,8 @@ TEACHING_ASSISTANT_MODE_TOOLS = [
     GNS3LinkTool(),  # Create links between nodes
     GNS3StartNodeTool(),  # Start GNS3 nodes
     GNS3UpdateNodeNameTool(),  # Update node name
-    ExecuteMultipleDeviceCommands(),  # Execute show/display/debug commands (READ-ONLY)
+    ExecuteMultipleDeviceCommands(),  # Execute show/display/debug commands
+    # (READ-ONLY)
 ]
 
 # Lab automation assistant mode: Full diagnostic AND configuration tools
@@ -108,7 +119,8 @@ LAB_AUTOMATION_ASSISTANT_MODE_TOOLS = [
     GNS3LinkTool(),  # Create links between nodes
     GNS3StartNodeTool(),  # Start GNS3 nodes
     GNS3UpdateNodeNameTool(),  # Update node name
-    ExecuteMultipleDeviceCommands(),  # Execute show/display/debug commands (READ-ONLY)
+    ExecuteMultipleDeviceCommands(),  # Execute show/display/debug commands
+    # (READ-ONLY)
     ExecuteMultipleDeviceConfigCommands(),  # Execute configuration commands
     VPCSMultiCommands(),  # Execute VPCS commands on multiple devices
 ]
@@ -117,7 +129,8 @@ LAB_AUTOMATION_ASSISTANT_MODE_TOOLS = [
 tools = LAB_AUTOMATION_ASSISTANT_MODE_TOOLS
 
 # Create combined tool lookup for tool_node (supports both modes)
-# tool_node will receive tool calls based on mode-specific tools bound to the model
+# tool_node will receive tool calls based on mode-specific tools bound to the
+# model
 ALL_TOOLS = LAB_AUTOMATION_ASSISTANT_MODE_TOOLS
 tools_by_name = {tool.name: tool for tool in ALL_TOOLS}
 
@@ -135,14 +148,18 @@ class MessagesState(TypedDict):
     """
     GNS3-Copilot conversation state management class.
 
-    Maintains the conversation state for the LangGraph workflow, including message history,
-    call counters, and session titles for comprehensive dialogue management.
+    Maintains the conversation state for the LangGraph workflow, including
+    message history, call counters, and session titles for comprehensive
+    dialogue management.
 
     Attributes:
-        messages: List of conversation messages with cumulative updates using operator.add
+        messages: List of conversation messages with cumulative updates using
+                 operator.add
         llm_calls: Counter for tracking the number of LLM invocations
-        remaining_steps: Is automatically managed by LangGraph's RemainingSteps to track and limit recursion depth.
-        conversation_title: Optional conversation title for session identification and management
+        remaining_steps: Is automatically managed by LangGraph's RemainingSteps
+                       to track and limit recursion depth.
+        conversation_title: Optional conversation title for session
+                          identification and management
         topology_info: Dictionary containing GNS3 project topology information
     """
 
@@ -183,7 +200,9 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         }
 
     logger.debug(
-        "LLM config retrieved from context: provider=%s, model=%s", llm_config.get("provider"), llm_config.get("model")
+        "LLM config retrieved from context: provider=%s, model=%s",
+        llm_config.get("provider"),
+        llm_config.get("model"),
     )
 
     # Defensive check: skip LLM call if no user messages
@@ -211,16 +230,25 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
             if topology and "error" not in topology:
                 topology_info = topology
                 logger.info(
-                    "Successfully retrieved topology for project_id: %s, name: %s", project_id, topology.get("name")
+                    "Successfully retrieved topology for project_id: %s, "
+                    "name: %s",
+                    project_id,
+                    topology.get("name"),
                 )
             else:
                 logger.warning(
                     "Failed to retrieve topology for project_id %s: %s",
                     project_id,
-                    topology.get("error", "Unknown error") if topology else "No result",
+                    topology.get("error", "Unknown error")
+                    if topology
+                    else "No result",
                 )
         except Exception as e:
-            logger.warning("Error retrieving topology for project_id %s: %s", project_id, e)
+            logger.warning(
+                "Error retrieving topology for project_id %s: %s",
+                project_id,
+                e,
+            )
 
     # Store topology_info in state for pre_model_hook to access
     state["topology_info"] = topology_info
@@ -229,10 +257,15 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     copilot_mode = llm_config.get("copilot_mode", "teaching_assistant").lower()
     if copilot_mode == "lab_automation_assistant":
         mode_tools = LAB_AUTOMATION_ASSISTANT_MODE_TOOLS
-        logger.info("Using LAB_AUTOMATION_ASSISTANT mode tools (includes configuration tools)")
+        logger.info(
+            "Using LAB_AUTOMATION_ASSISTANT mode tools (includes "
+            "configuration tools)"
+        )
     else:  # teaching_assistant mode (default)
         mode_tools = TEACHING_ASSISTANT_MODE_TOOLS
-        logger.info("Using TEACHING_ASSISTANT mode tools (diagnostic tools only)")
+        logger.info(
+            "Using TEACHING_ASSISTANT mode tools (diagnostic tools only)"
+        )
 
     # Create pre_model_hook for automatic topology injection and trimming
     # Load system prompt based on copilot_mode configuration
@@ -241,7 +274,8 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         system_prompt=system_prompt,
         get_topology_func=lambda s: s.get("topology_info"),
         get_llm_config_func=get_current_llm_config,
-        get_tools_func=lambda: mode_tools,  # Pass mode-specific tools for token estimation
+        get_tools_func=lambda: mode_tools,  # Pass mode-specific tools for
+        # token estimation
     )
 
     # Create fresh model with tools for each LLM call
@@ -252,14 +286,22 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         copilot_mode,
         len(mode_tools),
     )
-    model_with_tools = create_base_model_with_tools(mode_tools, llm_config=llm_config)
+    model_with_tools = create_base_model_with_tools(
+        mode_tools, llm_config=llm_config
+    )
 
-    # Call pre_hook directly to prepare messages (topology injection + trimming)
-    # Note: LangGraph's pre_model_hook only works with prebuilt agents, not custom StateGraph
+    # Call pre_hook directly to prepare messages (topology injection +
+    # trimming)
+    # Note: LangGraph's pre_model_hook only works with prebuilt agents, not
+    # custom StateGraph
     logger.info("Calling pre_hook to prepare %d messages", len(messages))
-    prepared_state = pre_hook({"messages": messages, "topology_info": topology_info})
+    prepared_state = pre_hook(
+        {"messages": messages, "topology_info": topology_info}
+    )
     prepared_messages = prepared_state["messages"]
-    logger.info("Messages prepared: %d → %d", len(messages), len(prepared_messages))
+    logger.info(
+        "Messages prepared: %d → %d", len(messages), len(prepared_messages)
+    )
 
     # Invoke model with prepared messages
     response = model_with_tools.invoke(prepared_messages)
@@ -267,15 +309,22 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     # Add metadata with created_at timestamp to AI response
     if hasattr(response, "metadata"):
         existing_metadata = response.metadata or {}
-        response.metadata = {**existing_metadata, "created_at": datetime.utcnow().isoformat()}
+        response.metadata = {
+            **existing_metadata,
+            "created_at": datetime.utcnow().isoformat(),
+        }
     else:
-        # LangChain messages should have metadata attribute, but defensive fallback
+        # LangChain messages should have metadata attribute, but defensive
+        # fallback
         try:
             response.metadata = {"created_at": datetime.utcnow().isoformat()}
         except Exception:
             logger.warning("Could not add metadata to AI response")
 
-    logger.info("LLM call completed: tool_calls=%d", len(response.tool_calls) if hasattr(response, "tool_calls") else 0)
+    logger.info(
+        "LLM call completed: tool_calls=%d",
+        len(response.tool_calls) if hasattr(response, "tool_calls") else 0,
+    )
 
     return {
         "messages": [response],
@@ -285,10 +334,13 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
 
 
 # Define generate title node
-def generate_title(state: MessagesState, config: RunnableConfig | None = None) -> dict:
+def generate_title(
+    state: MessagesState, config: RunnableConfig | None = None
+) -> dict:
     """
-    Generate a conversation title using a lightweight assistant LLM (title_model).
-    This node is only executed when no title has been set yet (first round only).
+    Generate a conversation title using a lightweight assistant LLM
+    (title_model). This node is only executed when no title has been set yet
+    (first round only).
     """
 
     # Get llm_config from request-scoped context variable
@@ -314,24 +366,37 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
         # Call the title generation model (create fresh instance for each call)
         try:
             title_model = create_title_model(llm_config=llm_config)
-            response = title_model.invoke(title_prompt_messages, config={"configurable": {"foo_temperature": 1.0}})
+            response = title_model.invoke(
+                title_prompt_messages,
+                config={"configurable": {"foo_temperature": 1.0}},
+            )
             raw_content = response.content
 
             new_title = raw_content.strip()
 
             # Validate the generated title
             if not new_title or len(new_title) < 3:
-                raise ValueError(f"Generated title too short or empty: '{new_title}'")
+                raise ValueError(
+                    f"Generated title too short or empty: '{new_title}'"
+                )
 
-            if new_title in ["New Conversation", "Untitled Session", "GNS3 Session"]:
-                raise ValueError(f"Generated title is a default value: '{new_title}'")
+            if new_title in [
+                "New Conversation",
+                "Untitled Session",
+                "GNS3 Session",
+            ]:
+                raise ValueError(
+                    f"Generated title is a default value: '{new_title}'"
+                )
 
             # Safety: truncate long titles and avoid line breaks
             if len(new_title) > TITLE_MAX_LENGTH:
                 new_title = new_title[: TITLE_MAX_LENGTH - 2] + "..."
 
             # Remove unwanted characters
-            new_title = new_title.replace("\n", " ").replace('"', "").replace("'", "")
+            new_title = (
+                new_title.replace("\n", " ").replace('"', "").replace("'", "")
+            )
 
             logger.info("Generated new title: %s", new_title)
             return {"conversation_title": new_title}
@@ -355,11 +420,17 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
                         fallback_title = fallback_title[:28] + ".."
 
                     if fallback_title:
-                        logger.info(f"Using fallback title from user message: '{fallback_title}'")
+                        logger.info(
+                            "Using fallback title from user message: '%s'",
+                            fallback_title,
+                        )
                         return {"conversation_title": fallback_title}
 
             # Final fallback
-            logger.info(f"Using final fallback title: '{UNTITLED_SESSION_FALLBACK}'")
+            logger.info(
+                "Using final fallback title: '%s'",
+                UNTITLED_SESSION_FALLBACK,
+            )
             return {"conversation_title": UNTITLED_SESSION_FALLBACK}
 
     # Title already exists → no update needed
@@ -376,17 +447,24 @@ def tool_node(state: dict, config: RunnableConfig | None = None):
     result = []
     for tool_call in tool_calls:
         tool_name = tool_call["name"]
-        logger.debug("Executing tool: %s with args: %s", tool_name, tool_call["args"])
+        logger.debug(
+            "Executing tool: %s with args: %s", tool_name, tool_call["args"]
+        )
         tool = tools_by_name[tool_name]
         try:
             observation = tool.invoke(tool_call["args"])
-            logger.debug("Tool %s completed: output_length=%d", tool_name, len(str(observation)) if observation else 0)
+            logger.debug(
+                "Tool %s completed: output_length=%d",
+                tool_name,
+                len(str(observation)) if observation else 0,
+            )
         except Exception as e:
             logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
             observation = f"Error: {str(e)}"
 
         # Serialize observation to JSON string if it's not already a string
-        # This ensures ToolMessage.content is always JSON format, not Python str()
+        # This ensures ToolMessage.content is always JSON format, not Python
+        # str()
         if not isinstance(observation, str):
             observation = json.dumps(observation, ensure_ascii=False, indent=2)
 
@@ -395,7 +473,7 @@ def tool_node(state: dict, config: RunnableConfig | None = None):
             content=observation,
             tool_call_id=tool_call["id"],
             name=tool_call["name"],
-            metadata={"created_at": datetime.utcnow().isoformat()}
+            metadata={"created_at": datetime.utcnow().isoformat()},
         )
         result.append(tool_msg)
 
@@ -410,7 +488,8 @@ def should_continue(
     Determine the next step after the LLM has produced a response.
 
     - If the LLM requested any tool calls → route to tool_node
-    - If this is the first complete turn (llm_calls == 1) and no title exists → generate a title
+    - If this is the first complete turn (llm_calls == 1) and no title
+      exists → generate a title
     - Otherwise → conversation is complete, go to END
     """
     last_message = state["messages"][-1]
@@ -433,8 +512,8 @@ def recursion_limit_continue(state: MessagesState) -> Literal["llm_call", END]:
     """
     Routing logic after tool execution to prevent infinite recursion.
 
-    Determines whether to continue with another LLM call or end the conversation
-    based on remaining steps and message type.
+    Determines whether to continue with another LLM call or end the
+    conversation based on remaining steps and message type.
 
     Args:
         state: Current conversation state with messages and remaining steps
@@ -467,13 +546,16 @@ agent_builder.add_node("title_generator_node", generate_title)
 # Add edges to connect nodes
 agent_builder.add_edge(START, "llm_call")
 # Conditional routing after LLM response
-# Determines the next step based on whether LLM needs to call tools or generate title
+# Determines the next step based on whether LLM needs to call tools or
+# generate title
 agent_builder.add_conditional_edges(
     "llm_call",
     should_continue,
     {
-        "tool_node": "tool_node",  # Route to tool execution if LLM requested tools
-        "title_generator_node": "title_generator_node",  # Generate title on first interaction
+        "tool_node": "tool_node",  # Route to tool execution if LLM requested
+        # tools
+        "title_generator_node": "title_generator_node",  # Generate title on
+        # first interaction
         END: END,  # End conversation if no tools needed
     },
 )
@@ -483,7 +565,8 @@ agent_builder.add_conditional_edges(
     "tool_node",
     recursion_limit_continue,
     {
-        "llm_call": "llm_call",  # Continue to LLM if tools executed and steps remain
+        "llm_call": "llm_call",  # Continue to LLM if tools executed and steps
+        # remain
         END: END,  # End conversation to prevent infinite loops
     },
 )
