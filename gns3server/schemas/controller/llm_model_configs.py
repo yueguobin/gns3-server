@@ -44,13 +44,15 @@ class LLMModelConfigData(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Temperature parameter")
     api_key: Optional[str] = Field(None, description="API key (will be encrypted)")
     max_tokens: Optional[int] = Field(None, gt=0, description="Max tokens for generation")
-    context_limit: int = Field(..., gt=0, description="Model context window limit in K tokens (REQUIRED, e.g., 128 = 128K = 128,000 tokens)")
+    context_limit: int = Field(
+        ..., gt=0, description="Model context window limit in K tokens (e.g., 128 = 128K tokens)"
+    )
     context_strategy: Literal["conservative", "balanced", "aggressive"] = Field(
         "balanced", description="Context trimming strategy: conservative (60%), balanced (75%), aggressive (85%)"
     )
     copilot_mode: Optional[str] = Field(
         None,
-        description="GNS3-Copilot mode: 'teaching_assistant' (diagnostics only) or 'lab_automation_assistant' (full configuration access)"
+        description="GNS3-Copilot mode: 'teaching_assistant' or 'lab_automation_assistant'"
     )
 
     # Allow extra fields for extensibility
@@ -72,13 +74,15 @@ class LLMModelConfigCreate(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     api_key: Optional[str] = None
     max_tokens: Optional[int] = Field(None, gt=0)
-    context_limit: int = Field(..., gt=0, description="Model context window limit in K tokens (REQUIRED, e.g., 128 = 128K tokens)")
+    context_limit: int = Field(
+        ..., gt=0, description="Model context window limit in K tokens (e.g., 128 = 128K tokens)"
+    )
     context_strategy: Literal["conservative", "balanced", "aggressive"] = Field(
         "balanced", description="Context trimming strategy"
     )
     copilot_mode: Optional[str] = Field(
         None,
-        description="GNS3-Copilot mode: 'teaching_assistant' (diagnostics only) or 'lab_automation_assistant' (full configuration access)"
+        description="GNS3-Copilot mode: 'teaching_assistant' or 'lab_automation_assistant'"
     )
 
     # Allow extra config fields
@@ -101,13 +105,15 @@ class LLMModelConfigUpdate(BaseModel):
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     api_key: Optional[str] = None
     max_tokens: Optional[Union[int, str]] = Field(None, description="Max tokens for generation (can be null)")
-    context_limit: Optional[int] = Field(None, gt=0, description="Model context window limit in K tokens (e.g., 128 = 128K tokens)")
+    context_limit: Optional[int] = Field(
+        None, gt=0, description="Model context window limit in K tokens (e.g., 128 = 128K tokens)"
+    )
     context_strategy: Optional[Literal["conservative", "balanced", "aggressive"]] = Field(
         None, description="Context trimming strategy"
     )
     copilot_mode: Optional[str] = Field(
         None,
-        description="GNS3-Copilot mode: 'teaching_assistant' (diagnostics only) or 'lab_automation_assistant' (full configuration access)"
+        description="GNS3-Copilot mode: 'teaching_assistant' or 'lab_automation_assistant'"
     )
 
     # Allow extra config fields
