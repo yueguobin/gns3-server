@@ -75,10 +75,10 @@ class TestUserRoutes:
         (
                 ("email", "user2@email.com", status.HTTP_400_BAD_REQUEST),
                 ("username", "user2", status.HTTP_400_BAD_REQUEST),
-                ("email", "invalid_email@one@two.io", status.HTTP_422_UNPROCESSABLE_ENTITY),
-                ("password", "short", status.HTTP_422_UNPROCESSABLE_ENTITY),
-                ("username", "user2@#$%^<>", status.HTTP_422_UNPROCESSABLE_ENTITY),
-                ("username", "ab", status.HTTP_422_UNPROCESSABLE_ENTITY),
+                ("email", "invalid_email@one@two.io", status.HTTP_422_UNPROCESSABLE_CONTENT),
+                ("password", "short", status.HTTP_422_UNPROCESSABLE_CONTENT),
+                ("username", "user2@#$%^<>", status.HTTP_422_UNPROCESSABLE_CONTENT),
+                ("username", "ab", status.HTTP_422_UNPROCESSABLE_CONTENT),
         )
     )
     async def test_user_registration_fails_when_credentials_are_taken(
@@ -101,10 +101,10 @@ class TestUserRoutes:
                 ("email", "user@email.com", status.HTTP_200_OK),
                 ("email", "user@email.com", status.HTTP_400_BAD_REQUEST),
                 ("username", "user2", status.HTTP_400_BAD_REQUEST),
-                ("email", "invalid_email@one@two.io", status.HTTP_422_UNPROCESSABLE_ENTITY),
-                ("password", "short", status.HTTP_422_UNPROCESSABLE_ENTITY),
-                ("username", "user2@#$%^<>", status.HTTP_422_UNPROCESSABLE_ENTITY),
-                ("username", "ab", status.HTTP_422_UNPROCESSABLE_ENTITY),
+                ("email", "invalid_email@one@two.io", status.HTTP_422_UNPROCESSABLE_CONTENT),
+                ("password", "short", status.HTTP_422_UNPROCESSABLE_CONTENT),
+                ("username", "user2@#$%^<>", status.HTTP_422_UNPROCESSABLE_CONTENT),
+                ("username", "ab", status.HTTP_422_UNPROCESSABLE_CONTENT),
                 ("full_name", "John Doe", status.HTTP_200_OK),
                 ("password", "password123", status.HTTP_200_OK),
                 ("is_active", True, status.HTTP_200_OK),
@@ -259,7 +259,7 @@ class TestUserLogin:
         (
             ("wrong_username", "user1_password", status.HTTP_401_UNAUTHORIZED),
             ("user1", "wrong_password", status.HTTP_401_UNAUTHORIZED),
-            ("user1", None, status.HTTP_422_UNPROCESSABLE_ENTITY),
+            ("user1", None, status.HTTP_422_UNPROCESSABLE_CONTENT),
         ),
     )
     async def test_user_with_wrong_creds_doesnt_receive_token(

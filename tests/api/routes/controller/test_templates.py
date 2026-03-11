@@ -133,7 +133,7 @@ class TestTemplateRoutes:
                   "template_type": "invalid_template_type"}
 
         response = await client.post(app.url_path_for("create_template"), json=params)
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     async def test_template_update(self, app: FastAPI, client: AsyncClient) -> None:
 

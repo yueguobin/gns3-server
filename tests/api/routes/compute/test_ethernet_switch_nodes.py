@@ -297,7 +297,7 @@ class TestEthernetSwitchNodesRoutes:
                 node_id=ethernet_switch["node_id"]),
             json=port_params
         )
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
     async def test_ethernet_switch_delete(
