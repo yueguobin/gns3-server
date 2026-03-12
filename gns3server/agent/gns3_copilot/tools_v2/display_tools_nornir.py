@@ -49,6 +49,22 @@ from gns3server.agent.gns3_copilot.utils.command_filter import (
     filter_forbidden_commands,
 )
 
+# Import custom Netmiko device types for GNS3 emulation
+# This registers huawei_telnet_ce and other custom device types
+# NOTE: Must be imported BEFORE any Nornir operations to ensure device types are registered
+from gns3server.agent.gns3_copilot.utils import custom_netmiko  # noqa: F401
+
+# Explicitly register custom device types to ensure they are available
+# This is a safety measure in case the auto-registration on import doesn't work
+try:
+    from gns3server.agent.gns3_copilot.utils.custom_netmiko import huawei_ce
+
+    # Re-register to ensure device types are available
+    huawei_ce.register_custom_device_type()
+except Exception:
+    # Fail silently - the import-time registration should have worked
+    pass
+
 # config log
 logger = logging.getLogger(__name__)
 
@@ -60,9 +76,9 @@ logging.getLogger("nornir.core").setLevel(logging.WARNING)
 logging.getLogger("nornir").setLevel(logging.WARNING)
 
 
-# Local Nornir configuration functions for Cisco IOS Telnet devices
+# Local Nornir configuration functions for network devices
 def _get_nornir_defaults() -> dict[str, Any]:
-    """Get Nornir default configuration for Cisco IOS."""
+    """Get Nornir default configuration."""
     return {"data": {"location": "gns3"}}
 
 
@@ -70,11 +86,11 @@ def _get_nornir_groups_config(
     device_type: str = "cisco_ios_telnet", platform: str = "cisco_ios"
 ) -> dict[str, Any]:
     """
-    Get Nornir group configuration for Cisco IOS Telnet devices.
+    Get Nornir group configuration for network devices.
 
     Args:
-        device_type: Device type for Netmiko (e.g., 'cisco_ios_telnet')
-        platform: Platform type for Nornir (e.g., 'cisco_ios')
+        device_type: Device type for Netmiko (e.g., 'cisco_ios_telnet', 'huawei_telnet')
+        platform: Platform type for Nornir (e.g., 'cisco_ios', 'huawei')
 
     Returns:
         Dictionary containing Nornir group configuration
@@ -92,7 +108,7 @@ def _get_nornir_groups_config(
 
 
 def _get_nornir_group(
-    group_name: str = "cisco_IOSv_telnet",
+    group_name: str = "network_devices_telnet",
     device_type: str = "cisco_ios_telnet",
     platform: str = "cisco_ios",
 ) -> dict[str, Any]:
@@ -101,8 +117,8 @@ def _get_nornir_group(
 
     Args:
         group_name: Name of the group
-        device_type: Device type for Netmiko (e.g., 'cisco_ios_telnet')
-        platform: Platform type for Nornir (e.g., 'cisco_ios')
+        device_type: Device type for Netmiko (e.g., 'cisco_ios_telnet', 'huawei_telnet')
+        platform: Platform type for Nornir (e.g., 'cisco_ios', 'huawei')
 
     Returns:
         Dictionary containing group configuration
@@ -533,13 +549,23 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             )
             defaults = _get_nornir_defaults()
 
+            # Dynamically generate group name based on platform and device type
+            # e.g., "huawei_telnet", "cisco_ios_telnet", "juniper_junos"
+            actual_platform = platform or "cisco_ios"
+            if device_type and "_telnet" in device_type:
+                group_name = f"{actual_platform}_telnet"
+            else:
+                group_name = actual_platform
+
             # Log nornir account information
             gns3_host = get_gns3_server_host()
 
             logger.info(
-                "Initializing Nornir: host=%s, platform=%s, timeout=%d",
+                "Initializing Nornir: host=%s, platform=%s, device_type=%s, group=%s, timeout=%d",
                 gns3_host,
                 groups_data.get("platform"),
+                device_type,
+                group_name,
                 groups_data.get("timeout"),
             )
 
@@ -548,7 +574,7 @@ class ExecuteMultipleDeviceCommands(BaseTool):
                     "plugin": "DictInventory",
                     "options": {
                         "hosts": hosts_data,
-                        "groups": {"cisco_IOSv_telnet": groups_data},
+                        "groups": {group_name: groups_data},
                         "defaults": defaults,
                     },
                 },

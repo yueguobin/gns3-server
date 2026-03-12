@@ -49,9 +49,9 @@ def get_device_ports_from_topology(
         {
             "device_name": {
                 "port": console_port,
-                "groups": ["cisco_IOSv_telnet"],
-                "device_type": "cisco_ios_telnet",  # Extracted from tags
-                "platform": "cisco_ios"              # Extracted from tags
+                "groups": ["platform_telnet"],  # Dynamically generated from platform/device_type
+                "device_type": "huawei_telnet",  # Extracted from tags
+                "platform": "huawei"              # Extracted from tags
             }
         }
         Devices that don't exist or missing console_port will not be included
@@ -129,9 +129,15 @@ def get_device_ports_from_topology(
                 )
 
             # Add device to hosts_data
+            # Dynamically generate group name based on platform and device_type
+            if device_type and "_telnet" in device_type:
+                group_name = f"{platform}_telnet"
+            else:
+                group_name = platform
+
             hosts_data[device_name] = {
                 "port": node_info["console_port"],
-                "groups": ["cisco_IOSv_telnet"],
+                "groups": [group_name],
                 "device_type": device_type,
                 "platform": platform,
             }

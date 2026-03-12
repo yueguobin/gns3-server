@@ -12,7 +12,8 @@ docs/gns3-copilot/
     ├── llm-model-configs.md    # LLM model configuration system
     ├── command-security.md     # Command security and filtering
     ├── context-window-management.md  # Context window optimization
-    └── node-control-tools.md   # Node start/stop/suspend tools for lab automation
+    ├── node-control-tools.md   # Node start/stop/suspend tools for lab automation
+    └── multi-vendor-device-support.md  # Multi-vendor device support (Cisco, Huawei)
 ```
 
 ## Implemented Features
@@ -72,6 +73,22 @@ Tools for controlling network device lifecycle in GNS3 projects.
 - Stop nodes for lab shutdown
 - Batch operations support
 - Mode-based access control
+
+**Status:** ✅ Implemented
+
+### Multi-Vendor Device Support (`implemented/multi-vendor-device-support.md`)
+Multi-vendor network device support with custom Netmiko driver for Huawei devices.
+
+**Key Features:**
+- Custom HuaweiTelnetCE driver for GNS3 emulation (no authentication)
+- Cisco IOS Telnet support
+- Dynamic device type detection from GNS3 tags
+- Automatic Nornir group generation
+- VRP-specific command handling (system-view, return confirmation)
+
+**Tested Vendors:**
+- Cisco IOS (Telnet)
+- Huawei CloudEngine (Telnet, custom driver)
 
 **Status:** ✅ Implemented
 
