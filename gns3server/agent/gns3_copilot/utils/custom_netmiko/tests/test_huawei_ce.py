@@ -21,9 +21,12 @@ Run with: python test_huawei_ce.py
 import sys
 import unittest
 from unittest.mock import Mock, patch, MagicMock
+import os
 
-# Add project root to path
-sys.path.insert(0, "/home/yueguobin/myCode/GNS3/gns3-server")
+# Add project root to path using relative path
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(test_dir)))))
+sys.path.insert(0, project_root)
 
 
 class TestHuaweiTelnetCEDriver(unittest.TestCase):
@@ -200,11 +203,11 @@ def run_tests():
 
     # Print summary
     print("\n" + "=" * 100)
-    print("测试摘要:")
-    print(f"  运行: {result.testsRun}")
-    print(f"  成功: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"  失败: {len(result.failures)}")
-    print(f"  错误: {len(result.errors)}")
+    print("Test Summary:")
+    print(f"  Run: {result.testsRun}")
+    print(f"  Success: {result.testsRun - len(result.failures) - len(result.errors)}")
+    print(f"  Failed: {len(result.failures)}")
+    print(f"  Errors: {len(result.errors)}")
     print("=" * 100)
 
     return result.wasSuccessful()

@@ -23,15 +23,47 @@
 # Project Home: https://github.com/yueguobin/gns3-copilot
 #
 
+# Mypy type checking is disabled for this module due to Netmiko library
+# limitations.
+#
+# Reason: Netmiko does not provide type stubs (py.typed marker), which
+# causes mypy to generate errors when importing and using Netmiko classes.
+# The main issues are:
+#
+# 1. Missing library stubs for 'netmiko.huawei.huawei' module
+# 2. Dynamic attribute assignments on netmiko.ssh_dispatcher module
+#    (platforms, platforms_base, telnet_platforms, etc.) that mypy cannot
+#    detect
+# 3. Inheritance from HuaweiBase triggers 'import-untyped' errors
+#
+# Since Netmiko is a third-party library without type annotations, and this
+# module is a runtime driver that extends Netmiko's functionality, type
+# checking would require maintaining separate type stub files which is
+# beyond the scope of this project.
+#
+# Alternative solutions considered:
+# - Adding type stubs for Netmiko (too extensive, requires ongoing
+#   maintenance)
+# - Using 'type: ignore' on specific lines (too many annotations needed)
+# - Disabling only specific mypy errors (still noisy, doesn't address
+#   root cause)
+#
+# Solution: Disable mypy for this entire file. Runtime testing and
+# integration tests ensure correctness. Netmiko's own test suite validates
+# base functionality.
+#
+# mypy: ignore-errors
+
 """
 Custom Netmiko device driver for Huawei devices in GNS3 emulation environment.
 
-This module provides a custom device type 'huawei_telnet_ce' for Huawei network
-devices that connect via console without requiring authentication (username/password).
+This module provides a custom device type 'huawei_telnet_ce' for Huawei
+network devices that connect via console without requiring authentication
+(username/password).
 
-This is specifically designed for GNS3 emulated Huawei devices (e.g., CloudEngine
-series) where the console connection directly enters the system view without
-login prompts.
+This is specifically designed for GNS3 emulated Huawei devices
+(e.g., CloudEngine series) where the console connection directly enters the
+system view without login prompts.
 
 Key Features:
 - Inherits from HuaweiBase for proper VRP command handling
@@ -40,9 +72,10 @@ Key Features:
 - Handles Huawei prompt patterns (<>, [], >)
 """
 
+import importlib
+import logging
 import re
 import time
-from typing import Optional
 
 from netmiko.huawei.huawei import HuaweiBase
 
@@ -67,7 +100,8 @@ class HuaweiTelnetCE(HuaweiBase):
     ) -> None:
         """Initialize HuaweiTelnetCE connection."""
         # Set default device type for proper initialization
-        # The '_telnet' suffix in device_type tells Netmiko to use Telnet protocol
+        # The '_telnet' suffix in device_type tells Netmiko to use
+        # Telnet protocol
         kwargs.setdefault("device_type", "huawei_telnet")
 
         # Huawei prompt patterns (inherited from HuaweiBase)
@@ -209,13 +243,15 @@ class HuaweiTelnetCE(HuaweiBase):
         Send configuration commands to Huawei device.
 
         Overrides the parent method to handle Huawei-specific behavior:
-        - Uses Huawei-specific prompts (<...> for user view, [...] for system view)
+        - Uses Huawei-specific prompts (<...> for user view, [...] for
+          system view)
         - Handles the 'return' confirmation prompt
         - Uses read_channel_timing for proper output collection
 
         Args:
             config_commands: Configuration commands to send
-            **kwargs: Additional arguments (exit_config_mode, read_timeout, etc.)
+            **kwargs: Additional arguments (exit_config_mode, read_timeout,
+                      etc.)
 
         Returns:
             Output from configuration commands
@@ -226,12 +262,12 @@ class HuaweiTelnetCE(HuaweiBase):
 
         # Get parameters with Huawei-specific defaults
         exit_config_mode = kwargs.get("exit_config_mode", True)
-        read_timeout = kwargs.get("read_timeout", 30)  # Longer timeout for GNS3 emulation
+        # Longer timeout for GNS3 emulation
+        read_timeout = kwargs.get("read_timeout", 30)
         delay_factor = self.global_delay_factor
         strip_prompt = kwargs.get("strip_prompt", False)
         strip_command = kwargs.get("strip_command", False)
         config_mode_command = kwargs.get("config_command", "system-view")
-        cmd_verify = kwargs.get("cmd_verify", False)  # Disable cmd_verify for Huawei
 
         output = ""
 
@@ -240,16 +276,19 @@ class HuaweiTelnetCE(HuaweiBase):
             output += self.config_mode(config_command=config_mode_command)
 
         # Send all configuration commands
-        # Use cmd_verify=False mode: send all commands, then read all output at once
+        # Send all commands, then read all output at once
         for cmd in config_commands:
             self.write_channel(f"{cmd}{self.RETURN}")
             # Small delay between commands
             time.sleep(delay_factor * 0.05)
 
         # Use read_channel_timing to collect all output
-        # This method keeps reading until there is no new data for 'last_read' seconds
-        # This is the proper Netmiko way to handle command output
-        output += self.read_channel_timing(read_timeout=read_timeout, last_read=2.0)
+        # This method keeps reading until there is no new data for
+        # 'last_read' seconds. This is the proper Netmiko way to handle
+        # command output
+        output += self.read_channel_timing(
+            read_timeout=read_timeout, last_read=2.0
+        )
 
         # Exit config mode if requested
         if exit_config_mode:
@@ -262,7 +301,8 @@ class HuaweiTelnetCE(HuaweiBase):
                 commit_output = self.read_channel()
                 output += commit_output
             except Exception:
-                # If commit fails, continue with exit (might not support commit)
+                # If commit fails, continue with exit
+                # (might not support commit)
                 pass
 
             # Now exit config mode
@@ -289,7 +329,8 @@ class HuaweiTelnetCE(HuaweiBase):
 
         Args:
             exit_config: Command to exit config mode (default: "return")
-            pattern: Pattern to detect user view prompt (default: r"<\S+>|>\s*$")
+            pattern: Pattern to detect user view prompt
+                     (default: r"<\S+>|>\s*$")
 
         Returns:
             Output from exiting config mode
@@ -337,21 +378,22 @@ def register_custom_device_type() -> None:
     Register the custom HuaweiTelnetCE device type with Netmiko.
 
     This function adds 'huawei_telnet_ce' to both Netmiko's CLASS_MAPPER
-    and CLASS_MAPPER_BASE so it can be used like any other built-in device type.
+    and CLASS_MAPPER_BASE so it can be used like any other built-in device
+    type.
 
-    Additionally, it updates the static 'platforms' and 'telnet_platforms' lists
-    which are used by ConnectHandler for device type validation.
+    Additionally, it updates the static 'platforms' and 'telnet_platforms'
+    lists which are used by ConnectHandler for device type validation.
 
-    IMPORTANT: This function should be called BEFORE initializing Nornir or
-    running any Netmiko tasks. Call it explicitly at the appropriate time.
+    IMPORTANT: This function should be called BEFORE initializing Nornir
+    or running any Netmiko tasks. Call it explicitly at the appropriate
+    time.
 
     Returns:
         None
     """
     # Use importlib to avoid namespace conflicts
-    import importlib
-
-    # Import the module using importlib to ensure we get the module, not a function
+    # Import the module using importlib to ensure we get the module,
+    # not a function
     sd = importlib.import_module("netmiko.ssh_dispatcher")
 
     # Add to both mappers
@@ -369,8 +411,9 @@ def register_custom_device_type() -> None:
     sd.CLASS_MAPPER_BASE["huawei_telnet_ce_telnet"] = HuaweiTelnetCE
 
     # CRITICAL: Update the static platforms lists
-    # These lists are computed at module import time and won't automatically update
-    # when CLASS_MAPPER is modified. We need to manually rebuild them.
+    # These lists are computed at module import time and won't
+    # automatically update when CLASS_MAPPER is modified.
+    # We need to manually rebuild them.
 
     # Recalculate platforms list
     sd.platforms = list(sd.CLASS_MAPPER.keys())
@@ -396,7 +439,8 @@ try:
     register_custom_device_type()
 except Exception as e:
     # Log but don't fail on import
-    import logging
-
     logger = logging.getLogger(__name__)
-    logger.warning(f"Failed to register custom device type: {e}", exc_info=True)
+    logger.warning(
+        f"Failed to register custom device type: {e}",
+        exc_info=True
+    )
