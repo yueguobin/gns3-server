@@ -61,6 +61,28 @@ try:
 
     # Re-register to ensure device types are available
     huawei_ce.register_custom_device_type()
+
+    # CRITICAL: Update netmiko.ssh_dispatcher platforms lists
+    # The platforms variable is calculated at module import time in ssh_dispatcher
+    # We need to update it after registering custom device types.
+    # NOTE: netmiko.ssh_dispatcher is aliased to ConnectHandler function,
+    # so we use importlib to get the actual module
+    import importlib
+
+    sd = importlib.import_module("netmiko.ssh_dispatcher")
+
+    # Recalculate platforms lists to include custom device types
+    sd.platforms = list(sd.CLASS_MAPPER.keys())
+    sd.platforms.sort()
+
+    sd.platforms_base = list(sd.CLASS_MAPPER_BASE.keys())
+    sd.platforms_base.sort()
+
+    sd.telnet_platforms = [x for x in sd.platforms if "telnet" in x]
+
+    # Update platform strings used in error messages
+    sd.platforms_str = "\n" + "\n".join(sd.platforms_base)
+    sd.telnet_platforms_str = "\n" + "\n".join(sd.telnet_platforms)
 except Exception:
     # Fail silently - the import-time registration should have worked
     pass
