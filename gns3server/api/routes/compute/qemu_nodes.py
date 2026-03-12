@@ -32,6 +32,9 @@ from gns3server.compute.qemu.qemu_vm import QemuVM
 
 from .dependencies.authentication import compute_authentication, ws_compute_authentication
 
+import logging
+log = logging.getLogger(__name__)
+
 responses = {404: {"model": schemas.ErrorMessage, "description": "Could not find project or Qemu node"}}
 
 router = APIRouter(responses=responses)
@@ -73,6 +76,15 @@ async def create_qemu_node(project_id: UUID, node_data: schemas.QemuCreate) -> s
         aux_type=node_data.pop("aux_type", "none"),
         platform=node_data.pop("platform", None),
     )
+
+    # update the disk image with the backing file if provided
+    # this is needed when duplicating a node that uses backed disk images
+    drives = ["a", "b", "c", "d"]
+    for disk_index, drive in enumerate(drives):
+        disk_image_backing_file = node_data.get(f"hd{drive}_disk_image_backing_file")
+        if disk_image_backing_file:
+            log.info(f"Updating disk image for drive {drive} with backing file {disk_image_backing_file}")
+            node_data[f"hd{drive}_disk_image"] = disk_image_backing_file
 
     for name, value in node_data.items():
         if hasattr(vm, name) and getattr(vm, name) != value:
