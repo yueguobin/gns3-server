@@ -718,14 +718,14 @@ class TestIOUTemplate:
                                  "default_name_format": "IOU{0}",
                                  "ethernet_adapters": 2,
                                  "name": "IOU template",
-                                 "nvram": 128,
+                                 "nvram": 256,
                                  "path": image_path,
                                  "private_config": "",
-                                 "ram": 256,
+                                 "ram": 1024,
                                  "serial_adapters": 2,
                                  "startup_config": "iou_l3_base_startup-config.txt",
                                  "symbol": unittest.mock.ANY,
-                                 "use_default_iou_values": True,
+                                 "use_default_iou_values": False,
                                  "l1_keepalives": False}
 
             for item, value in expected_response.items():
