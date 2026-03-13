@@ -10,6 +10,7 @@ GNS3-Copilot supports network devices from multiple vendors through Netmiko and 
 |--------|----------|-------------|----------|--------|
 | **Cisco** | `cisco_ios` | `cisco_ios_telnet` | Telnet | ✅ Tested |
 | **Huawei** | `huawei` | `huawei_telnet_ce` | Telnet | ✅ Tested (Custom Driver) |
+| **Ruijie (锐捷)** | `ruijie_os` | `gns3_ruijie_telnet` | Telnet | ✅ Tested (Custom Driver) |
 
 ## Custom Huawei Driver (`HuaweiTelnetCE`)
 
@@ -213,6 +214,154 @@ except Exception as e:
     logger.warning(f"Failed to register custom device type: {e}")
 ```
 
+## Custom Ruijie Driver (`RuijieTelnetEnhanced`)
+
+### Problem Statement
+
+Ruijie (锐捷) network devices exhibit Cisco-like command syntax but have interactive prompts during configuration that can cause standard Netmiko drivers to fail.
+
+**Common Issue - OSPF Router-ID:**
+```
+Router(config-router)#router-id 10.0.0.1
+Change router-id and update OSPF process! [yes/no]:
+```
+
+Standard Netmiko's `send_config_set()` waits for a prompt pattern, but the `[yes/no]:` prompt doesn't match the expected config mode pattern, causing:
+1. **ReadTimeout**: Netmiko times out waiting for the prompt
+2. **Command Failure**: Subsequent commands are not executed
+3. **Device Lockup**: Console remains in the waiting state
+
+### Solution: Hybrid Strategy with Interactive Prompt Handling
+
+```
+BaseConnection (Netmiko base class)
+    ↓
+CiscoBaseConnection (Cisco-style base class)
+    ↓
+RuijieOSBase (Netmiko's Ruijie implementation)
+    ↓
+RuijieTelnetEnhanced (Custom GNS3 driver) ← Adds interactive prompt handling
+```
+
+**Why Hybrid Strategy?**
+1. **Preprocessing**: Automatically insert `yes` after known interactive commands
+2. **Fast Path**: Batch send for most commands (2-3 seconds for 13 commands)
+3. **Fallback**: One-by-one send with real-time detection (reliable but slower)
+
+### RuijieTelnetEnhanced Implementation
+
+#### Location
+```
+gns3server/agent/gns3_copilot/utils/custom_netmiko/ruijie_telnet.py
+```
+
+#### Key Features
+
+**1. Preprocessing - Known Interactive Commands**
+```python
+INTERACTIVE_PATTERNS = [
+    re.compile(r'^router-id\s+', re.IGNORECASE),  # OSPF/EIGRP/BGP router-id
+    re.compile(r'^erase\s+', re.IGNORECASE),        # erase startup-config
+    re.compile(r'^delete\s+', re.IGNORECASE),       # delete files
+    re.compile(r'^format\s+', re.IGNORECASE),       # format filesystem
+    re.compile(r'^reload\b', re.IGNORECASE),        # reload/reboot
+    re.compile(r'^boot\s+system\s+', re.IGNORECASE), # change boot image
+]
+```
+
+**2. Hybrid Send Strategy**
+```
+┌─────────────────────────────────────┐
+│ Input Configuration Commands        │
+└──────────────┬──────────────────────┘
+               ↓
+┌─────────────────────────────────────┐
+│ Step 1: Preprocessing               │
+│ - Detect interactive commands       │
+│ - Insert 'yes' after them           │
+└──────────────┬──────────────────────┘
+               ↓
+┌─────────────────────────────────────┐
+│ Step 2: Try Batch Send (Fast)       │
+│ - Write all commands rapidly        │
+│ - Read output once                  │
+│ - last_read=2.0s (Netmiko standard) │
+└──────────────┬──────────────────────┘
+               ↓
+         Success? ──Yes──→ Return output
+               │
+               No
+               ↓
+┌─────────────────────────────────────┐
+│ Step 3: Fallback (Slow but Reliable)│
+│ - Send commands one-by-one          │
+│ - Detect prompts after each command │
+│ - Send 'yes' when needed            │
+│ - last_read=0.5s per command        │
+└─────────────────────────────────────┘
+```
+
+**3. Batch Send Performance**
+- **13 commands** with 1 interactive command
+- **Fast path**: ~2-3 seconds (includes device processing time)
+- **Fallback**: ~10 seconds (if batch fails)
+
+**4. Real-time Detection (Fallback)**
+```python
+# After each command
+new_output = self.read_channel_timing(read_timeout=10, last_read=0.5)
+
+# Check for [yes/no] prompt
+if re.search(r"\[yes/no\]", new_output, re.IGNORECASE):
+    self.write_channel(f"yes{self.RETURN}")
+    output += self.read_channel_timing(read_timeout=30, last_read=0.5)
+```
+
+#### GNS3 Node Tag Configuration
+
+**For Ruijie devices in GNS3:**
+```
+device_type:gns3_ruijie_telnet
+platform:ruijie_os
+```
+
+**Example Usage:**
+```python
+from netmiko import ConnectHandler
+from gns3server.agent.gns3_copilot.utils import custom_netmiko
+
+device = {
+    "device_type": "gns3_ruijie_telnet",
+    "host": "127.0.0.1",
+    "port": 5000,
+}
+
+with ConnectHandler(**device) as conn:
+    # These commands include router-id (interactive)
+    config = [
+        "router ospf 1",
+        "router-id 10.0.0.1",  # Triggers [yes/no] prompt
+        "network 192.168.1.0 0.0.0.255 area 0",
+    ]
+    # Automatically handles the [yes/no] prompt
+    output = conn.send_config_set(config)
+```
+
+#### Limitations
+
+**Interactive Command Coverage:**
+- **Covered**: `router-id`, `erase`, `delete`, `format`, `reload`, `boot system`
+- **Not Covered**: Unknown or vendor-specific interactive prompts
+- **Fallback**: If batch fails, falls back to one-by-one with real-time detection
+
+**When to Use Each Driver:**
+
+| Scenario | Use Driver |
+|----------|------------|
+| GNS3 Ruijie (known commands) | `gns3_ruijie_telnet` (batch works) |
+| GNS3 Ruijie (unknown commands) | `gns3_ruijie_telnet` (auto-fallback) |
+| Real Ruijie hardware | `ruijie_os_telnet` (standard) |
+
 ## Dynamic Device Type Detection
 
 ### GNS3 Node Tags
@@ -230,6 +379,7 @@ platform:huawei                  → Nornir platform (high-level)
 |--------|----------------|--------------|
 | Cisco IOS | `device_type:cisco_ios_telnet` | `platform:cisco_ios` |
 | Huawei CE | `device_type:huawei_telnet_ce` | `platform:huawei` |
+| Ruijie | `device_type:gns3_ruijie_telnet` | `platform:ruijie_os` |
 
 ### Nornir Best Practice: Host-Level Connection Configuration
 
@@ -561,11 +711,14 @@ gns3server/agent/gns3_copilot/
 │   ├── custom_netmiko/            # Custom Netmiko drivers package
 │   │   ├── __init__.py             # Package initialization
 │   │   ├── huawei_ce.py            # Huawei CloudEngine driver
+│   │   ├── ruijie_telnet.py        # Ruijie enhanced driver (NEW)
 │   │   ├── README.md               # Driver development guide
 │   │   └── tests/                  # Unit tests
 │   │       ├── __init__.py
 │   │       └── test_huawei_ce.py   # Huawei CE driver tests
 │   └── get_gns3_device_port.py     # Device port extraction with host-level config
+│       ├── _expand_multiline_commands()   # Expand banner commands (NEW)
+│       └── _error_handling()              # device_type missing errors (NEW)
 ├── tools_v2/
 │   ├── display_tools_nornir.py     # Multi-vendor display commands
 │   │   ├── _get_nornir_defaults()  # Returns default Nornir config
@@ -573,6 +726,8 @@ gns3server/agent/gns3_copilot/
 │   └── config_tools_nornir.py      # Multi-vendor config commands
 │       ├── _get_nornir_defaults()  # Returns default Nornir config
 │       └── _initialize_nornir()    # Single generic group + host-level device_type
+│       ├── _expand_multiline_commands()   # Expand banner commands (NEW)
+│       └── _error_handling()              # device_type validation (NEW)
 ```
 
 **Key Architectural Changes (2026-03-13):**
@@ -580,6 +735,9 @@ gns3server/agent/gns3_copilot/
 - ❌ Removed: `_get_nornir_group()` - No longer needed
 - ✅ Simplified: `_initialize_nornir()` - Uses single generic group
 - ✅ Updated: `get_gns3_device_port.py()` - Returns host-level `connection_options`
+- ✅ Added: `ruijie_telnet.py` - Custom Ruijie driver with interactive prompt handling
+- ✅ Added: `_expand_multiline_commands()` - Auto-expands banner and multi-line commands
+- ✅ Added: `_error_handling()` - Validates device_type tags, returns error if missing
 
 ## Unit Testing
 
@@ -671,16 +829,28 @@ python gns3server/agent/gns3_copilot/utils/custom_netmiko/tests/test_huawei_ce.p
 
 _Implementation Date: 2026-03-12_
 
-_Last Updated: 2026-03-13 (Architecture refactored to host-level configuration)_
+_Last Updated: 2026-03-13 (Added Ruijie driver, multi-line command expansion, and configuration safety)_
 
-_Status: ✅ Implemented - Custom Huawei driver for GNS3 emulation, multi-vendor support with Cisco IOS and Huawei tested_
+_Status: ✅ Implemented - Custom drivers for Huawei and Ruijie, multi-vendor support with Cisco IOS, Huawei, and Ruijie tested_
 
 _Architecture: Nornir best practice - host-level connection_options with single generic group_
 
 _Unit Tests: ✅ 9/9 passing_
 
 _Changelog:_
-- **2026-03-13**: Refactored to use host-level `connection_options` instead of dynamic groups
+- **2026-03-13 (Evening)**: Added Ruijie enhanced driver and interactive command handling
+  - Implemented `RuijieTelnetEnhanced` with hybrid batch/fallback strategy
+  - Added automatic `yes` insertion for known interactive commands (`router-id`, `erase`, etc.)
+  - Achieves ~2-3 seconds for 13 commands (vs 10+ seconds for one-by-one)
+  - Auto-fallback to real-time detection for unknown interactive prompts
+  - Registered `gns3_ruijie_telnet` device type
+- **2026-03-13 (Afternoon)**: Enhanced configuration safety and command handling
+  - Added AAA/password configuration prohibition in system prompts
+  - Implemented multi-line command expansion (`_expand_multiline_commands()`)
+  - Added `device_type` tag validation with error feedback
+  - Prevents execution of commands that could lock users out of devices
+  - Properly handles banner and other multi-line configuration commands
+- **2026-03-13 (Morning)**: Refactored to use host-level `connection_options` instead of dynamic groups
   - Removed `_get_nornir_groups_config()` and `_get_nornir_group()` helper functions
   - Simplified `_initialize_nornir()` to use single generic group
   - Updated `get_gns3_device_port.py()` to return host-level configuration

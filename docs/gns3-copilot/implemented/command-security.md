@@ -2,10 +2,17 @@
 
 ## Overview
 
-GNS3-Copilot includes a command filtering system to prevent execution of commands that may cause timeout or console availability issues in the lab environment. This helps:
+GNS3-Copilot includes multiple security layers to prevent execution of commands that may cause issues in the lab environment:
+
+- **Command Filtering**: Prevents commands that may timeout or lock up the console
+- **Configuration Safety**: Prohibits dangerous configuration changes (AAA, passwords, etc.)
+- **Multi-line Command Handling**: Properly processes commands with embedded newlines (banner, etc.)
+
+This helps:
 
 - **Prevent tool timeouts**: Commands like `traceroute` may run longer than the tool timeout
 - **Maintain console availability**: Long-running commands can leave the device console unavailable for subsequent commands
+- **Prevent device lockout**: AAA/password changes can lock users out of devices
 - **Ensure reliable execution**: Filtering problematic commands ensures the remaining commands can execute properly
 
 ## Implementation Status
@@ -48,7 +55,9 @@ t32     ❌ Command fails                [Console still busy]
 
 ## Current Implementation
 
-### Forbidden Commands List
+### 1. Command Filtering System
+
+#### Forbidden Commands List
 
 Commands are listed in a simple text file at:
 ```
@@ -399,7 +408,7 @@ The command filtering system has been tested in a live GNS3 environment with act
 
 ## Security Considerations
 
-### Why These Commands Are Blocked
+### 1. Why These Commands Are Blocked (Command Filtering)
 
 | Command | Reason |
 |---------|--------|
@@ -409,6 +418,63 @@ The command filtering system has been tested in a live GNS3 environment with act
 | `ping -f` | Flood ping can overwhelm lab devices |
 | `debug` | Debug commands can produce overwhelming output and destabilize devices |
 | `test` | Test commands may affect device stability |
+
+### 2. Configuration Safety (Prohibited Commands)
+
+In addition to timeout-based filtering, GNS3-Copilot prohibits execution of sensitive configuration commands that could lock users out of devices or cause security issues. These restrictions are enforced at the **AI agent level** through system prompts.
+
+**Prohibited Configuration Categories:**
+
+| Category | Commands | Reason |
+|----------|----------|--------|
+| **AAA Configuration** | `aaa new-model`, `radius-server`, `tacacs-server` | May lock users out; requires manual configuration |
+| **Login Passwords** | `enable secret`, `password`, `username ... password` | Can lock users out; security risk |
+| **Console/VTY Authentication** | `line console 0`, `line vty 0 4`, `login local` | May block console access |
+| **Password Encryption** | `service password-encryption` | Security-sensitive; manual setup required |
+| **Access Control Lists** | `access-list ... deny ip any any` (on mgmt interfaces) | Can block management access |
+| **Dangerous System Operations** | `reload`, `erase startup-config`, `format` | Destructive operations |
+
+**Implementation:**
+- **System Prompt**: Restrictions are defined in `lab_automation_assistant_prompt.py`
+- **Behavior**: When AI detects these commands, it provides configuration guidance instead of execution
+- **Example Response**:
+  ```
+  "I cannot execute AAA/password commands directly as they may lock you out.
+   Here's how to configure them manually..."
+  ```
+
+**User Override:**
+Users can manually execute these commands through:
+1. Direct device console access
+2. GNS3 device console
+3. Manual SSH/Telnet connection
+
+### 3. Multi-line Command Handling
+
+**Problem:** Some configuration commands contain embedded newlines (e.g., `banner motd`), which cause Netmiko to fail when processed as single strings.
+
+**Solution:** The system automatically expands multi-line commands before execution.
+
+**Example:**
+```python
+# Input (single string with newlines)
+["banner motd #\nWelcome\nUnauthorized access prohibited\n#"]
+
+# After expansion
+["banner motd #", "Welcome", "Unauthorized access prohibited", "#"]
+```
+
+**Implementation:**
+- **Location**: `config_tools_nornir.py:_expand_multiline_commands()`
+- **Detection**: Checks for `\n` newline character in commands
+- **Processing**: Splits by `\n` and filters empty lines
+- **Logging**: Records expansion for debugging
+
+**Supported Commands:**
+- `banner motd`, `banner login`, `banner exec`
+- Multi-line ACLs
+- Route-maps with continue statements
+- Any command with embedded newlines
 
 ### Best Practices
 

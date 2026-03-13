@@ -7,10 +7,10 @@
 
 ## Summary
 
-- **Total Device Types:** 364
+- **Total Device Types:** 365
 - **SSH Devices:** 154
-- **Telnet Devices:** 53
-- **Custom Devices:** 1
+- **Telnet Devices:** 54
+- **Custom Devices:** 2
 
 ## SSH Supported Devices
 
@@ -207,7 +207,7 @@
 | HP | `hp_procurve_telnet` | Netmiko |
 | Huawei | `huawei_olt_telnet` | Netmiko |
 | Huawei | `huawei_telnet` | Netmiko |
-| Huawei | `huawei_telnet_ce` | Custom ✨ |
+| Huawei | `huawei_telnet_ce` | Custom ✨ (GNS3) |
 | Infinera | `infinera_packet_telnet` | Netmiko |
 | Ipinfusion | `ipinfusion_ocnos_telnet` | Netmiko |
 | Juniper | `juniper_junos_telnet` | Netmiko |
@@ -222,6 +222,7 @@
 | Raisecom | `raisecom_telnet` | Netmiko |
 | Ruckus | `ruckus_fastiron_telnet` | Netmiko |
 | Ruijie (锐捷) | `ruijie_os_telnet` | Netmiko |
+| Ruijie (锐捷) | `gns3_ruijie_telnet` | Custom ✨ (GNS3 Enhanced) |
 | Supermicro | `supermicro_smis_telnet` | Netmiko |
 | Telcosystems | `telcosystems_binos_telnet` | Netmiko |
 | Teldat | `teldat_cit_telnet` | Netmiko |
