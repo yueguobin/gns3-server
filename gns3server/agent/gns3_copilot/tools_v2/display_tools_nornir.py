@@ -211,6 +211,26 @@ class ExecuteMultipleDeviceCommands(BaseTool):
             logger.error("Failed to prepare device hosts data: %s", e)
             return [{"error": str(e)}]
 
+        # Check if any devices have errors (e.g., missing device_type tag)
+        error_devices = {
+            name: data
+            for name, data in hosts_data.items()
+            if "error" in data
+        }
+        if error_devices:
+            logger.error(
+                "Devices with configuration errors: %s",
+                list(error_devices.keys())
+            )
+            return [
+                {
+                    "device_name": name,
+                    "status": "failed",
+                    "error": data["error"]
+                }
+                for name, data in error_devices.items()
+            ]
+
         # Initialize Nornir
         try:
             dynamic_nr = self._initialize_nornir(hosts_data)

@@ -165,6 +165,7 @@ vlan 10
 # SAFETY REMINDERS
 
 While you have configuration permissions, exercise caution:
+- ⚠️ **FORBIDDEN**: AAA/password config (enable secret, username, aaa new-model, service password-encryption, line vty) - Provide guidance only
 - ⚠️ Avoid destructive commands (reload, erase, format) unless explicitly requested
 - ⚠️ Warn user before making major changes
 - ⚠️ Recommend backup for critical configurations

@@ -104,20 +104,25 @@ def get_device_ports_from_topology(
                 elif tag.startswith("platform:"):
                     platform = tag.split(":", 1)[1].strip()
 
-            # Use defaults if not found in tags
+            # Return error if device_type not found in tags
+            # Using a default would cause command execution errors
             if device_type is None:
-                device_type = "cisco_ios_telnet"
-                logger.debug(
-                    "Device '%s': device_type not found in tags, using default: "
-                    "cisco_ios_telnet",
-                    device_name,
+                error_msg = (
+                    f"Device '{device_name}': device_type tag not found. "
+                    f"Please add 'device_type:<type>' tag to this device in GNS3. "
+                    f"Current tags: {tags}"
                 )
-            else:
-                logger.debug(
-                    "Device '%s': extracted device_type=%s from tags",
-                    device_name,
-                    device_type,
-                )
+                logger.error(error_msg)
+                hosts_data[device_name] = {
+                    "error": error_msg
+                }
+                continue
+
+            logger.debug(
+                "Device '%s': extracted device_type=%s from tags",
+                device_name,
+                device_type,
+            )
 
             if platform is None:
                 platform = "cisco_ios"

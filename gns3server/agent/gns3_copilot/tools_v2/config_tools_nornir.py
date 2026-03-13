@@ -196,6 +196,13 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
             )
         )
 
+        # Expand multiline commands (e.g., banner commands with embedded newlines)
+        # This converts commands like "banner motd #\nline1\nline2\n#" into
+        # separate commands: ["banner motd #", "line1", "line2", "#"]
+        device_configs_list = self._expand_multiline_commands(
+            device_configs_list
+        )
+
         # Create a mapping of device names to their configuration commands
         device_configs_map = self._configs_map(device_configs_list)
 
@@ -207,6 +214,26 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
         except ValueError as e:
             logger.error("Failed to prepare device hosts data: %s", e)
             return [{"error": str(e)}]
+
+        # Check if any devices have errors (e.g., missing device_type tag)
+        error_devices = {
+            name: data
+            for name, data in hosts_data.items()
+            if "error" in data
+        }
+        if error_devices:
+            logger.error(
+                "Devices with configuration errors: %s",
+                list(error_devices.keys())
+            )
+            return [
+                {
+                    "device_name": name,
+                    "status": "failed",
+                    "error": data["error"]
+                }
+                for name, data in error_devices.items()
+            ]
 
         # Initialize Nornir
         try:
@@ -444,6 +471,60 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
                 )
 
         return filtered_list, blocked_commands_map
+
+    def _expand_multiline_commands(
+        self, device_configs_list: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """
+        Expand commands that contain embedded newline characters.
+
+        Some commands (like banner) are passed as single strings with embedded
+        newlines. This method splits them into separate commands for proper
+        execution by netmiko_send_config.
+
+        Note: netmiko_send_config automatically handles entering config mode,
+        so any config mode entry commands (configure terminal, system-view, etc.)
+        are left as-is and will be safely ignored by the device.
+
+        Example:
+            Input:  ["banner motd #\nline1\nline2\n#", "exit"]
+            Output: ["banner motd #", "line1", "line2", "#", "exit"]
+
+        Args:
+            device_configs_list: List of device configs with config_commands.
+
+        Returns:
+            List of device configs with multiline commands expanded.
+        """
+        expanded_list = []
+
+        for device_config in device_configs_list:
+            device_name = device_config["device_name"]
+            config_commands = device_config["config_commands"]
+
+            expanded_commands = []
+            for cmd in config_commands:
+                # Check if command contains embedded newlines
+                if "\n" in cmd:
+                    # Split by newline and expand
+                    lines = cmd.split("\n")
+                    # Filter out empty lines but keep all content lines
+                    expanded_commands.extend([line for line in lines if line.strip()])
+                    logger.info(
+                        "Device %s: Expanded multiline command (%d lines)",
+                        device_name,
+                        len(lines),
+                    )
+                else:
+                    # Keep single-line commands as-is
+                    expanded_commands.append(cmd)
+
+            # Create updated device config
+            expanded_config = device_config.copy()
+            expanded_config["config_commands"] = expanded_commands
+            expanded_list.append(expanded_config)
+
+        return expanded_list
 
     def _configs_map(
         self, device_config_list: list[dict[str, Any]]
