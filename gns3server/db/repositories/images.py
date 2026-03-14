@@ -59,7 +59,7 @@ class ImagesRepository(BaseRepository):
             query = select(models.Image).\
                 where(models.Image.checksum == checksum, models.Image.path.startswith(image_dir))
             result = await self._db_session.execute(query)
-            return result.scalars().first()
+            return result.scalars().one_or_none()
         else:
             query = select(models.Image).where(models.Image.checksum == checksum)
             result = await self._db_session.execute(query)
