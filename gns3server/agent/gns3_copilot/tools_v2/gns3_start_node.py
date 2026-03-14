@@ -45,6 +45,69 @@ from gns3server.agent.gns3_copilot.gns3_client import get_gns3_connector
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Node startup time configuration by device type
+# Based on typical boot times for different emulators
+NODE_STARTUP_TIME = {
+    "vpcs": {"base": 10, "extra_per_node": 2},   # VPCS: Very fast startup
+    "iou": {"base": 20, "extra_per_node": 3},    # IOU: Fast startup
+    "default": {"base": 120, "extra_per_node": 10},  # Other devices: Conservative time
+}
+
+
+def calculate_startup_time(nodes: list) -> int:
+    """
+    Calculate startup wait time based on node types.
+
+    Strategy:
+    - If all nodes are fast devices (VPCS/IOU): use fast startup time
+    - If any node is a slow device: use conservative startup time
+
+    Args:
+        nodes: List of node objects with node_type attribute
+
+    Returns:
+        Calculated wait time in seconds
+    """
+    if not nodes:
+        return 60  # Default: 60 seconds for empty list
+
+    # Get all node types
+    node_types = [getattr(node, "node_type", "default") for node in nodes]
+
+    # Check if all nodes are fast startup devices (VPCS or IOU)
+    fast_types = {"vpcs", "iou"}
+    all_fast = all(node_type in fast_types for node_type in node_types)
+
+    if all_fast:
+        # Use fast startup time: base + (count - 1) * extra_per_node
+        # Use the largest base time among the fast devices
+        max_fast_base = max(
+            NODE_STARTUP_TIME[nt]["base"]
+            for nt in node_types if nt in fast_types
+        )
+        # Use the smallest extra_per_node among the fast devices
+        min_fast_extra = min(
+            NODE_STARTUP_TIME[nt]["extra_per_node"]
+            for nt in node_types if nt in fast_types
+        )
+        total_time = max_fast_base + (len(nodes) - 1) * min_fast_extra
+        logger.info(
+            "All fast devices detected (%s), using fast startup time: %ds",
+            node_types,
+            total_time
+        )
+        return total_time
+    else:
+        # Use conservative startup time for mixed or slow devices
+        config = NODE_STARTUP_TIME["default"]
+        total_time = config["base"] + (len(nodes) - 1) * config["extra_per_node"]
+        logger.info(
+            "Mixed or slow devices detected (%s), using conservative startup time: %ds",
+            node_types,
+            total_time
+        )
+        return total_time
+
 
 def show_progress_bar(
     duration: int = 120, interval: int = 1, node_count: int = 1
@@ -145,12 +208,13 @@ class GNS3StartNodeTool(BaseTool):
                     "Please check your configuration."
                 }
 
-            # First loop: Send start commands for all nodes
+            # First loop: Get node info and send start commands for all nodes
             logger.info(
-                "Sending start commands for %d nodes in project %s...",
+                "Retrieving node info for %d nodes in project %s...",
                 len(node_ids),
                 project_id,
             )
+            nodes = []
             for node_id in node_ids:
                 try:
                     node = Node(
@@ -158,11 +222,16 @@ class GNS3StartNodeTool(BaseTool):
                         node_id=node_id,
                         connector=gns3_server,
                     )
-                    # Verify node exists
+                    # Get node info (including node_type)
                     node.get()
                     if node.node_id:
-                        node.start()
-                        logger.info("Start command sent for node %s", node_id)
+                        nodes.append(node)
+                        logger.info(
+                            "Node %s (%s) type: %s",
+                            node_id,
+                            node.name,
+                            node.node_type,
+                        )
                     else:
                         logger.error(
                             "Node %s not found in project %s",
@@ -171,31 +240,41 @@ class GNS3StartNodeTool(BaseTool):
                         )
                 except Exception as e:
                     logger.error(
-                        "Failed to send start command for node %s: %s",
+                        "Failed to get node info for %s: %s",
                         node_id,
                         e,
                     )
 
-            # Progress bar duration: 140s base + 10s per extra node
-            base_duration = 140
-            extra_duration = max(0, len(node_ids) - 1) * 10
-            total_duration = base_duration + extra_duration
+            # Calculate startup time based on node types
+            wait_time = calculate_startup_time(nodes)
 
-            # Show progress bar
+            # Send start commands for all nodes
+            logger.info(
+                "Sending start commands for %d nodes in project %s...",
+                len(nodes),
+                project_id,
+            )
+            for node in nodes:
+                try:
+                    node.start()
+                    logger.info("Start command sent for node %s", node.node_id)
+                except Exception as e:
+                    logger.error(
+                        "Failed to send start command for node %s: %s",
+                        node.node_id,
+                        e,
+                    )
+
+            # Show progress bar with calculated wait time
             show_progress_bar(
-                duration=total_duration, interval=1, node_count=len(node_ids)
+                duration=wait_time, interval=1, node_count=len(nodes)
             )
 
             # Second loop: Get status for all nodes
             results = []
-            logger.info("Retrieving status for %d nodes...", len(node_ids))
-            for node_id in node_ids:
+            logger.info("Retrieving status for %d nodes...", len(nodes))
+            for node in nodes:
                 try:
-                    node = Node(
-                        project_id=project_id,
-                        node_id=node_id,
-                        connector=gns3_server,
-                    )
                     node.get()  # Get latest status
                     node_info = {
                         "node_id": node.node_id,
@@ -205,14 +284,27 @@ class GNS3StartNodeTool(BaseTool):
                     results.append(node_info)
                 except Exception as e:
                     logger.error(
-                        "Failed to get status for node %s: %s", node_id, e
+                        "Failed to get status for node %s: %s", node.node_id, e
                     )
+                    results.append(
+                        {
+                            "node_id": node.node_id,
+                            "name": getattr(node, "name", "N/A"),
+                            "status": "error",
+                            "error": str(e),
+                        }
+                    )
+
+            # Handle nodes that failed to be retrieved initially
+            retrieved_node_ids = {node.node_id for node in nodes}
+            for node_id in node_ids:
+                if node_id not in retrieved_node_ids:
                     results.append(
                         {
                             "node_id": node_id,
                             "name": "N/A",
                             "status": "error",
-                            "error": str(e),
+                            "error": "Node not found during info retrieval",
                         }
                     )
 

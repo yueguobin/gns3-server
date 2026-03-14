@@ -234,7 +234,7 @@ The following built-in utility templates are excluded as they are not actual net
 
 **Tool Name:** `start_gns3_node`
 
-**Description:** Starts one or multiple nodes in a GNS3 project with progress tracking and status monitoring.
+**Description:** Starts one or multiple nodes in a GNS3 project with progress tracking and status monitoring. Features dynamic wait time calculation based on device types for optimal performance.
 
 **Input:**
 ```json
@@ -263,12 +263,46 @@ The following built-in utility templates are excluded as they are not actual net
 - Progress bar with visual feedback
 - Automatic status verification
 - Comprehensive error handling
-- ~140s base wait time + 10s per additional node
+- **Dynamic wait time based on device types** 🆕
+
+**Dynamic Wait Time Strategy:**
+
+The tool automatically detects node types and calculates optimal wait times:
+
+| Device Type | Base Time | Per Additional Node | Example (5 nodes) |
+|-------------|-----------|-------------------|-------------------|
+| **VPCS** | 10s | +2s | 18s total |
+| **IOU** | 20s | +3s | 32s total |
+| **Mixed VPCS/IOU** | 20s | +2s | 28s total |
+| **QEMU/Dynamips/Docker/VMs** | 120s | +10s | 160s total |
+| **Mixed (any slow device)** | 120s | +10s | 160s total |
+
+**How It Works:**
+1. Retrieves node information including `node_type`
+2. Checks if all nodes are fast devices (VPCS/IOU only)
+3. If all fast: Uses max(10s, 20s) base + 2s per extra node
+4. If any slow device present: Uses 120s base + 10s per extra node
+5. Logs the detected device types and chosen strategy
+
+**Performance Improvements:**
+- ⚡ **1 VPCS node**: 140s → 10s (93% faster)
+- ⚡ **5 VPCS nodes**: 180s → 18s (90% faster)
+- ⚡ **1 IOU node**: 140s → 20s (86% faster)
+- ⚡ **5 IOU nodes**: 180s → 32s (82% faster)
+- ⚡ **Mixed VPCS/IOU**: 180s → 28s (84% faster)
 
 **Use Cases:**
 - Automated lab deployment
 - Multi-node topology initialization
 - Lab startup automation
+- Fast VPCS/IOU lab deployment
+
+**Implementation Details:**
+- Retrieves node type via `node.get()` before starting
+- Calculates wait time using `calculate_startup_time()` function
+- Uses device-specific `NODE_STARTUP_TIME` configuration
+- Logs device types and selected wait strategy
+- Progress bar displays calculated wait time
 
 ### GNS3StopNodeTool
 
@@ -907,12 +941,20 @@ logger.info("Suspend command sent for node %s (%s)", node_id, node.name)
 
 _Implementation Date: 2026-03-12_
 
-_Last Updated: 2026-03-14 (Added template filtering to exclude built-in utility templates)_
+_Last Updated: 2026-03-14 (Added dynamic wait time calculation based on device types)_
 
 _Status: ✅ Implemented - Topology management tools available in both modes. Full lifecycle management (start/stop/suspend) available in Lab Automation Assistant Mode_
 
 _Changelog:_
-- **2026-03-14**: Added template filtering
+- **2026-03-14 (Evening)**: Added dynamic wait time calculation
+  - `GNS3StartNodeTool` now calculates optimal wait times based on device types
+  - Fast devices (VPCS: 10s, IOU: 20s) start much faster than before
+  - Slow devices (QEMU, Dynamips, etc.) use conservative 120s base time
+  - Performance improvements: 82-93% faster for VPCS/IOU labs
+  - Automatic device type detection via `node.node_type`
+  - Logs selected strategy and detected device types
+
+- **2026-03-14 (Morning)**: Added template filtering
   - `GNS3TemplateTool` now filters out built-in utility templates (cloud, nat, ethernet_hub, ethernet_switch, frame_relay_switch, atm_switch)
   - Focuses on network devices suitable for lab configuration
   - Logs filtered count for transparency
