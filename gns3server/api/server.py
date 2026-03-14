@@ -207,7 +207,7 @@ async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     log.error(f"Request validation error in {request.url.path} ({request.method}): {exc}")
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"message": str(exc)}
     )
 

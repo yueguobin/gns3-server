@@ -289,7 +289,7 @@ def _export_local_image(image, zstream):
             # Some modules don't have images
             continue
 
-        directory = os.path.split(images_directory)[-1:][0]
+        directory = os.path.basename(images_directory)
         if os.path.exists(image):
             path = image
         else:
@@ -309,7 +309,7 @@ async def _export_remote_images(project, compute_id, image_type, image, project_
 
     log.debug(f"Downloading image '{image}' from compute '{compute_id}'")
     try:
-        compute = [compute for compute in project.computes if compute.id == compute_id][0]
+        compute = next(c for c in project.computes if c.id == compute_id)
     except IndexError:
         raise ControllerNotFoundError(f"Cannot export image from '{compute_id}' compute. Compute doesn't exist.")
 
