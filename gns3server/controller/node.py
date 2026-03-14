@@ -27,6 +27,7 @@ from .controller_error import (
     ComputeError,
     ComputeConflictError
 )
+from .node_types import BUILTIN_NODE_TYPES
 from .ports.port_factory import PortFactory, StandardPortFactory, DynamipsPortFactory
 from ..utils.images import images_directories
 from ..utils import macaddress_to_int, int_to_macaddress
@@ -452,8 +453,7 @@ class Node:
                     if (
                         prop == "name"
                         and self.status == "started"
-                        and self._node_type
-                        not in ("cloud", "nat", "ethernet_switch", "ethernet_hub", "frame_relay_switch", "atm_switch")
+                        and self._node_type not in BUILTIN_NODE_TYPES
                     ):
                         raise ControllerError("Sorry, it is not possible to rename a node that is already powered on")
                     setattr(self, prop, kwargs[prop])
@@ -541,35 +541,22 @@ class Node:
         if self._console:
             # console is optional for builtin nodes
             data["console"] = self._console
-        if self._console_type and self._node_type not in (
-            "cloud",
-            "nat",
-            "ethernet_hub",
-            "frame_relay_switch",
-            "atm_switch",
-        ):
+        if self._console_type and self._node_type not in (BUILTIN_NODE_TYPES - {"ethernet_switch"}):
             # console_type is not supported by all builtin nodes excepting Ethernet switch
             data["console_type"] = self._console_type
         if self._aux:
             # aux is optional for builtin nodes
             data["aux"] = self._aux
-        if self._aux_type and self._node_type not in (
-            "cloud",
-            "nat",
-            "ethernet_switch",
-            "ethernet_hub",
-            "frame_relay_switch",
-            "atm_switch",
-        ):
+        if self._aux_type and self._node_type not in BUILTIN_NODE_TYPES:
             # aux_type is not supported by all builtin nodes
             data["aux_type"] = self._aux_type
         if self.custom_adapters:
             data["custom_adapters"] = self.custom_adapters
 
         # None properties are not be sent because it can mean the emulator doesn't support it
-        for key in list(data.keys()):
-            if data[key] is None or data[key] == {} or key in self.CONTROLLER_ONLY_PROPERTIES:
-                del data[key]
+        for key, value in list(data.items()):
+            if value is None or value == {} or key in self.CONTROLLER_ONLY_PROPERTIES:
+                del value
 
         return data
 

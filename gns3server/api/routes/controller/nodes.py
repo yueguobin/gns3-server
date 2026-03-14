@@ -105,6 +105,16 @@ async def dep_node(node_id: UUID, project: Project = Depends(dep_project)) -> No
     return node
 
 
+def _check_node_type(node: Node, *required_types: str) -> None:
+    """
+    Raise ControllerBadRequestError if node is not one of the required types.
+    """
+
+    if node.node_type not in required_types:
+        type_str = "/".join(required_types)
+        raise ControllerBadRequestError(f"This endpoint is only supported on a {type_str} node")
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
@@ -407,8 +417,7 @@ async def auto_idlepc(node: Node = Depends(dep_node)) -> dict:
     Required privilege: Node.Audit
     """
 
-    if node.node_type != "dynamips":
-        raise ControllerBadRequestError("Auto Idle-PC is only supported on a Dynamips node")
+    _check_node_type(node, "dynamips")
     return await node.dynamips_auto_idlepc()
 
 
@@ -420,8 +429,7 @@ async def idlepc_proposals(node: Node = Depends(dep_node)) -> List[str]:
     Required privilege: Node.Audit
     """
 
-    if node.node_type != "dynamips":
-        raise ControllerBadRequestError("Idle-PC proposals is only supported on a Dynamips node")
+    _check_node_type(node, "dynamips")
     return await node.dynamips_idlepc_proposals()
 
 
@@ -441,8 +449,7 @@ async def create_disk_image(
     Required privilege: Node.Allocate
     """
 
-    if node.node_type != "qemu":
-        raise ControllerBadRequestError("Creating a disk image is only supported on a Qemu node")
+    _check_node_type(node, "qemu")
     await node.post(f"/disk_image/{disk_name}", data=disk_data.model_dump(exclude_unset=True))
 
 
@@ -462,8 +469,7 @@ async def update_disk_image(
     Required privilege: Node.Allocate
     """
 
-    if node.node_type != "qemu":
-        raise ControllerBadRequestError("Updating a disk image is only supported on a Qemu node")
+    _check_node_type(node, "qemu")
     await node.put(f"/disk_image/{disk_name}", data=disk_data.model_dump(exclude_unset=True))
 
 
@@ -482,8 +488,7 @@ async def delete_disk_image(
     Required privilege: Node.Allocate
     """
 
-    if node.node_type != "qemu":
-        raise ControllerBadRequestError("Deleting a disk image is only supported on a Qemu node")
+    _check_node_type(node, "qemu")
     await node.delete(f"/disk_image/{disk_name}")
 
 
