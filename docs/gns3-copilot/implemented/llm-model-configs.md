@@ -122,7 +122,7 @@ The `model_type` field accepts the following values:
 | Field | Type | Description |
 |-------|------|-------------|
 | `api_key` | string | API key (auto-encrypted) |
-| `max_tokens` | integer | Max tokens for generation |
+| `max_tokens` | integer | **⚠️ Reserved for future use, not currently implemented** |
 | `context_strategy` | string | Context trimming strategy: "conservative" (60%), "balanced" (75%), "aggressive" (85%). Default: "balanced" |
 | `copilot_mode` | string | GNS3-Copilot mode: "teaching_assistant" (diagnostics only, default) or "lab_automation_assistant" (full configuration access) |
 | `is_default` | boolean | Set as default (default: false) |
@@ -148,7 +148,7 @@ The `model_type` field accepts the following values:
 | `model` | string (optional) | Model name |
 | `temperature` | float (optional) | Temperature |
 | `api_key` | string (optional) | API key |
-| `max_tokens` | integer or string (optional) | Max tokens for generation. Accepts integers, null, or the string "null" (which will be converted to null) |
+| `max_tokens` | integer or string (optional) | **⚠️ Reserved for future use, not currently implemented**. Accepts integers, null, or the string "null" (which will be converted to null) |
 | `context_limit` | integer (optional) | Model context window limit in K tokens |
 | `context_strategy` | string (optional) | Context trimming strategy |
 | `is_default` | boolean (optional) | Default flag |
@@ -156,13 +156,8 @@ The `model_type` field accepts the following values:
 
 **Note:** When using `expected_version`, the API will verify the version hasn't changed since you read the data. If it has, you'll receive a 409 Conflict error.
 
-**Robust Null Handling:** The `max_tokens` field includes a validator that gracefully handles various null representations:
-- Accepts proper JSON `null` values
-- Accepts the string `"null"` (common serialization issue) and converts it to `null`
-- Accepts empty strings `""` and converts them to `null`
-- Accepts numeric strings (e.g., `"4096"`) and converts them to integers
-
-This prevents validation errors when clients incorrectly serialize `null` as the string `"null"`.
+**Reserved Fields:**
+- `max_tokens`: Reserved for future implementation. Currently not used by the system. The maximum output tokens are controlled automatically by the LLM provider based on the model and input size.
 
 ### LLMModelConfigResponse
 
@@ -265,7 +260,7 @@ curl -X POST http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
     "temperature": 0.7,
     "context_limit": 128,
     "context_strategy": "balanced",
-    "api_key": "sk-xxx",
+    "api_key": null,
     "copilot_mode": null
   },
   "user_id": "uuid-user",
@@ -276,6 +271,8 @@ curl -X POST http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
   "updated_at": "2026-03-03T12:00:00Z"
 }
 ```
+
+**Note:** The `api_key` field is always `null` in responses for security. The API key is encrypted and stored in the database, but never returned via the API.
 
 ### 2. Create a group configuration
 
@@ -320,7 +317,7 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
         "temperature": 0.7,
         "context_limit": 128,
         "context_strategy": "balanced",
-        "api_key": "sk-xxx",
+        "api_key": null,
         "copilot_mode": "lab_automation_assistant"
       },
       "user_id": "uuid-user",
@@ -367,7 +364,7 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
       "temperature": 0.7,
       "context_limit": 128,
       "context_strategy": "balanced",
-      "api_key": "sk-xxx",
+      "api_key": null,
       "copilot_mode": "lab_automation_assistant"
     },
     "user_id": "uuid-user",
@@ -381,8 +378,7 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs \
 ```
 
 **Note:**
-- User's own config shows `config.api_key: "sk-xxx"` (visible to owner)
-- Inherited group config shows `config.api_key: null` (hidden from users)
+- All configs show `config.api_key: null` (always hidden for security)
 - `source: "user"` indicates the config belongs to the user
 - `source: "group"` indicates the config is inherited from a group
 - Configuration fields are nested in the `config` object (same structure as group endpoints)
@@ -410,7 +406,7 @@ curl -X GET http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs 
         "temperature": 0.7,
         "context_limit": 200,
         "context_strategy": "balanced",
-        "api_key": "sk-ant-xxx",
+        "api_key": null,
         "copilot_mode": null
       },
       "user_id": null,
@@ -431,7 +427,7 @@ curl -X GET http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs 
         "temperature": 0.7,
         "context_limit": 128,
         "context_strategy": "balanced",
-        "api_key": "sk-xxx",
+        "api_key": null,
         "copilot_mode": null
       },
       "user_id": null,
@@ -460,7 +456,7 @@ curl -X GET http://localhost:3080/v3/access/groups/{group_id}/llm-model-configs 
 }
 ```
 
-**Note:** The response structure is the same as user endpoints, with `configs`, `default_config`, and `total` fields.
+**Note:** The response structure is the same as user endpoints, with `configs`, `default_config`, and `total` fields. All `api_key` values are `null` for security.
 
 ### 5. Update a configuration (without optimistic locking)
 
@@ -545,7 +541,7 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/de
     "temperature": 0.7,
     "context_limit": 128,
     "context_strategy": "balanced",
-    "api_key": "sk-xxx",
+    "api_key": null,
     "copilot_mode": null
   },
   "user_id": "uuid-user",
@@ -556,6 +552,8 @@ curl -X GET http://localhost:3080/v3/access/users/{user_id}/llm-model-configs/de
   "updated_at": "2026-03-03T18:15:00Z"
 }
 ```
+
+**Note:** The `api_key` field is always `null` in responses for security.
 
 **If no default configuration is set:**
 
@@ -656,40 +654,37 @@ All endpoints require appropriate privileges:
 
 The API implements strict API key visibility controls to protect sensitive credentials:
 
+**Security Policy: API keys are NEVER returned via API endpoints**
+
 | Scenario | User Configs | Group Configs |
 |----------|-------------|---------------|
-| User viewing own configs | **Visible (Plaintext)** | N/A |
+| User viewing own configs | **Hidden (null)** | N/A |
 | User viewing inherited group configs | N/A | **Hidden (null)** |
 | Admin viewing other users' configs | **Hidden (null)** | N/A |
-| Viewing group configs directly (with `Group.Audit`) | N/A | **Visible (Encrypted)** |
+| Viewing group configs directly (with `Group.Audit`) | N/A | **Hidden (null)** |
 
 **Rules:**
-1. **Users viewing their own configs**: Can see **decrypted (plaintext)** API keys in their own configurations
-2. **Users viewing inherited group configs**: API keys are **hidden** (set to `null`) in the inherited configs
-3. **Admins viewing other users' configs**: Cannot see API keys in any user configurations (set to `null`) - user privacy protection
-4. **Viewing group configs directly**: Users with `Group.Audit` privilege can see **encrypted** API keys in group configurations (not decrypted)
-5. **Super admins**: While application-layer restrictions apply, super admins can access the database directly and decrypt any API key using the encryption key. This is by design as super admins have system-level access.
+1. **All API responses**: `api_key` field is **always set to `null`** in all API responses
+2. **Database storage**: API keys are encrypted using Fernet symmetric encryption before storage
+3. **Internal use only**: API keys are only decrypted internally by the system (e.g., when the Copilot Agent makes LLM API calls)
+4. **Super admins**: Can access the database directly and decrypt any API key using the encryption key - this is by design as super admins have system-level access
 
 **Important Notes:**
 - API keys are stored in the database in **encrypted** format using Fernet symmetric encryption
-- User configs are **decrypted on-the-fly** when retrieved by the owner
-- Group configs return the **encrypted value** as stored in the database (no automatic decryption)
-- Super admins have database access and can retrieve & decrypt any API key - this is intentional and reflects their system-level privileges
+- **No API endpoint returns API keys** - the `api_key` field is always `null` in responses
+- API keys can still be **created and updated** via POST/PUT endpoints
+- The system internally decrypts API keys when needed (e.g., for making LLM API calls)
+- Super admins with database access can retrieve & decrypt any API key - this is intentional and reflects their system-level privileges
 
-**⚠️ Key Point: No Plaintext Group API Keys via API**
-> **Nobody (including super admins) can see plaintext API keys for group configurations through the application API.**
+**⚠️ Security First Design**
+> **API keys are never exposed through the application API.**
 >
-> - Group configs always return the **encrypted** API key value (e.g., `gAAAAABl1a2b3c4d5e6f7...`)
-> - There is **no API endpoint** that decrypts and returns group config API keys as plaintext
-> - Even super admins with `Group.Audit` privilege receive encrypted values via the API
-> - This is an application-layer restriction that applies to all users
+> - All GET endpoints return `api_key: null`
+> - POST/PUT endpoints accept API keys for storage, but responses still return `api_key: null`
+> - This prevents API keys from being leaked through logs, browser devtools, or network monitoring
+> - API keys are only decrypted internally by the system when making actual LLM API calls
 >
-> **Design Rationale**: Group configs are intended to be **inherited** automatically, not viewed/copied manually. The encrypted values protect API keys while still allowing the inheritance mechanism to function (the system decrypts them internally when needed).
->
-> **Access Paths**:
-> - ✅ **Inheritance**: Users inherit group configs → Agent uses them with internal decryption
-> - ✅ **Database Direct Access**: Super admins can query DB and decrypt using the encryption key
-> - ❌ **API Viewing**: No endpoint returns plaintext group config API keys
+> **Design Rationale**: This defense-in-depth approach ensures that even if someone gains access to API logs or responses, they will never find valid API keys.
 
 **Example:**
 ```json
@@ -701,7 +696,7 @@ The API implements strict API key visibility controls to protect sensitive crede
       "name": "GPT-4",
       "source": "user",
       "config": {
-        "api_key": "sk-ant-xxxxx"  // Decrypted (own config)
+        "api_key": null  // Always hidden, even for own configs
       }
     },
     {
@@ -709,7 +704,7 @@ The API implements strict API key visibility controls to protect sensitive crede
       "name": "Claude-3",
       "source": "group",
       "config": {
-        "api_key": null  // Hidden (inherited from group)
+        "api_key": null  // Always hidden
       }
     }
   ]
@@ -723,7 +718,7 @@ The API implements strict API key visibility controls to protect sensitive crede
       "name": "GPT-4",
       "source": "user",
       "config": {
-        "api_key": null  // Hidden (another user's config)
+        "api_key": null  // Always hidden
       }
     }
   ]
@@ -735,12 +730,27 @@ The API implements strict API key visibility controls to protect sensitive crede
     {
       "config_id": "uuid-3",
       "name": "Gemini Pro",
-      "source": "group",
       "config": {
-        "api_key": "gAAAAABl1a2b3c4d5e6f7..."  // Encrypted (as stored in DB)
+        "api_key": null  // Always hidden
       }
     }
   ]
+}
+
+// Creating a new config (request includes api_key)
+POST /users/{user_id}/llm-model-configs
+{
+  "name": "GPT-4",
+  "api_key": "sk-xxxxx"  // Sent in request
+}
+
+// Response (api_key is filtered)
+{
+  "config_id": "uuid-1",
+  "name": "GPT-4",
+  "config": {
+    "api_key": null  // Always null in responses
+  }
 }
 ```
 

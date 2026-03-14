@@ -133,14 +133,39 @@ class LLMModelConfigUpdate(BaseModel):
         return v
 
 
+# Response schema without API key (for security)
+class LLMModelConfigDataWithoutSecret(BaseModel):
+    """LLM model configuration data WITHOUT sensitive information."""
+
+    provider: str = Field(..., description="LLM provider (e.g., 'openai', 'anthropic', 'ollama')")
+    base_url: str = Field(..., description="API base URL")
+    model: str = Field(..., description="Model name")
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Temperature parameter")
+    api_key: Optional[str] = Field(None, description="API key (always hidden in API responses)")
+    max_tokens: Optional[int] = Field(None, gt=0, description="Max tokens for generation")
+    context_limit: int = Field(
+        ..., gt=0, description="Model context window limit in K tokens (e.g., 128 = 128K tokens)"
+    )
+    context_strategy: Literal["conservative", "balanced", "aggressive"] = Field(
+        "balanced", description="Context trimming strategy: conservative (60%), balanced (75%), aggressive (85%)"
+    )
+    copilot_mode: Optional[str] = Field(
+        None,
+        description="GNS3-Copilot mode: 'teaching_assistant' or 'lab_automation_assistant'"
+    )
+
+    # Allow extra fields for extensibility
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
 # Response schemas
 class LLMModelConfigResponse(DateTimeModelMixin):
-    """LLM model configuration response."""
+    """LLM model configuration response (without API key for security)."""
 
     config_id: UUID
     name: str
     model_type: ModelType
-    config: LLMModelConfigData
+    config: LLMModelConfigDataWithoutSecret
     user_id: Optional[UUID] = None
     group_id: Optional[UUID] = None
     is_default: bool
@@ -150,12 +175,12 @@ class LLMModelConfigResponse(DateTimeModelMixin):
 
 
 class LLMModelConfigWithSource(DateTimeModelMixin):
-    """Model configuration with source information (for inheritance)."""
+    """Model configuration with source information (for inheritance, without API key for security)."""
 
     config_id: UUID
     name: str
     model_type: ModelType
-    config: LLMModelConfigData
+    config: LLMModelConfigDataWithoutSecret
     user_id: Optional[UUID] = None
     group_id: Optional[UUID] = None
     is_default: bool

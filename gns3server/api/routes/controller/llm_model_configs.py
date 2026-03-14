@@ -41,6 +41,21 @@ log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _filter_api_key_from_config(config: dict) -> dict:
+    """
+    Remove API key from config dict for security.
+    API keys should NEVER be returned via API endpoints.
+
+    :param config: Configuration dictionary
+    :return: Configuration dictionary with api_key set to None
+    """
+    filtered = config.copy()
+    if "api_key" in filtered:
+        filtered["api_key"] = None
+    return filtered
+
+
 # ============================================================================
 # User LLM Model Configuration Endpoints
 # ============================================================================
@@ -101,7 +116,7 @@ async def get_user_own_llm_model_configs(
                 config_id=config.config_id,
                 name=config.name,
                 model_type=config.model_type,
-                config=config.config,
+                config=_filter_api_key_from_config(config.config),
                 user_id=config.user_id,
                 group_id=config.group_id,
                 is_default=config.is_default,
@@ -146,7 +161,7 @@ async def get_user_default_llm_model_config(
             config_id=config.config_id,
             name=config.name,
             model_type=config.model_type,
-            config=config.config,
+            config=_filter_api_key_from_config(config.config),
             user_id=config.user_id,
             group_id=config.group_id,
             is_default=config.is_default,
@@ -213,7 +228,7 @@ async def create_user_llm_model_config(
             config_id=new_config.config_id,
             name=new_config.name,
             model_type=new_config.model_type,
-            config=new_config.config,
+            config=_filter_api_key_from_config(new_config.config),
             user_id=new_config.user_id,
             group_id=new_config.group_id,
             is_default=new_config.is_default,
@@ -273,7 +288,7 @@ async def update_user_llm_model_config(
             config_id=updated_config.config_id,
             name=updated_config.name,
             model_type=updated_config.model_type,
-            config=updated_config.config,
+            config=_filter_api_key_from_config(updated_config.config),
             user_id=updated_config.user_id,
             group_id=updated_config.group_id,
             is_default=updated_config.is_default,
@@ -362,7 +377,7 @@ async def set_user_default_llm_model_config(
             config_id=config.config_id,
             name=config.name,
             model_type=config.model_type,
-            config=config.config,
+            config=_filter_api_key_from_config(config.config),
             user_id=config.user_id,
             group_id=config.group_id,
             is_default=config.is_default,
@@ -406,7 +421,7 @@ async def get_group_llm_model_configs(
                 config_id=config.config_id,
                 name=config.name,
                 model_type=config.model_type,
-                config=config.config,
+                config=_filter_api_key_from_config(config.config),
                 user_id=config.user_id,
                 group_id=config.group_id,
                 is_default=config.is_default,
@@ -468,7 +483,7 @@ async def get_group_default_llm_model_config(
             config_id=config.config_id,
             name=config.name,
             model_type=config.model_type,
-            config=config.config,
+            config=_filter_api_key_from_config(config.config),
             user_id=config.user_id,
             group_id=config.group_id,
             is_default=config.is_default,
@@ -535,7 +550,7 @@ async def create_group_llm_model_config(
             config_id=new_config.config_id,
             name=new_config.name,
             model_type=new_config.model_type,
-            config=new_config.config,
+            config=_filter_api_key_from_config(new_config.config),
             user_id=new_config.user_id,
             group_id=new_config.group_id,
             is_default=new_config.is_default,
@@ -595,7 +610,7 @@ async def update_group_llm_model_config(
             config_id=updated_config.config_id,
             name=updated_config.name,
             model_type=updated_config.model_type,
-            config=updated_config.config,
+            config=_filter_api_key_from_config(updated_config.config),
             user_id=updated_config.user_id,
             group_id=updated_config.group_id,
             is_default=updated_config.is_default,
@@ -684,7 +699,7 @@ async def set_group_default_llm_model_config(
             config_id=config.config_id,
             name=config.name,
             model_type=config.model_type,
-            config=config.config,
+            config=_filter_api_key_from_config(config.config),
             user_id=config.user_id,
             group_id=config.group_id,
             is_default=config.is_default,

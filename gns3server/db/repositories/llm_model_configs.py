@@ -31,6 +31,20 @@ log = logging.getLogger(__name__)
 class LLMModelConfigsRepository(BaseRepository):
     """Repository for LLM model configurations with inheritance support."""
 
+    @staticmethod
+    def _hide_api_key(config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Remove API key from config dict for security.
+        API keys should NEVER be returned via API endpoints.
+
+        :param config: Configuration dictionary
+        :return: Configuration dictionary with api_key set to None
+        """
+        config_copy = config.copy()
+        if "api_key" in config_copy:
+            config_copy["api_key"] = None
+        return config_copy
+
     # User configuration methods
 
     async def get_user_config(self, config_id: UUID) -> Optional[models.LLMModelConfig]:
@@ -409,15 +423,8 @@ class LLMModelConfigsRepository(BaseRepository):
         Get user's effective configurations (own + inherited from groups).
         Returns a dict with 'configs' list and 'default_config'.
 
-        API key visibility rules:
-        - Users viewing own configs: CAN see API keys in user configs, CANNOT see API keys in group configs
-        - Admins viewing other users' configs: CANNOT see ANY API keys
+        API key visibility: ALWAYS hidden for security (never returned via API).
         """
-        from gns3server.utils.encryption import decrypt, is_encrypted
-
-        # Determine if current user is viewing their own configs
-        is_viewing_own = current_user_id == user_id if current_user_id else False
-
         # Get user's own configs
         user_configs = await self.get_user_configs(user_id)
 
@@ -437,26 +444,14 @@ class LLMModelConfigsRepository(BaseRepository):
                 group_configs_map[group.user_group_id] = configs
                 group_names_map[group.user_group_id] = group.name
 
-        # Decrypt API keys and build result
+        # Build result with API keys always hidden
         configs_with_source = []
         default_config = None
 
         # Add user's configs
         for config in user_configs:
-            config_dict = config.config.copy()
-
-            # API key visibility: only show if viewing own configs
-            if "api_key" in config_dict and config_dict["api_key"]:
-                if is_viewing_own:
-                    try:
-                        if is_encrypted(config_dict["api_key"]):
-                            config_dict["api_key"] = decrypt(config_dict["api_key"])
-                    except Exception as e:
-                        log.warning(f"Failed to decrypt API key for config {config.config_id}: {e}")
-                        config_dict["api_key"] = None
-                else:
-                    # Hide API key for admins viewing other users' configs
-                    config_dict["api_key"] = None
+            # Always hide API key for security
+            config_dict = self._hide_api_key(config.config)
 
             configs_with_source.append({
                 "config_id": config.config_id,
@@ -476,11 +471,8 @@ class LLMModelConfigsRepository(BaseRepository):
         # Add inherited group configs (always shown, regardless of user configs)
         for group_id, configs in group_configs_map.items():
             for config in configs:
-                config_dict = config.config.copy()
-
-                # API key visibility: NEVER show API keys from inherited group configs
-                if "api_key" in config_dict and config_dict["api_key"]:
-                    config_dict["api_key"] = None
+                # Always hide API key for security
+                config_dict = self._hide_api_key(config.config)
 
                 configs_with_source.append({
                     "config_id": config.config_id,
