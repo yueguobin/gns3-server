@@ -20,7 +20,7 @@ API routes for VPCS nodes.
 
 import os
 
-from fastapi import APIRouter, WebSocket, Depends, Body, Path, status
+from fastapi import APIRouter, WebSocket, Depends, Body, Path, status, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from typing import Union
@@ -174,10 +174,12 @@ async def stop_vpcs_node(node: VPCSVM = Depends(dep_node)) -> None:
 async def suspend_vpcs_node(node: VPCSVM = Depends(dep_node)) -> None:
     """
     Suspend a VPCS node.
-    Does nothing, suspend is not supported by VPCS.
     """
 
-    pass
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail="Suspend is not supported for VPCS nodes"
+    )
 
 
 @router.post(

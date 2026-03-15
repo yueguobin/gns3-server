@@ -20,7 +20,7 @@ API routes for cloud nodes.
 
 import os
 
-from fastapi import APIRouter, Depends, Path, Response, status
+from fastapi import APIRouter, Depends, Path, status, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from typing import Union
@@ -120,10 +120,12 @@ async def start_cloud(node: Cloud = Depends(dep_node)) -> None:
 async def stop_cloud(node: Cloud = Depends(dep_node)) -> None:
     """
     Stop a cloud node.
-    This endpoint results in no action since cloud nodes cannot be stopped.
     """
 
-    pass
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail="Stop is not supported for cloud nodes"
+    )
 
 
 @router.post("/{node_id}/suspend", status_code=status.HTTP_204_NO_CONTENT)
@@ -133,7 +135,10 @@ async def suspend_cloud(node: Cloud = Depends(dep_node)) -> None:
     This endpoint results in no action since cloud nodes cannot be suspended.
     """
 
-    pass
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail="Suspend is not supported for cloud nodes"
+    )
 
 
 @router.post(

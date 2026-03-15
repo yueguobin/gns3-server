@@ -246,6 +246,16 @@ class TestIOUNodesRoutes:
             assert response.status_code == status.HTTP_204_NO_CONTENT
 
 
+    async def test_iou_suspend(self, app: FastAPI, compute_client: AsyncClient, vm: dict) -> None:
+
+        response = await compute_client.delete(
+            app.url_path_for(
+                "compute:suspend_iou_node",
+                project_id=vm["project_id"],
+                node_id=vm["node_id"])
+        )
+        assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+
     async def test_iou_update(
             self, app: FastAPI,
             compute_client: AsyncClient,

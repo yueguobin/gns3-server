@@ -219,8 +219,20 @@ class TestVPCSNodesRoutes:
                                                             node_id=vm["node_id"]))
             assert mock.called
             assert response.status_code == status.HTTP_204_NO_CONTENT
-    
-    
+
+
+    async def test_vpcs_suspend(self, app: FastAPI, compute_client: AsyncClient, vm: dict) -> None:
+
+        response = await compute_client.post(
+            app.url_path_for(
+                "compute:suspend_vpcs_node",
+                project_id=vm["project_id"],
+                node_id=vm["node_id"]
+            )
+        )
+        assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+
+
     async def test_vpcs_duplicate(
             self,
             app: FastAPI,

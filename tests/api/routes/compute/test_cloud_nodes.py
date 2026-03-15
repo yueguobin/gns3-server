@@ -163,8 +163,48 @@ class TestCloudNodesRoutes:
             vm: dict
     ) -> None:
 
-        response = await compute_client.delete(app.url_path_for("compute:delete_cloud", project_id=vm["project_id"], node_id=vm["node_id"]))
+        response = await compute_client.delete(
+            app.url_path_for(
+                "compute:delete_cloud",
+                project_id=vm["project_id"],
+                node_id=vm["node_id"]
+            )
+        )
         assert response.status_code == status.HTTP_204_NO_CONTENT
+
+
+    async def test_cloud_stop(
+            self, app: FastAPI,
+            compute_client: AsyncClient,
+            compute_project: Project,
+            vm: dict
+    ) -> None:
+
+        response = await compute_client.post(
+            app.url_path_for(
+                "compute:stop_cloud",
+                project_id=vm["project_id"],
+                node_id=vm["node_id"]
+            )
+        )
+        assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+
+
+    async def test_cloud_suspend(
+            self, app: FastAPI,
+            compute_client: AsyncClient,
+            compute_project: Project,
+            vm: dict
+    ) -> None:
+
+        response = await compute_client.post(
+            app.url_path_for(
+                "compute:suspend_cloud",
+                project_id=vm["project_id"],
+                node_id=vm["node_id"]
+            )
+        )
+        assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
 
 
     async def test_cloud_update(

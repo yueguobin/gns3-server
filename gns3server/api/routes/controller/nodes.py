@@ -22,7 +22,7 @@ import aiohttp
 import asyncio
 import ipaddress
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Request, Response, status, Query
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Request, Response, status, Query, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.routing import APIRoute
 from typing import List, Callable, Optional
@@ -189,7 +189,11 @@ async def start_all_nodes(project: Project = Depends(dep_project)) -> None:
     Required privilege: Node.PowerMgmt
     """
 
-    await project.start_all()
+    try:
+        await project.start_all()
+    except HTTPException as e:
+        if not e.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
 
 
 @router.post("/stop", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_privilege("Node.PowerMgmt"))])
@@ -200,7 +204,11 @@ async def stop_all_nodes(project: Project = Depends(dep_project)) -> None:
     Required privilege: Node.PowerMgmt
     """
 
-    await project.stop_all()
+    try:
+        await project.stop_all()
+    except HTTPException as e:
+        if not e.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
 
 
 @router.post("/suspend", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_privilege("Node.PowerMgmt"))])
@@ -211,7 +219,11 @@ async def suspend_all_nodes(project: Project = Depends(dep_project)) -> None:
     Required privilege: Node.PowerMgmt
     """
 
-    await project.suspend_all()
+    try:
+        await project.suspend_all()
+    except HTTPException as e:
+        if not e.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
 
 
 @router.post("/reload", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_privilege("Node.PowerMgmt"))])
@@ -222,8 +234,12 @@ async def reload_all_nodes(project: Project = Depends(dep_project)) -> None:
     Required privilege: Node.PowerMgmt
     """
 
-    await project.stop_all()
-    await project.start_all()
+    try:
+        await project.stop_all()
+        await project.start_all()
+    except HTTPException as e:
+        if not e.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
 
 
 @router.get("/{node_id}", response_model=schemas.Node, dependencies=[Depends(has_privilege("Node.Audit"))])
@@ -310,8 +326,11 @@ async def start_node(start_data: dict, node: Node = Depends(dep_node)) -> None:
     Required privilege: Node.PowerMgmt
     """
 
-    await node.start(data=start_data)
-
+    try:
+        await node.start(data=start_data)
+    except HTTPException as e:
+        if not e.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
 
 @router.post(
     "/{node_id}/stop",
@@ -325,7 +344,11 @@ async def stop_node(node: Node = Depends(dep_node)) -> None:
     Required privilege: Node.PowerMgmt
     """
 
-    await node.stop()
+    try:
+        await node.stop()
+    except HTTPException as e:
+        if not e.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
 
 
 @router.post(
@@ -340,7 +363,11 @@ async def suspend_node(node: Node = Depends(dep_node)) -> None:
     Required privilege: Node.PowerMgmt
     """
 
-    await node.suspend()
+    try:
+        await node.suspend()
+    except HTTPException as e:
+        if not e.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
 
 
 @router.post(
@@ -355,8 +382,11 @@ async def reload_node(node: Node = Depends(dep_node)) -> None:
     Required privilege: Node.PowerMgmt
     """
 
-    await node.reload()
-
+    try:
+        await node.reload()
+    except HTTPException as e:
+        if not e.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
 
 @router.post(
     "/{node_id}/isolate",
