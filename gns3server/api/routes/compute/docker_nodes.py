@@ -399,21 +399,6 @@ async def vnc_console_ws(
         await node.start_vnc_websocket_console(websocket)
 
 
-@router.websocket(
-    "/{node_id}/console/spice"
-)
-async def spice_console_ws(
-        websocket: Union[None, WebSocket] = Depends(ws_compute_authentication),
-        node: DockerVM = Depends(dep_node)
-) -> None:
-    """
-    SPICE Console WebSocket.
-    """
-
-    if websocket:
-        await node.start_spice_websocket_console(websocket)
-
-
 @router.post(
     "/{node_id}/console/reset",
     status_code=status.HTTP_204_NO_CONTENT,
