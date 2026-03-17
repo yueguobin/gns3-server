@@ -32,7 +32,7 @@ import re
 
 log = logging.getLogger(__name__)
 
-from gns3server.utils.interfaces import interfaces, is_interface_up
+from gns3server.utils.interfaces import is_interface_up
 from gns3server.utils.asyncio import wait_run_in_executor, subprocess_check_output
 from gns3server.utils import parse_version
 from uuid import uuid4
@@ -643,6 +643,9 @@ class Dynamips(BaseManager):
         # Not a Dynamips router
         if not hasattr(source_node, "startup_config_path"):
             return await super().duplicate_node(source_node_id, destination_node_id)
+
+        if hasattr(source_node, "status") and source_node.status != "stopped":
+            raise DynamipsError("Cannot duplicate router data while the route is running")
 
         try:
             with open(source_node.startup_config_path) as f:

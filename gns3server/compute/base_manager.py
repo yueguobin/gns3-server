@@ -35,7 +35,6 @@ from gns3server.utils.interfaces import is_interface_up
 from uuid import UUID, uuid4
 from typing import Type
 from ..config import Config
-from ..utils.asyncio import wait_run_in_executor
 from ..utils import force_unix_path
 from .project_manager import ProjectManager
 from .port_manager import PortManager
