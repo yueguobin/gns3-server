@@ -51,14 +51,14 @@ class TestHuaweiTelnetCEDriver(unittest.TestCase):
 
         # Check CLASS_MAPPER
         self.assertIn("gns3_huawei_telnet_ce", CLASS_MAPPER)
-        self.assertIs(
+        self.assertEqual(
             CLASS_MAPPER["gns3_huawei_telnet_ce"],
             self.HuaweiTelnetCE
         )
 
         # Check CLASS_MAPPER_BASE
         self.assertIn("gns3_huawei_telnet_ce", CLASS_MAPPER_BASE)
-        self.assertIs(
+        self.assertEqual(
             CLASS_MAPPER_BASE["gns3_huawei_telnet_ce"],
             self.HuaweiTelnetCE
         )
