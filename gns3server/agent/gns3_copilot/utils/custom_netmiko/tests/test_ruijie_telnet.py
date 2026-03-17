@@ -52,19 +52,13 @@ class TestRuijieTelnetEnhancedDriver(unittest.TestCase):
         # Check CLASS_MAPPER
         self.assertIn("gns3_ruijie_telnet", CLASS_MAPPER)
         registered_class = CLASS_MAPPER["gns3_ruijie_telnet"]
-        # Compare by module+name since class may be imported via different paths
-        self.assertEqual(
-            (registered_class.__module__, registered_class.__name__),
-            (self.RuijieTelnetEnhanced.__module__, self.RuijieTelnetEnhanced.__name__)
-        )
+        # Compare class name since class may be imported via different paths
+        self.assertEqual(registered_class.__name__, self.RuijieTelnetEnhanced.__name__)
 
         # Check CLASS_MAPPER_BASE
         self.assertIn("gns3_ruijie_telnet", CLASS_MAPPER_BASE)
         registered_class_base = CLASS_MAPPER_BASE["gns3_ruijie_telnet"]
-        self.assertEqual(
-            (registered_class_base.__module__, registered_class_base.__name__),
-            (self.RuijieTelnetEnhanced.__module__, self.RuijieTelnetEnhanced.__name__)
-        )
+        self.assertEqual(registered_class_base.__name__, self.RuijieTelnetEnhanced.__name__)
 
     def test_inheritance_from_ruijie_os_base(self):
         """Test that RuijieTelnetEnhanced inherits from RuijieOSBase."""

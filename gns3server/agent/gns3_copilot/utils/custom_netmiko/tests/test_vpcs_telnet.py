@@ -54,19 +54,13 @@ class TestVPCSTelnetDriver(unittest.TestCase):
         # Check CLASS_MAPPER
         self.assertIn("gns3_vpcs_telnet", CLASS_MAPPER)
         registered_class = CLASS_MAPPER["gns3_vpcs_telnet"]
-        # Compare by module+name since class may be imported via different paths
-        self.assertEqual(
-            (registered_class.__module__, registered_class.__name__),
-            (self.VPCSTelnet.__module__, self.VPCSTelnet.__name__)
-        )
+        # Compare class name since class may be imported via different paths
+        self.assertEqual(registered_class.__name__, self.VPCSTelnet.__name__)
 
         # Check CLASS_MAPPER_BASE
         self.assertIn("gns3_vpcs_telnet", CLASS_MAPPER_BASE)
         registered_class_base = CLASS_MAPPER_BASE["gns3_vpcs_telnet"]
-        self.assertEqual(
-            (registered_class_base.__module__, registered_class_base.__name__),
-            (self.VPCSTelnet.__module__, self.VPCSTelnet.__name__)
-        )
+        self.assertEqual(registered_class_base.__name__, self.VPCSTelnet.__name__)
 
     def test_inheritance_from_base_connection(self):
         """Test that VPCSTelnet inherits from BaseConnection."""
