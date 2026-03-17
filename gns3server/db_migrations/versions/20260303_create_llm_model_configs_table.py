@@ -42,9 +42,6 @@ def upgrade() -> None:
         sa.Column('version', sa.Integer(), nullable=False, server_default='0'),
         sa.Column('created_at', sa.DateTime(), nullable=True),
         sa.Column('updated_at', sa.DateTime(), nullable=True),
-        sa.Column('reserved_jsonb_1', sa.JSON(), nullable=True, comment='Reserved field for future use'),
-        sa.Column('reserved_jsonb_2', sa.JSON(), nullable=True, comment='Reserved field for future use'),
-        sa.Column('reserved_jsonb_3', sa.JSON(), nullable=True, comment='Reserved field for future use'),
         sa.CheckConstraint(
             "(user_id IS NOT NULL AND group_id IS NULL) OR "
             "(user_id IS NULL AND group_id IS NOT NULL)",

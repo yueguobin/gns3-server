@@ -42,11 +42,6 @@ class LLMModelConfig(BaseTable):
     is_default = Column(Boolean, default=False, nullable=False)
     version = Column(Integer, default=0, nullable=False)  # Optimistic locking version
 
-    # Reserved fields for future use (currently unused in code)
-    reserved_jsonb_1 = Column(JSON, nullable=True)
-    reserved_jsonb_2 = Column(JSON, nullable=True)
-    reserved_jsonb_3 = Column(JSON, nullable=True)
-
     # Relationships
     user = relationship("User", backref="llm_model_configs")
     group = relationship("UserGroup", backref="llm_model_configs")

@@ -45,9 +45,6 @@ User's own config > User's group config
 | `group_id` | UUID (nullable) | Foreign key to user_groups table |
 | `is_default` | BOOLEAN | Default configuration flag |
 | `version` | INTEGER | Optimistic locking version (starts at 0, increments on each update) |
-| `reserved_jsonb_1` | JSONB (nullable) | Reserved field for future use |
-| `reserved_jsonb_2` | JSONB (nullable) | Reserved field for future use |
-| `reserved_jsonb_3` | JSONB (nullable) | Reserved field for future use |
 | `created_at` | TIMESTAMP | Creation timestamp |
 | `updated_at` | TIMESTAMP | Last update timestamp |
 
@@ -805,29 +802,6 @@ CREATE INDEX idx_llm_model_configs_model_type ON llm_model_configs(model_type);
 ```
 
 This enables fast lookups when filtering by model type, even with large datasets.
-
----
-
-## Reserved Fields
-
-The `llm_model_configs` table includes three reserved JSONB fields for future extensibility:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `reserved_jsonb_1` | JSONB (nullable) | Reserved for future use |
-| `reserved_jsonb_2` | JSONB (nullable) | Reserved for future use |
-| `reserved_jsonb_3` | JSONB (nullable) | Reserved for future use |
-
-**Purpose:** These fields are reserved for future feature development without requiring schema changes. They are currently unused in the API code but are available in the database layer for future enhancements.
-
-**Use Cases:** Future features might use these fields for:
-- Advanced configuration options
-- Metadata storage
-- Feature flags
-- Extension data
-- Caching computed values
-
-**Note:** These fields are not exposed in the current API schemas and are reserved for internal use.
 
 ---
 
