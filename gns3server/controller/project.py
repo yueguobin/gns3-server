@@ -1280,9 +1280,6 @@ class Project:
         :returns: New node
         """
 
-        if node.status != "stopped" and not node.is_always_running():
-            raise ControllerError("Cannot duplicate node data while the node is running")
-
         data = copy.deepcopy(node.asdict(topology_dump=True))
         # Some properties like internal ID should not be duplicated
         for unique_property in (

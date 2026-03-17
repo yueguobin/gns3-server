@@ -556,7 +556,7 @@ class Node:
         # None properties are not be sent because it can mean the emulator doesn't support it
         for key, value in list(data.items()):
             if value is None or value == {} or key in self.CONTROLLER_ONLY_PROPERTIES:
-                del value
+                del data[key]
 
         return data
 
