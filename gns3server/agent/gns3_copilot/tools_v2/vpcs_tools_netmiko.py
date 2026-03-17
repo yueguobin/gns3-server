@@ -37,6 +37,7 @@ from langchain.tools import BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun
 from netmiko.exceptions import ReadTimeout
 from nornir import InitNornir
+from nornir.core.nornir import Nornir
 from nornir.core.task import AggregatedResult
 from nornir.core.task import Result
 from nornir.core.task import Task
