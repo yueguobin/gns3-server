@@ -14,16 +14,36 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
-from . import chat
+# Check AI Copilot availability
+from gns3server.agent import AI_COPILOT_AVAILABLE
+
+# Conditionally import AI-dependent routes
+if AI_COPILOT_AVAILABLE:
+    from . import chat
+    from . import llm_model_configs
+    _chat_router = chat.router
+    _llm_router = llm_model_configs.router
+else:
+    # Create stub routers that return 501 for all AI endpoints
+    _chat_router = APIRouter()
+    _llm_router = APIRouter()
+
+    @_chat_router.api_route("/{path:path}", methods=["GET", "POST", "DELETE", "PATCH", "PUT"])
+    @_llm_router.api_route("/{path:path}", methods=["GET", "POST", "DELETE", "PATCH", "PUT"])
+    async def ai_not_available(path: str = ""):
+        raise HTTPException(
+            status_code=501,
+            detail="AI Copilot is not available. Install AI dependencies with: pip install gns3-server[ai-copilot]"
+        )
+
 from . import controller
 from . import appliances
 from . import computes
 from . import drawings
 from . import gns3vm
 from . import links
-from . import llm_model_configs
 from . import nodes
 from . import projects
 from . import snapshots
@@ -149,13 +169,13 @@ router.include_router(
 )
 
 router.include_router(
-    llm_model_configs.router,
+    _llm_router,
     prefix="/access",
     tags=["LLM Model Configurations"]
 )
 
 router.include_router(
-    chat.router,
+    _chat_router,
     prefix="/projects/{project_id}/chat",
     tags=["Chat"]
 )

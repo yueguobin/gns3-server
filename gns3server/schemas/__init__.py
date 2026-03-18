@@ -30,24 +30,31 @@ from .controller.gns3vm import GNS3VM
 from .controller.nodes import NodeCreate, NodeUpdate, NodeDuplicate, NodeCapture, Node
 from .controller.projects import ProjectCreate, ProjectUpdate, ProjectDuplicate, Project, ProjectFile, ProjectCompression
 from .controller.users import UserCreate, UserUpdate, LoggedInUserUpdate, User, Credentials, UserGroupCreate, UserGroupUpdate, UserGroup
-from .controller.llm_model_configs import (
-    LLMModelConfigData,
-    LLMModelConfigCreate,
-    LLMModelConfigUpdate,
-    LLMModelConfigResponse,
-    LLMModelConfigWithSource,
-    LLMModelConfigInheritedResponse,
-    LLMModelConfigListResponse
-)
-from .controller.chat import (
-    OpenAIToolCall,
-    ChatRequest,
-    ChatResponse,
-    OpenAIMessage,
-    ConversationHistory,
-    ChatSession,
-    RenameSession
-)
+
+# Conditionally import AI-related schemas
+try:
+    from .controller.llm_model_configs import (
+        LLMModelConfigData,
+        LLMModelConfigCreate,
+        LLMModelConfigUpdate,
+        LLMModelConfigResponse,
+        LLMModelConfigWithSource,
+        LLMModelConfigInheritedResponse,
+        LLMModelConfigListResponse
+    )
+    from .controller.chat import (
+        OpenAIToolCall,
+        ChatRequest,
+        ChatResponse,
+        OpenAIMessage,
+        ConversationHistory,
+        ChatSession,
+        RenameSession
+    )
+except ImportError:
+    # AI schemas are not available (should not happen as they don't depend on external libs)
+    pass
+
 from .controller.rbac import RoleCreate, RoleUpdate, Role, Privilege, ACECreate, ACEUpdate, ACE
 from .controller.pools import Resource, ResourceCreate, ResourcePoolCreate, ResourcePoolUpdate, ResourcePool
 from .controller.tokens import Token
