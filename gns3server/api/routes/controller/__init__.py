@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 # Check AI Copilot availability
 from gns3server.agent import AI_COPILOT_AVAILABLE
@@ -34,7 +34,7 @@ else:
     @_llm_router.api_route("/{path:path}", methods=["GET", "POST", "DELETE", "PATCH", "PUT"])
     async def ai_not_available(path: str = ""):
         raise HTTPException(
-            status_code=501,
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="AI Copilot is not available. Install AI dependencies with: pip install gns3-server[ai-copilot]"
         )
 
