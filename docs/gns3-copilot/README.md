@@ -6,14 +6,15 @@ This directory contains design documentation, implementation guides, and future 
 
 ```
 docs/gns3-copilot/
-├── README.md                    # This file
-└── implemented/                 # Implemented features and designs
-    ├── chat-api.md             # Chat API design (SSE, session management)
-    ├── llm-model-configs.md    # LLM model configuration system
-    ├── command-security.md     # Command security and filtering
-    ├── context-window-management.md  # Context window optimization
-    ├── node-control-tools.md   # Node start/stop/suspend tools for lab automation
-    └── multi-vendor-device-support.md  # Multi-vendor device support (Cisco, Huawei)
+├── README.md                               # This file
+├── template-based-configuration-roadmap.md # Future: Template-based config with HITL
+└── implemented/                            # Implemented features and designs
+    ├── chat-api.md                        # Chat API design (SSE, session management)
+    ├── llm-model-configs.md               # LLM model configuration system
+    ├── command-security.md                # Command security and filtering
+    ├── context-window-management.md       # Context window optimization
+    ├── node-control-tools.md              # Node start/stop/suspend tools for lab automation
+    └── multi-vendor-device-support.md     # Multi-vendor device support (Cisco, Huawei)
 ```
 
 ## Implemented Features
@@ -98,12 +99,39 @@ Multi-vendor network device support with custom Netmiko drivers for Huawei, Ruij
 
 ## Future Enhancements
 
-The following features are currently under consideration or development:
+### Template-Based Configuration with HITL (`template-based-configuration-roadmap.md`)
+**Status:** 💡 Proposed | **Target:** Next Release
 
-- Configuration Templates: Template-based configuration generation for multi-vendor network devices
+A revolutionary approach to network device configuration using Jinja2 templates with Human-in-the-Loop confirmations.
+
+**Key Features:**
+- Three-step HITL workflow (Template → Parameters → Execute)
+- 70-80% token savings for multi-device configurations
+- Template reusability across projects
+- Human review at every critical step
+- Configuration preview before execution
+
+**Benefits:**
+- Massive token cost reduction
+- Enhanced safety through human oversight
+- Template library for common configurations
+- Multi-vendor support (Cisco, Huawei, H3C, etc.)
+
+**Implementation Timeline:**
+- Phase 1: Core MVP (3-5 days) - Basic template workflow
+- Phase 2: UX Enhancement (2-3 days) - Review interfaces, preview
+- Phase 3: Template Library (2-3 days) - Pre-built templates, caching
+- Phase 4: Advanced Features (3-4 days) - Multi-vendor, composition, analytics
+
+See [`template-based-configuration-roadmap.md`](./template-based-configuration-roadmap.md) for complete details.
+
+### Other Proposed Features
+
 - Vision-based Topology Creation: Create network topologies from images/diagrams
-- Enhanced HITL Workflows: Advanced Human-in-the-Loop confirmation patterns
+- Enhanced HITL Workflows: Advanced confirmation patterns for other operations
 - Web UI Enhancements: Improved management interfaces
+- Configuration Diff & Comparison: Compare configurations across devices
+- Rollback & Undo: Revert configuration changes
 
 ## Contributing
 
@@ -136,4 +164,4 @@ When adding new documentation:
 
 ---
 
-_Last updated: 2026-03-14_
+_Last updated: 2026-03-20_
