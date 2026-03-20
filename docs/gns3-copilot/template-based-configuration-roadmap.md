@@ -119,6 +119,19 @@ User Request: "Configure OSPF on all routers"
 | **Template Method** | **~400 tokens** | Template: 100 + Parameters: 300 |
 | **Savings** | **75%** | 1200 tokens saved |
 
+#### 🔥 Scenario: Large-Scale Topology - 500+ Routers
+
+**This is where the template-based approach truly shines for rapid environment provisioning.**
+
+| Approach | Token Usage | Execution Time | Breakdown |
+|----------|-------------|----------------|-----------|
+| **Current Method (AI)** | **~75,000 tokens** | ~25 minutes | 150 tokens/device × 500 devices, serial execution |
+| **Template + AI** | **~5,000 tokens** | ~10 minutes | Template once + AI generates params, but slow |
+| **Template + Rules (Direct)** | **~400 tokens** | **~3 minutes** | Template once + rule engine (0 tokens) + parallel execution |
+| **Savings** | **99.5%** | **88%** | **Game-changing for large deployments** |
+
+**Key Insight:** For environments with **hundreds or thousands of nodes**, the direct execution mode (skipping AI) becomes critical for rapid topology preparation.
+
 ---
 
 ## Core Components
@@ -520,6 +533,449 @@ workflow.add_edge("execute", END)
 
 ---
 
+## 🔥 Large-Scale Topology Support (1000+ Nodes)
+
+### Overview
+
+One of the most powerful use cases for the template-based configuration system is **rapid provisioning of large-scale network topologies**. This section details optimizations for environments with **hundreds to thousands of nodes**.
+
+### Challenge: Traditional AI Approach at Scale
+
+```
+Problem: Configure 1000 routers with OSPF
+
+Traditional AI Approach:
+- AI generates config for each router: 150 tokens × 1000 = 150,000 tokens
+- Serial or limited parallel execution: ~30-50 minutes
+- High cost, slow execution, poor scalability
+```
+
+### Solution: Direct Execution Mode
+
+The key innovation is allowing users to **modify and directly execute** templates without requiring AI re-analysis:
+
+```
+Template-Based Direct Execution:
+1. AI generates template once: ~150 tokens
+2. User reviews and modifies if needed
+3. User clicks "⚡ Confirm & Execute"
+4. Rule engine generates params for 1000 devices: 0 tokens
+5. Parallel execution (50-100 concurrent): ~5 minutes
+6. Total: 150 tokens, 5 minutes
+```
+
+### Enhanced HITL Workflow for Scale
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Step 1: AI Generates Template (Once)                         │
+│                                                              │
+│ User: "Configure OSPF on all 1000 routers"                   │
+│                                                              │
+│ AI generates template: ~150 tokens                           │
+│ router ospf {{ process_id }}                                 │
+│ {% for network in networks %}                                │
+│  network {{ network.ip }} {{ network.mask }} area {{ area }} │
+│ {% endfor %}                                                 │
+└─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 🔵 HITL Checkpoint 1: Template Review                        │
+│                                                              │
+│ User can:                                                    │
+│ - Review template syntax                                     │
+│ - Modify template directly                                  │
+│ - See preview with sample data                               │
+│                                                              │
+│ Actions: [✓ Confirm & Continue]  [⚡ Confirm & Execute*]     │
+│          [✏️ Modify]  [❌ Cancel]                             │
+│                                                              │
+│ * "Confirm & Execute" = Skip AI, go to rule engine           │
+└─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ Step 2A: Rule Engine (0 tokens) OR Step 2B: AI (5000 tokens)│
+│                                                              │
+│ If user chose "⚡ Confirm & Execute":                        │
+│   → Rule engine analyzes template                            │
+│   → Extracts device names from topology                      │
+│   → Auto-assigns IPs and parameters                          │
+│   → Generates 1000 device param sets: 0 tokens               │
+│                                                              │
+│ If user chose "✓ Confirm & Continue":                       │
+│   → AI analyzes template                                     │
+│   → Generates parameters: ~5000 tokens                       │
+└─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 🔵 HITL Checkpoint 2: Parameter Review                       │
+│                                                              │
+│ For 1000 devices, show SUMMARY:                              │
+│ - Total devices: 1000                                        │
+│ - Configuration patterns: 3 unique patterns                 │
+│ - Sample configs (first 3 devices)                           │
+│ - IP addressing scheme used                                  │
+│                                                              │
+│ Actions: [⚡ Execute All*]  [✓ Review & Modify]  [❌ Cancel] │
+│                                                              │
+│ * "Execute All" = Start parallel execution                   │
+└─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ Step 3: Parallel Batch Execution                             │
+│                                                              │
+│ Configuration execution:                                     │
+│ - Batch size: 50 devices (configurable)                      │
+│ - Batches: 20 total (1000 / 50)                              │
+│ - Parallel execution within each batch                       │
+│ - Real-time progress updates via SSE                         │
+│ - Estimated time: 3-5 minutes                                │
+│                                                              │
+│ Progress updates:                                             │
+│ Batch 1/20: Configuring devices 1-50...                      │
+│ Batch 2/20: Configuring devices 51-100...                    │
+│ ...                                                          │
+│ Complete: 998 success, 2 failed                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Rule Engine: Intelligent Parameter Generation
+
+```python
+# gns3server/agent/gns3_copilot/config_templates/param_generator.py
+
+def generate_params_for_large_topology(
+    template: str,
+    topology_info: dict,
+    addressing_scheme: str = "sequential"
+) -> dict:
+    """
+    Generate parameters for 1000+ devices using rule-based logic.
+
+    Key features:
+    - Extract device numbering from names (R1, R2, ... R1000)
+    - Auto-assign IP addresses sequentially
+    - Group devices by type and apply patterns
+    - Zero AI token consumption
+    """
+
+    nodes = topology_info.get("nodes", [])
+
+    # Group by device type
+    devices_by_type = group_by_device_type(nodes)
+    # Result: {"router": [R1, R2, ..., R500], "switch": [SW1, ..., SW500]}
+
+    device_params = []
+
+    for device_type, type_nodes in devices_by_type.items():
+        for idx, node in enumerate(type_nodes, start=1):
+            device_name = node.get("name")
+
+            # Extract device number from name
+            device_num = extract_device_number(device_name, idx)
+            # R1 → 1, Router-100 → 100, DeviceX → fallback to idx
+
+            # Generate parameters using rules
+            params = {
+                "device_name": device_name,
+                "process_id": 1,
+                "area": "0",
+                "router_id": f"1.1.1.{device_num}",
+                "networks": [
+                    {
+                        "ip": f"192.168.{device_num}.0",
+                        "mask": "0.0.0.255"
+                    }
+                ],
+                "loopback": {
+                    "ip": f"10.{device_num}.1.1",
+                    "mask": "255.255.255.255"
+                }
+            }
+
+            device_params.append(params)
+
+    return {
+        "device_params": device_params,
+        "total_devices": len(device_params),
+        "generation_method": "rule_engine",
+        "addressing_scheme": addressing_scheme
+    }
+
+
+# Example: 1000 devices configured in < 1 second
+# Token cost: 0 (pure rule-based logic)
+```
+
+### Batch Parallel Execution
+
+```python
+# gns3server/agent/gns3_copilot/tools_v2/config_tools_nornir.py
+
+class ExecuteTemplateBasedConfig(BaseTool):
+    """Optimized for large-scale parallel execution."""
+
+    def _run(self, tool_input: str | dict) -> dict:
+        """Execute configuration with dynamic batching."""
+
+        device_params = data.get("device_params", [])
+        total_devices = len(device_params)
+
+        # 🔥 Dynamic batch sizing based on device count
+        if total_devices <= 10:
+            batch_size = 10
+        elif total_devices <= 50:
+            batch_size = 20
+        elif total_devices <= 100:
+            batch_size = 30
+        elif total_devices <= 500:
+            batch_size = 50
+        else:  # 500+ devices
+            batch_size = 100  # High concurrency for large topologies
+
+        results = {
+            "total_devices": total_devices,
+            "batch_size": batch_size,
+            "total_batches": (total_devices + batch_size - 1) // batch_size,
+            "batches": []
+        }
+
+        # Process in batches with progress tracking
+        for batch_num in range(0, total_devices, batch_size):
+            batch_end = min(batch_num + batch_size, total_devices)
+            batch_params = device_params[batch_num:batch_end]
+
+            # Render configs for this batch
+            batch_configs = [
+                {
+                    "device_name": p["device_name"],
+                    "config_commands": renderer.render(template, p)
+                }
+                for p in batch_params
+            ]
+
+            # Execute batch in parallel using Nornir
+            batch_result = self._execute_batch_parallel(
+                project_id,
+                batch_configs,
+                batch_num // batch_size + 1
+            )
+
+            results["batches"].append(batch_result)
+
+            # Yield progress for SSE streaming
+            yield_progress({
+                "type": "batch_complete",
+                "batch": batch_num // batch_size + 1,
+                "progress": int((batch_end / total_devices) * 100)
+            })
+
+        return results
+```
+
+### Real-Time Progress Streaming
+
+```typescript
+// Frontend: Large-scale configuration progress UI
+
+class LargeScaleConfigProgress {
+  displayProgress() {
+    // Show progress bar for 1000 devices
+    return `
+      <div class="config-progress">
+        <h3>⚙️ Configuring 1000 Devices</h3>
+
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: 0%"></div>
+        </div>
+
+        <div class="stats">
+          <div class="stat success">
+            <span class="icon">✅</span>
+            <span class="label">Success:</span>
+            <span class="value" id="success-count">0</span>
+          </div>
+
+          <div class="stat failed">
+            <span class="icon">❌</span>
+            <span class="label">Failed:</span>
+            <span class="value" id="failed-count">0</span>
+          </div>
+
+          <div class="stat progress">
+            <span class="icon">📊</span>
+            <span class="label">Progress:</span>
+            <span class="value" id="progress-text">0%</span>
+          </div>
+
+          <div class="stat time">
+            <span class="icon">⏱️</span>
+            <span class="label">ETA:</span>
+            <span class="value" id="eta">~5 min</span>
+          </div>
+        </div>
+
+        <div class="current-batch">
+          <span id="batch-info">Preparing...</span>
+        </div>
+      </div>
+    `;
+  }
+
+  updateProgress(data) {
+    // Update progress bar
+    const fill = document.querySelector('.progress-fill');
+    fill.style.width = `${data.progress}%`;
+
+    // Update stats
+    document.getElementById('success-count').textContent = data.success;
+    document.getElementById('failed-count').textContent = data.failed;
+    document.getElementById('progress-text').textContent = `${data.progress}%`;
+    document.getElementById('batch-info').textContent =
+      `Batch ${data.batch}/20: Configuring devices ${data.range}...`;
+  }
+}
+```
+
+### Configuration Summary for Large Topologies
+
+For 1000 devices, showing full configurations is impractical. Instead, provide **intelligent summaries**:
+
+```python
+class ConfigSummaryGenerator:
+    """Generate summaries for large-scale configurations."""
+
+    def generate_summary(self, template: str, device_params: list) -> dict:
+        """
+        Generate configuration summary for 1000+ devices.
+
+        Shows:
+        - Pattern analysis (how many unique config patterns)
+        - Sample configs (first 3 devices)
+        - IP addressing scheme used
+        - Estimated total lines of configuration
+        """
+
+        total_devices = len(device_params)
+
+        # Render all configs to analyze patterns
+        renderer = ConfigTemplateRenderer()
+        all_configs = {}
+
+        for params in device_params:
+            device_name = params["device_name"]
+            config = renderer.render(template, params)
+            all_configs[device_name] = config
+
+        # Analyze patterns
+        unique_patterns = {}
+        for device_name, config in all_configs.items():
+            pattern_hash = hash(tuple(config))
+            if pattern_hash not in unique_patterns:
+                unique_patterns[pattern_hash] = []
+            unique_patterns[pattern_hash].append(device_name)
+
+        # Generate summary
+        return {
+            "total_devices": total_devices,
+            "unique_patterns": len(unique_patterns),
+            "patterns": [
+                {
+                    "count": len(devices),
+                    "sample_devices": devices[:5] + ["..."] if len(devices) > 5 else devices,
+                    "config_preview": all_configs[devices[0]][:5]  # First 5 lines
+                }
+                for devices in unique_patterns.values()
+            ],
+            "estimated_total_lines": sum(len(c) for c in all_configs.values()),
+            "examples": {
+                device_name: all_configs[device_name]
+                for device_name in list(all_configs.keys())[:3]  # First 3 only
+            }
+        }
+```
+
+### Performance Benchmarks
+
+#### Scenario: 1000 Router OSPF Configuration
+
+| Metric | Traditional AI | Template + AI | Template + Direct |
+|--------|---------------|---------------|-------------------|
+| **Token Consumption** | 150,000 | 5,000 | **400** |
+| **Execution Time** | 30-50 min | 10-15 min | **3-5 min** |
+| **Cost (at $10/M tokens)** | $1.50 | $0.05 | **$0.004** |
+| **User Control** | Low | Medium | **High** |
+| **Parallel Execution** | Limited | Yes | **Yes (100 concurrent)** |
+
+#### Scenario: 5000 Switch VLAN Configuration
+
+| Metric | Traditional AI | Template + Direct |
+|--------|---------------|-------------------|
+| **Token Consumption** | 400,000 | **400** |
+| **Execution Time** | 2-3 hours | **15-20 min** |
+| **Cost** | $4.00 | **$0.004** |
+| **Scalability** | Poor | **Excellent** |
+
+### Addressing Schemes for Large Topologies
+
+The rule engine supports multiple automatic addressing schemes:
+
+```python
+# 1. Sequential Addressing (Default)
+# R1: 192.168.1.0/24, R2: 192.168.2.0/24, ..., R1000: 192.168.1000.0/24
+
+# 2. VLAN-Based Addressing
+# VLAN 100: 10.0.100.0/24, VLAN 101: 10.0.101.0/24, ...
+
+# 3. Hierarchical Addressing
+# Core routers: 10.0.0.0/24
+# Distribution routers: 10.1.0.0/16
+# Access switches: 10.100.0.0/16
+
+# 4. Device Type Based
+# Routers: 192.168.0.0/16
+# Switches: 192.169.0.0/16
+# Firewalls: 192.170.0.0/16
+```
+
+### Error Handling for Scale
+
+For 1000+ devices, some failures are inevitable. The system provides:
+
+```python
+{
+    "total_devices": 1000,
+    "summary": {
+        "success": 987,
+        "failed": 13,
+        "skipped": 0
+    },
+    "failed_devices": [
+        {
+            "device_name": "R456",
+            "error": "Connection timeout",
+            "retry_available": true
+        },
+        ...
+    ],
+    "retry_suggestions": {
+        "auto_retry": True,
+        "retry_batch_size": 10,
+        "exponential_backoff": True
+    }
+}
+```
+
+### Use Cases for Large-Scale Support
+
+1. **Network Training Labs**: Provision 1000+ device labs for student training
+2. **CI/CD Testing**: Automated topology setup for testing network automation scripts
+3. **Disaster Recovery Drills**: Rapid deployment of large backup topologies
+4. **Network Simulation**: Research environments with thousands of nodes
+5. **Data Center Fabric**: Configure spine-leaf topologies with hundreds of leaf switches
+
+---
+
 ## Implementation Phases
 
 ### Phase 1: Core MVP (Minimum Viable Product)
@@ -543,7 +999,7 @@ workflow.add_edge("execute", END)
 - Basic CLI/API responses
 - Unit tests for core components
 
-### Phase 2: Enhanced User Experience
+### Phase 2: Enhanced User Experience & Direct Execution
 
 **Status:** 💡 Proposed
 **Estimated Effort:** 2-3 days
@@ -552,17 +1008,17 @@ workflow.add_edge("execute", END)
 1. Enhanced UI for template/parameter review
 2. Configuration preview functionality
 3. Template modification and retry logic
-4. Batch operation support
+4. 🔥 **Direct execution mode** (skip AI, use rule engine)
 5. Progress indicators for multi-device configs
 6. Improved error messages and recovery
 
 **Deliverables:**
 - User-friendly review interfaces
 - Preview-before-execute capability
-- Better error handling
+- **Rule-based parameter generation (0 token cost)**
 - User documentation
 
-### Phase 3: Template Library & Caching
+### Phase 3: Template Library & Large-Scale Support
 
 **Status:** 💡 Proposed
 **Estimated Effort:** 2-3 days
@@ -570,31 +1026,33 @@ workflow.add_edge("execute", END)
 **Tasks:**
 1. Template persistence and storage
 2. Pre-built template library (OSPF, BGP, VLAN, NAT, etc.)
-3. Template versioning and history
-4. Template sharing between projects
-5. Template favorites and quick access
-6. Template validation and testing framework
+3. 🔥 **Batch parallel execution** (dynamic batching for 100+ devices)
+4. 🔥 **Rule engine enhancements** (intelligent parameter generation)
+5. 🔥 **Real-time progress streaming** via SSE
+6. Template versioning and history
 
 **Deliverables:**
 - 20+ pre-built templates
+- **Support for 1000+ device configurations**
+- **Parallel execution with 50-100 concurrent connections**
 - Template management API
-- Template marketplace foundation
 
-### Phase 4: Advanced Features
+### Phase 4: Advanced Features & Optimization
 
 **Status:** 💡 Proposed
 **Estimated Effort:** 3-4 days
 
 **Tasks:**
 1. Multi-vendor template support (Huawei, H3C, Juniper)
-2. Template composition (combine multiple templates)
-3. Configuration diff and comparison
-4. Rollback and undo functionality
+2. 🔥 **Intelligent addressing schemes** (sequential, VLAN-based, hierarchical)
+3. 🔥 **Configuration summary generation** (pattern analysis for large topologies)
+4. Configuration diff and comparison
 5. Template analytics and usage statistics
-6. AI-assisted template optimization
+6. 🔥 **Performance optimization** (caching, connection pooling)
 
 **Deliverables:**
 - Multi-vendor template ecosystem
+- **Optimized for 10,000+ node topologies**
 - Advanced configuration management
 - Analytics dashboard
 
@@ -872,6 +1330,7 @@ langgraph>=0.0.20
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-03-20 | 0.2 | Added large-scale topology support section (1000+ nodes), direct execution mode, batch parallel execution, rule engine optimizations |
 | 2026-03-20 | 0.1 | Initial roadmap document created |
 
 ---
