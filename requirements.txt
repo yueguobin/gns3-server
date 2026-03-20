@@ -1,3 +1,4 @@
+# GNS3 Server Core Dependencies
 uvicorn==0.41.0
 pydantic==2.12.5
 fastapi==0.135.1
@@ -22,3 +23,20 @@ watchdog==6.0.0
 zstandard==0.25.0
 platformdirs>=2.4.0,<3  # platformdirs >=3 conflicts when building Debian packages
 truststore>=0.10.4; python_version >= '3.10'
+
+# Shared dependencies (also used by AI Copilot)
+typing-extensions>=4.15.0
+requests>=2.32.5
+urllib3>=2.6.2
+
+# ==============================================================================
+# AI Copilot Optional Dependencies
+# ==============================================================================
+# AI Copilot features are now optional. Install with:
+#   pip install gns3-server[ai-copilot]
+# Or:
+#   pip install -r ai-requirements.txt
+#
+# This reduces installation size and supports restricted environments where
+# AI dependencies may not be allowed.
+# ==============================================================================

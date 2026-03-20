@@ -61,7 +61,7 @@ def compute_authentication(credentials: Optional[HTTPBasicCredentials] = Depends
 async def ws_compute_authentication(websocket: WebSocket) -> Union[None, WebSocket]:
     """
     """
-    
+
     server_settings = Config.instance().settings.Server
 
     if not server_settings.enable_http_auth:
