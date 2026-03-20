@@ -1706,6 +1706,309 @@ Total: 724-node data center
 
 ---
 
+## 🔥🔥🔥 Link Creation Templates (Batch Topology Connectivity)
+
+### Overview
+
+Just as node and configuration templates enable rapid provisioning, **link creation templates** enable rapid connectivity setup. This completes the template trilogy for complete topology automation.
+
+### Current vs. Template-Based Link Creation
+
+#### Scenario: Create Full-Mesh Network (100 Routers)
+
+**Current Method:**
+```
+AI calls create_link tool 4950 times (100×99/2):
+- Token cost: 30 tokens/link × 4950 = ~150,000 tokens
+- Execution time: 30-40 minutes (serial/limited parallel)
+- Manual port management
+- Error-prone
+```
+
+**Template Method:**
+```
+1. AI generates link template: ~200 tokens
+2. User reviews link patterns and topology preview
+3. Rule engine creates links in parallel batches: 0 tokens
+4. Total: 200 tokens, 2-3 minutes
+```
+
+**Savings:** 99.9% tokens, 95% time
+
+### Link Creation Workflow
+
+```
+User Request: "Create full-mesh connectivity between all routers"
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ Step 1: AI Generates Link Creation Template                 │
+│                                                              │
+│ AI Output:                                                   │
+│ {                                                            │
+│   "link_patterns": [                                        │
+│     {                                                        │
+│       "from_nodes": {"tag": "router"},                      │
+│       "to_nodes": {"tag": "router"},                        │
+│       "strategy": "full_mesh",                              │
+│       "port_allocation": "round_robin"                       │
+│     }                                                       │
+│   ],                                                         │
+│   "total_links": 4950                                       │
+│ }                                                            │
+└─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 🔵 HITL Checkpoint: Link Template Review                    │
+│                                                              │
+│ User sees:                                                  │
+│ • Total links: 4,950                                         │
+│ • Topology type: Full Mesh                                  │
+│ • Port allocation strategy: Round-robin                     │
+│ • Topology preview (visual graph)                            │
+│ • Port utilization estimates                                 │
+│                                                              │
+│ Sample links (first 10):                                     │
+│ • R1:Gi0/0 → R2:Gi0/0                                       │
+│ • R1:Gi0/1 → R3:Gi0/0                                       │
+│ • ...                                                        │
+│                                                              │
+│ Actions: [⚡ Batch Create]  [👁️ Detailed Preview]  [✏️ Modify] │
+└─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ Step 2: Detailed Preview (Optional)                          │
+│                                                              │
+│ • Port assignment per node                                   │
+│ • Bandwidth calculations                                     │
+│ • Redundancy analysis                                        │
+│ • Link naming scheme                                         │
+│                                                              │
+│ [⚡ Confirm Create All]  [🔧 Adjust Ports]  [⬅️ Back]        │
+└─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│ Step 3: Parallel Batch Link Creation (0 tokens)             │
+│                                                              │
+│ Process:                                                     │
+│ - Validate port availability                                  │
+│ - Allocate ports using strategy                             │
+│ - Create links in parallel batches (50-100 concurrent)       │
+│ - Handle conflicts automatically                              │
+│ - Real-time progress streaming                               │
+│                                                              │
+│ Progress:                                                    │
+│ Batch 1/50: Creating 99 links...                            │
+│ Batch 2/50: Creating 99 links...                            │
+│ ...                                                          │
+│ Complete: 4,950/4,950 links created successfully              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Link Template Schema (Simplified)
+
+```python
+class LinkCreationTemplate(BaseModel):
+    """Template for batch link creation."""
+
+    # Link patterns
+    link_patterns: List[LinkPattern]
+
+    # Port allocation strategy
+    port_allocation: PortAllocationStrategy
+
+
+class LinkPattern(BaseModel):
+    """Pattern for creating links between node groups."""
+
+    from_nodes: NodeSelector  # Source nodes
+    to_nodes: NodeSelector    # Destination nodes
+
+    strategy: Literal[
+        "one_to_one",        # 1:1 pairing
+        "one_to_many",       # Star topology
+        "many_to_many",      # Full mesh
+        "sequential",        # Linear chain
+        "ring"              # Ring topology
+    ]
+
+    port_allocation: PortAllocationStrategy
+
+
+class NodeSelector(BaseModel):
+    """Select nodes for linking."""
+
+    selector_type: Literal["group", "name_pattern", "tag", "all"]
+    group_name: Optional[str]
+    name_pattern: Optional[str]  # "R*", "Core-*"
+    tag: Optional[str]
+
+
+class PortAllocationStrategy(BaseModel):
+    """How to allocate ports for links."""
+
+    strategy: Literal[
+        "round_robin",       # Distribute evenly
+        "sequential",        # Use in order
+        "optimized",         # Smart allocation
+        "auto"               # Automatic selection
+    ]
+
+    on_conflict: Literal[
+        "skip",              # Skip if port unavailable
+        "use_next",          # Use next available port
+        "fail"               # Fail on conflict
+    ] = "use_next"
+```
+
+### Common Topology Patterns
+
+The system includes pre-built topology patterns:
+
+#### 1. Spine-Leaf (Data Center)
+
+```
+Pattern: Full mesh between spine and leaf layers
+
+Example: 4 Spine × 48 Leaf
+- Links: 4 × 48 = 192 links
+- Each spine: 48 downlinks
+- Each leaf: 4 uplinks
+```
+
+#### 2. Three-Tier Hierarchical
+
+```
+Core ↔ Aggregation ↔ Access
+
+Example: 2 Core × 10 Agg × 100 Access
+- Core-Agg: Full mesh (2×10 = 20 links)
+- Agg-Access: Paired (10×10 = 100 links)
+- Total: 120 links
+```
+
+#### 3. Ring Topology
+
+```
+Sequential connection with wrap-around
+
+Example: 10 routers in ring
+- Links: 10 (each node connects to 2 neighbors)
+- Pattern: R1→R2→R3→...→R10→R1
+```
+
+#### 4. Full Mesh
+
+```
+All nodes connected to all nodes
+
+Example: 10 routers
+- Links: 45 (10×9/2)
+- Every node connects to every other node
+```
+
+#### 5. Star Topology
+
+```
+Center node connects to all edge nodes
+
+Example: 1 Core + 20 Edge
+- Links: 20
+- Center degree: 20
+- Edge degree: 1
+```
+
+### Performance Benchmarks
+
+#### Scenario: Spine-Leaf Data Center (8 Spine × 100 Leaf)
+
+| Metric | Current Method | Template Method |
+|--------|---------------|-----------------|
+| **Token Consumption** | 30,000 | **200** |
+| **Execution Time** | 15-20 min | **2-3 min** |
+| **Links Created** | Manual | **Auto (800 links)** |
+| **Port Management** | Manual | **Auto (round-robin)** |
+
+#### Scenario: Full Mesh (100 Routers)
+
+| Metric | Current Method | Template Method |
+|--------|---------------|-----------------|
+| **Token Consumption** | 150,000 | **200** |
+| **Execution Time** | 30-40 min | **2-3 min** |
+| **Links Created** | 4,950 | **4,950** |
+| **Error Rate** | High (manual) | **Low (validated)** |
+
+#### Scenario: Large-Scale Data Center
+
+**Topology:**
+- 8 Spine routers
+- 100 Leaf switches (48-port each)
+- 2000 Servers
+- Redundant connections
+
+**Link Creation:**
+- Spine-Leaf: 8 × 100 = 800 links
+- Leaf-Server: 2000 × 2 = 4000 links
+- **Total: 4,800 links**
+
+| Metric | Current Method | Template Method |
+|--------|---------------|-----------------|
+| **Token Consumption** | ~150,000 | **300** |
+| **Execution Time** | 45-60 min | **5-8 min** |
+| **Savings** | - | **99.8% tokens, 90% time** |
+
+### Intelligent Port Allocation
+
+The system includes smart port allocation algorithms:
+
+```python
+# Example: Optimized allocation for multi-adapter switches
+
+Strategy: "optimized"
+
+Considerations:
+- Port speed matching (10G ports for spine-leaf, 1G for servers)
+- Physical adapter separation (redundancy across modules)
+- Load balancing (distribute connections evenly)
+- Future expansion planning (reserve ports)
+
+Result:
+- Spine-Leaf: Use 10G ports on adapter 0-3
+- Leaf-Server: Use 1G ports on adapter 4-7
+- Redundant paths: Use different physical adapters
+```
+
+### Combined Workflow: Complete Topology Provisioning
+
+```
+Step 1: Node Creation Template
+  - 2108 nodes created in ~4 minutes
+  - Token cost: ~200
+
+Step 2: Link Creation Template
+  - 20,780 links created in ~6 minutes
+  - Token cost: ~300
+
+Step 3: Configuration Template
+  - 2108 devices configured in ~5 minutes
+  - Token cost: ~200
+
+TOTAL: Large Data Center
+  - 2,108 nodes + 20,780 links
+  - Created, linked, and configured in ~15 minutes
+  - Token cost: ~700 (vs ~250,000 with AI-only)
+  - 99.7% token savings
+```
+
+### Use Cases
+
+1. **Data Center Fabric:** Spine-Leaf with thousands of links
+2. **ISP Backbone:** Full-mesh core routers
+3. **Campus Network:** Three-tier hierarchical
+4. **Ring Topology:** Metropolitan area networks
+5. **Research Networks:** Custom experimental topologies
+
+---
+
 ## Implementation Phases
 
 ### Phase 1: Core MVP (Minimum Viable Product)
@@ -1766,6 +2069,26 @@ Total: 724-node data center
 - **Auto-positioning (grid, spine-leaf, star, mesh)**
 - **Auto-linking (mesh, paired, linear)**
 - Progress streaming for large batches
+
+### Phase 2.75: Link Creation Templates
+
+**Status:** 💡 Proposed
+**Estimated Effort:** 2-3 days
+
+**Tasks:**
+1. 🔥🔥🔥 Implement `GenerateLinkTemplate` tool
+2. 🔥🔥🔥 Implement `ExecuteBatchLinkCreation` tool
+3. 🔥🔥🔥 Create `LinkCreationTemplate` schema
+4. 🔥🔥🔥 Implement topology pattern library (Spine-Leaf, Ring, Mesh, Star, etc.)
+5. 🔥🔥🔥 Implement intelligent port allocation algorithms
+6. Port availability validation and conflict handling
+
+**Deliverables:**
+- **Batch link creation with 0 token cost**
+- **5+ pre-built topology patterns**
+- **Smart port allocation (round-robin, optimized)**
+- **Port conflict detection and auto-resolution**
+- Progress streaming for thousands of links
 
 ### Phase 3: Template Library & Large-Scale Support
 
