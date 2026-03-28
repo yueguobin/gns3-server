@@ -16,7 +16,16 @@ Integrate Wireshark packet capture functionality into GNS3 Web UI, allowing user
 │   └─────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              │ HTTPS / WebSocket
+                              │ WebSocket (ws://gns3-server:3080)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       GNS3 Server (Port 3080)                     │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  WebSocket Proxy                                          │   │
+│  │  ws://gns3-server:3080/v3/links/{link_id}/capture/wireshark │
+│  └──────────────────────────────────────────────────────────┘   │
+│                              │ WebSocket
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              Wireshark Container (Persistent)                    │
@@ -43,7 +52,7 @@ Integrate Wireshark packet capture functionality into GNS3 Web UI, allowing user
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              │ HTTPS + JWT
+                              │ HTTP + JWT
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                        GNS3 Server                               │
@@ -63,14 +72,15 @@ Integrate Wireshark packet capture functionality into GNS3 Web UI, allowing user
 
 - **No independent wireshark API** - Reuse existing capture API endpoints
 - **Ansible-driven session management** - Wireshark session creation/cleanup handled by Ansible playbooks
-- **HTTP-based data delivery** - Wireshark fetches pcap stream via HTTP, no shared filesystem required
+- **Browser only connects to GNS3 Server** - WebSocket proxy handles forwarding to Wireshark container
+- **HTTP-based data delivery** - Wireshark fetches pcap stream via HTTP using user's JWT token
 
 ## Data Flow
 
 ```
 1. User clicks "Start Capture" in GNS3 Web UI (with Wireshark enabled)
    │
-   └─▶ POST /v3/links/{link_id}/capture
+   └─▶ POST /v3/links/{link_id}/capture/start
        Header: Authorization: Bearer {user_jwt}
        Body: { "wireshark": true }
        │
@@ -80,22 +90,31 @@ Integrate Wireshark packet capture functionality into GNS3 Web UI, allowing user
    b. Triggers Ansible playbook to create wireshark session:
       - Create Linux user link-{uuid}
       - Start xpra session :{display}
-      - Start wireshark consuming capture/stream API
+      - Start wireshark consuming capture/stream API with user_token
        │
        ▼
-   Response:
+   Response (immediate):
    {
      "link_id": "xxx",
-     "wireshark_url": "http://wireshark-container:10000/#session=xxx",
+     "capturing": true,
+     "wireshark_ws": "ws://gns3-server:3080/v3/links/{link_id}/capture/wireshark",
      "display": ":10"
    }
        │
        ▼
-2. Frontend opens noVNC iframe with Wireshark GUI
+2. Ansible executes in background (5-10 seconds)
+   - Creates user, starts xpra, launches wireshark
+   - Wireshark connects to capture/stream API using user's JWT token
 
-3. User clicks "Stop Capture" in GNS3 Web UI
+3. Frontend receives response, waits for ready, then connects:
+   ws://gns3-server:3080/v3/links/{link_id}/capture/wireshark
    │
-   └─▶ DELETE /v3/links/{link_id}/capture
+   └─▶ GNS3 Server WebSocket proxy ──▶ Wireshark Container xpra :10000
+
+4. User clicks "Stop Capture"
+   │
+   └─▶ POST /v3/links/{link_id}/capture/stop
+       Body: { "wireshark": true }
        │
        ▼
    GNS3 Server:
@@ -108,7 +127,7 @@ Integrate Wireshark packet capture functionality into GNS3 Web UI, allowing user
 
 ## Capture Stream Consumption
 
-Wireshark fetches pcap data directly from GNS3 Server's stream API:
+Wireshark fetches pcap data directly from GNS3 Server's stream API using the user's JWT token:
 
 ```bash
 # Inside Wireshark container, executed as link-{uuid} user
@@ -136,7 +155,7 @@ Wireshark GUI renders packets
 |-----------|-------------|
 | `curl -N` | `--no-buffer` for real-time streaming |
 | `<(...)` | Process substitution, creates FIFO fd for wireshark `-i` |
-| `Authorization` | User JWT token for authentication |
+| `Authorization` | User JWT token passed to Ansible for wireshark access |
 | `capture/stream` API | Must return streaming response |
 
 ## API (Extended Existing Capture API)
@@ -144,94 +163,181 @@ Wireshark GUI renders packets
 ### Start Capture with Wireshark
 
 ```http
-POST /v3/links/{link_id}/capture
+POST /v3/links/{link_id}/capture/start
 
 Request:
 {
   "wireshark": true   // Optional, enable wireshark view
 }
 
-Response (existing fields + new):
+Response (Link object + new fields):
 {
   "link_id": "string",
   "capturing": true,
-  "wireshark_url": "http://wireshark-container:10000/#session=xxx",  // NEW
-  "display": ":10"                                                       // NEW
+  "wireshark_ws": "ws://gns3-server:3080/v3/links/{link_id}/capture/wireshark",
+  "display": ":10"
 }
 ```
 
 ### Stop Capture
 
 ```http
-DELETE /v3/links/{link_id}/capture
+POST /v3/links/{link_id}/capture/stop
+
+Request:
+{
+  "wireshark": true   // Optional, cleanup wireshark session
+}
 
 Response: 204 No Content
 ```
 
-### Get Wireshark Access Info
+### Wireshark WebSocket
 
 ```http
-GET /v3/links/{link_id}/wireshark
+ws://gns3-server:3080/v3/links/{link_id}/capture/wireshark
 
-Response:
-{
-  "wireshark_url": "http://wireshark-container:10000/#session=xxx",
-  "display": ":10",
-  "session_id": "xxx"
-}
+- Server validates JWT token
+- Server proxies WebSocket to Wireshark container xpra :10000
 ```
 
-## Ansible Playbook Overview
+## Ansible Playbooks
 
-### Create Wireshark Session Playbook
+### Playbook 1: Create Wireshark Session
 
-**Trigger:** `POST /v3/links/{link_id}/capture` with `wireshark: true`
+**File:** `wireshark_create.yml`
 
-**Actions:**
+**Variables passed to Ansible:**
+
+| Variable | Description |
+|----------|-------------|
+| `link_id` | Link UUID |
+| `user_token` | User's JWT token for capture/stream access |
+| `display` | Assigned X display number (e.g., :10) |
 
 ```yaml
-- name: Create Linux user for link
-  user:
-    name: "link-{{ link_id }}"
-    shell: /usr/sbin/nologin
-    create_home: no
-    state: present
+---
+- name: Create Wireshark Session
+  hosts: wireshark_container
+  gather_facts: no
+  vars:
+    gns3_server: "http://gns3-server:3080"
+  tasks:
+    - name: Create Linux user for link
+      user:
+        name: "link-{{ link_id }}"
+        shell: /usr/sbin/nologin
+        create_home: no
+        state: present
 
-- name: Generate xpra password
-  shell: xpra passwd link-{{ link_id }} <<< "password"
+    - name: Create cgroup for resource limits
+      shell: |
+        mkdir -p /sys/fs/cgroup/memory/link-{{ link_id }}
+        mkdir -p /sys/fs/cgroup/pids/link-{{ link_id }}
+        echo 2147483648 > /sys/fs/cgroup/memory/link-{{ link_id }}/memory.limit_in_bytes
+        echo 50 > /sys/fs/cgroup/pids/link-{{ link_id }}/pids.max
 
-- name: Start xpra session
-  shell: su - link-{{ link_id }} -c "DISPLAY=:{{ display }} xpra start :{{ display }} --html=on --bind-tcp=0.0.0.0:10000"
+    - name: Start xpra session
+      shell: >
+        su - link-{{ link_id }} -c "DISPLAY={{ display }} xpra start {{ display }}
+          --html=on --bind-tcp=0.0.0.0:10000 --dpi=96"
 
-- name: Start wireshark (consuming capture stream)
-  shell: >
-    su - link-{{ link_id }} -c "DISPLAY=:{{ display }} wireshark
-      -i <(curl -N -H 'Authorization: Bearer {{ user_token }}'
-        http://gns3-server:3080/v3/links/{{ link_id }}/capture/stream)"
+    - name: Wait for xpra to be ready
+      wait_for:
+        port: 10000
+        timeout: 10
 
-- name: Apply cgroups limits
-  shell: |
-    echo 2147483648 > /sys/fs/cgroup/memory/link-{{ link_id }}/memory.limit_in_bytes
-    echo 50 > /sys/fs/cgroup/pids/link-{{ link_id }}/pids.max
+    - name: Start wireshark (consuming capture stream with user JWT)
+      shell: >
+        su - link-{{ link_id }} -c "DISPLAY={{ display }} wireshark
+          -i <(curl -N -H 'Authorization: Bearer {{ user_token }}'
+            {{ gns3_server }}/v3/links/{{ link_id }}/capture/stream) &"
 ```
 
-### Cleanup Wireshark Session Playbook
+### Playbook 2: Cleanup Wireshark Session
 
-**Trigger:** `DELETE /v3/links/{link_id}/capture`
-
-**Actions:**
+**File:** `wireshark_cleanup.yml`
 
 ```yaml
-- name: Stop wireshark process
-  shell: pkill -u link-{{ link_id }} wireshark
+---
+- name: Cleanup Wireshark Session
+  hosts: wireshark_container
+  gather_facts: no
+  tasks:
+    - name: Stop wireshark process
+      shell: pkill -9 -u "link-{{ link_id }}" wireshark || true
 
-- name: Stop xpra session
-  shell: su - link-{{ link_id }} -c "DISPLAY=:{{ display }} xpra stop :{{ display }}"
+    - name: Stop xpra session
+      shell: |
+        su - link-{{ link_id }} -c "DISPLAY={{ display }} xpra stop {{ display }}" || true
 
-- name: Remove Linux user
-  user:
-    name: "link-{{ link_id }}"
-    state: absent
+    - name: Cleanup cgroups
+      shell: |
+        rmdir /sys/fs/cgroup/memory/link-{{ link_id }} 2>/dev/null || true
+        rmdir /sys/fs/cgroup/pids/link-{{ link_id }} 2>/dev/null || true
+
+    - name: Remove Linux user
+      user:
+        name: "link-{{ link_id }}"
+        state: absent
+```
+
+### Playbook 3: Check Session Status
+
+**File:** `wireshark_status.yml`
+
+```yaml
+---
+- name: Check Wireshark Session Status
+  hosts: wireshark_container
+  gather_facts: no
+  tasks:
+    - name: Check if user exists
+      shell: id "link-{{ link_id }}" 2>/dev/null && echo "exists" || echo "not_found"
+      register: user_check
+
+    - name: Check if wireshark is running
+      shell: ps aux | grep -v grep | grep "wireshark" | grep "link-{{ link_id }}" || true
+      register: wireshark_check
+
+    - name: Set session status
+      set_fact:
+        session_status:
+          link_id: "{{ link_id }}"
+          display: "{{ display }}"
+          user_exists: "{{ 'exists' in user_check.stdout }}"
+          wireshark_running: "{{ wireshark_check.stdout != '' }}"
+          status: "{{ 'running' if (user_check.stdout.find('exists') != -1 and wireshark_check.stdout != '') else 'stopped' }}"
+```
+
+### Inventory Example
+
+```ini
+[wireshark_container]
+wireshark-01 ansible_host=192.168.1.100 ansible_user=root
+
+[wireshark_container:vars]
+gns3_server=http://192.168.1.50:3080
+```
+
+### Execution Examples
+
+```bash
+# Create session
+ansible-playbook wireshark_create.yml \
+  -e "link_id=76ead2b0-fd00-407c-b5db-abc83445886e" \
+  -e "user_token=eyJhbGc..." \
+  -e "display=:10"
+
+# Cleanup session
+ansible-playbook wireshark_cleanup.yml \
+  -e "link_id=76ead2b0-fd00-407c-b5db-abc83445886e" \
+  -e "display=:10"
+
+# Check status
+ansible-playbook wireshark_status.yml \
+  -e "link_id=76ead2b0-fd00-407c-b5db-abc83445886e" \
+  -e "display=:10"
 ```
 
 ## Session Lifecycle
@@ -239,6 +345,8 @@ Response:
 | Event | Action |
 |-------|--------|
 | Start capture with wireshark | Ansible creates user, starts xpra + wireshark |
+| Ansible completes (5-10s later) | Wireshark ready, frontend can connect WebSocket |
+| User connects noVNC | WebSocket proxy forwards to container xpra |
 | User disconnects noVNC | Session keeps running, capture continues |
 | Stop capture | Ansible kills wireshark, stops xpra, removes user |
 | Container restart | Sessions lost, user must restart capture |
@@ -247,21 +355,23 @@ Response:
 
 | Component | Role |
 |-----------|------|
-| GNS3 Server | Capture data provider, saves pcap to disk |
+| GNS3 Server | Capture data provider, WebSocket proxy |
 | `capture/stream` API | Streams pcap data via HTTP to authorized consumers |
+| WebSocket Proxy | Forwards browser connection to Wireshark container |
 | Ansible | Handles wireshark session create/cleanup on container |
 | Wireshark Container | Hosts multiple Wireshark instances via xpra |
 | xpra | Manages multiple X sessions, provides WebSocket/VNC |
-| noVNC | Bridges xpra X session to browser |
+| noVNC | Bridges xpra X session to browser (via proxy) |
 | Linux User (per link_id) | Isolates processes, files, resources per session |
 | cgroups | Enforces resource limits per user |
 
 ## Security
 
-- User JWT token is used by Wireshark container to access `capture/stream`
+- User JWT token is passed to Ansible for wireshark to access `capture/stream`
 - Each link_id has isolated Linux user with `nologin` shell
+- Browser only connects to GNS3 Server WebSocket, never directly to container
 - cgroups prevent resource abuse
-- xpra uses password-based authentication per session
+- xpra uses session-based authentication
 
 ## Capture Storage
 
@@ -269,3 +379,69 @@ Response:
 - Wireshark consumes real-time stream from `capture/stream` API
 - Users can download full capture file anytime via existing download API
 - Wireshark container does NOT persist capture data (stateless viewer)
+
+## Wireshark Container
+
+### Dockerfile
+
+```dockerfile
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    wireshark \
+    xpra \
+    xvfb \
+    curl \
+    openssh-server \
+    python3 \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# SSH configuration for Ansible access
+RUN mkdir /var/run/sshd
+
+# Expose ports
+EXPOSE 10000 22
+
+CMD service ssh start && \
+    /usr/bin/xpra start --html=on --bind-tcp=0.0.0.0:10000 --daemonize
+```
+
+### Container Components
+
+| Component | Purpose |
+|-----------|---------|
+| wireshark | GUI rendering of pcap stream from GNS3 Server |
+| xpra | Multi-user X session management, WebSocket support |
+| xvfb | Virtual framebuffer for headless X |
+| curl | HTTP client to fetch pcap stream |
+| openssh-server | Ansible remote execution |
+
+### Running the Container
+
+```bash
+docker run -d \
+  --name wireshark-server \
+  --privileged \
+  --memory=8g \
+  -p 10000:10000 \
+  -p 2222:22 \
+  wireshark-server
+```
+
+> **Note:** `--privileged` is required for cgroups and user creation.
+
+### Container Internal Structure
+
+```
+/
+├── home/
+│   └── link-{uuid}/          # Per-session home dirs (created by Ansible)
+├── sys/fs/cgroup/             # cgroups mounts
+└── usr/bin/
+    ├── wireshark
+    ├── xpra
+    └── xvfb-run
+```
