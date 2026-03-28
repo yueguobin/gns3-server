@@ -201,6 +201,66 @@ ws://gns3-server:3080/v3/links/{link_id}/capture/wireshark
 - Server proxies WebSocket to Wireshark container xpra :10000
 ```
 
+### WebSocket Proxy Implementation
+
+GNS3 Server acts as a proxy, forwarding browser WebSocket to Wireshark container:
+
+```
+Browser                              GNS3 Server                        Wireshark Container
+   │                                    │                                    │
+   │ ws://.../v3/links/{id}/wireshark  │                                    │
+   │───────────────────────────────────▶│                                    │
+   │                                    │                                    │
+   │         JWT validated              │                                    │
+   │         Session found              │                                    │
+   │                                    │ ws://container:10000               │
+   │                                    │───────────────────────────────────▶│
+   │                                    │                                    │
+   │◀════════════ Proxy Forward ════════│◀═════════════════════════════════│
+```
+
+**Proxy Logic:**
+
+```python
+class WiresharkWebSocketProxy:
+
+    _sessions = {}  # {link_id: {"display": ":10", "container_url": "ws://container:10000"}}
+
+    async def handle_websocket(self, link_id, websocket):
+        # 1. Validate JWT token
+        token = websocket.headers.get("Authorization", "").replace("Bearer ", "")
+        if not self._validate_token(token, link_id):
+            await websocket.close(4001, "Unauthorized")
+            return
+
+        # 2. Get session info
+        session = self._get_session(link_id)
+        if not session:
+            await websocket.close(4004, "Session not found")
+            return
+
+        # 3. Connect to Wireshark container
+        container_url = f"ws://{CONTAINER_HOST}:10000"
+        async with websockets.connect(container_url) as container_ws:
+            # 4. Bidirectional proxy
+            await asyncio.gather(
+                self._forward(websocket, container_ws),
+                self._forward(container_ws, websocket)
+            )
+
+    def _validate_token(self, token, link_id):
+        # JWT validation + link_id ownership check
+        pass
+```
+
+**FastAPI Route Registration:**
+
+```python
+@router.websocket("/v3/links/{link_id}/capture/wireshark")
+async def wireshark_ws(websocket, link_id: str):
+    await proxy.handle_websocket(link_id, websocket)
+```
+
 ## Ansible Playbooks
 
 ### Playbook 1: Create Wireshark Session
