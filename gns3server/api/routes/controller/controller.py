@@ -24,7 +24,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.routing import Mount
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
-from typing import List
+from typing import List, Dict
 
 from gns3server.config import Config
 from gns3server.controller import Controller
@@ -162,19 +162,65 @@ async def update_iou_license(iou_license: schemas.IOULicense) -> schemas.IOULice
 
 
 @router.get("/statistics", dependencies=[Depends(get_current_active_user)])
-async def statistics() -> List[dict]:
+async def statistics() -> dict:
     """
-    Return server statistics.
+    Return server statistics including compute resources, projects, and nodes.
     """
 
+    controller = Controller.instance()
+
+    # Compute statistics (existing behavior)
     compute_statistics = []
-    for compute in list(Controller.instance().computes.values()):
+    for compute in list(controller.computes.values()):
         try:
             r = await compute.get("/statistics")
             compute_statistics.append({"compute_id": compute.id, "compute_name": compute.name, "statistics": r.json})
         except ControllerError as e:
             log.error(f"Could not retrieve statistics on compute {compute.name}: {e}")
-    return compute_statistics
+
+    # Project statistics
+    projects = list(controller.projects.values())
+    project_stats = {
+        "total": len(projects),
+        "opened": sum(1 for p in projects if p.status == "opened"),
+        "closed": sum(1 for p in projects if p.status == "closed"),
+    }
+
+    # Node statistics
+    all_nodes = []
+    for project in projects:
+        all_nodes.extend(project.nodes.values())
+
+    node_by_type = {}
+    node_by_status = {}
+    for node in all_nodes:
+        node_by_type[node.node_type] = node_by_type.get(node.node_type, 0) + 1
+        node_by_status[node.status] = node_by_status.get(node.status, 0) + 1
+
+    node_stats = {
+        "total": len(all_nodes),
+        "by_type": node_by_type,
+        "by_status": node_by_status,
+    }
+
+    # Link statistics
+    all_links = []
+    for project in projects:
+        all_links.extend(project.links.values())
+
+    link_capturing = sum(1 for link in all_links if getattr(link, "capturing", False))
+
+    link_stats = {
+        "total": len(all_links),
+        "capturing": link_capturing,
+    }
+
+    return {
+        "computes": compute_statistics,
+        "projects": project_stats,
+        "nodes": node_stats,
+        "links": link_stats,
+    }
 
 
 @router.get("/notifications", dependencies=[Depends(get_current_active_user)])
