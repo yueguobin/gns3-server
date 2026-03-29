@@ -141,3 +141,36 @@ This API is designed for monitoring dashboards that need:
 |--------|-------------|
 | 401 | Unauthorized - invalid or missing session |
 | 500 | Internal server error |
+
+### Future Optimizations
+
+#### Per-Compose Node Statistics
+
+Currently `nodes` are aggregated globally. Future enhancement could add per-compute breakdown:
+
+```json
+"nodes": {
+  "total": 42,
+  "by_compute": {
+    "local": {
+      "total": 30,
+      "open_project_nodes": 20,
+      "closed_project_nodes": 10,
+      "by_type": { "qemu": 20, "docker": 10 }
+    },
+    "remote-server-1": {
+      "total": 12,
+      "open_project_nodes": 10,
+      "closed_project_nodes": 2,
+      "by_type": { "docker": 12 }
+    }
+  },
+  "by_type": { "qemu": 20, "docker": 22 },
+  "open_project_nodes": 30,
+  "closed_project_nodes": 12,
+  "by_type": { "qemu": 20, "docker": 22 },
+  "by_status": { "started": 25, "stopped": 12, "suspended": 5 }
+}
+```
+
+This requires tracking which compute each node runs on (Node._compute).
