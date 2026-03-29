@@ -194,8 +194,15 @@ async def statistics() -> dict:
     node_by_type = {}
     node_by_status = {}
     for node in all_nodes:
-        node_by_type[node.node_type] = node_by_type.get(node.node_type, 0) + 1
-        node_by_status[node.status] = node_by_status.get(node.status, 0) + 1
+        # Handle both Node objects (open project) and dicts (closed project)
+        if isinstance(node, dict):
+            node_type = node.get("node_type", "unknown")
+            node_status = node.get("status", "unknown")
+        else:
+            node_type = getattr(node, "node_type", "unknown")
+            node_status = getattr(node, "status", "unknown")
+        node_by_type[node_type] = node_by_type.get(node_type, 0) + 1
+        node_by_status[node_status] = node_by_status.get(node_status, 0) + 1
 
     node_stats = {
         "total": len(all_nodes),
@@ -208,7 +215,14 @@ async def statistics() -> dict:
     for project in projects:
         all_links.extend(project.links.values())
 
-    link_capturing = sum(1 for link in all_links if getattr(link, "capturing", False))
+    def is_capturing(link):
+        if hasattr(link, "capturing"):
+            return link.capturing
+        if isinstance(link, dict):
+            return link.get("capturing", False)
+        return False
+
+    link_capturing = sum(1 for link in all_links if is_capturing(link))
 
     link_stats = {
         "total": len(all_links),
