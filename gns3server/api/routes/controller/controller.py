@@ -186,26 +186,38 @@ async def statistics() -> dict:
         "closed": sum(1 for p in projects if p.status == "closed"),
     }
 
-    # Node statistics
-    all_nodes = []
-    for project in projects:
-        all_nodes.extend(project.nodes.values())
-
+    # Node statistics - distinguish open vs closed project nodes
+    open_project_nodes = []
+    closed_project_nodes = []
     node_by_type = {}
     node_by_status = {}
-    for node in all_nodes:
-        # Handle both Node objects (open project) and dicts (closed project)
-        if isinstance(node, dict):
-            node_type = node.get("node_type", "unknown")
-            node_status = node.get("status", "unknown")
+
+    for project in projects:
+        nodes = project.nodes.values()
+        if project.status == "closed":
+            closed_project_nodes.extend(nodes)
         else:
-            node_type = getattr(node, "node_type", "unknown")
-            node_status = getattr(node, "status", "unknown")
+            open_project_nodes.extend(nodes)
+
+    # Open project nodes have real status
+    for node in open_project_nodes:
+        node_type = getattr(node, "node_type", "unknown")
+        node_status = getattr(node, "status", "unknown")
         node_by_type[node_type] = node_by_type.get(node_type, 0) + 1
         node_by_status[node_status] = node_by_status.get(node_status, 0) + 1
 
+    # Closed project nodes don't have status, count them separately
+    for node in closed_project_nodes:
+        if isinstance(node, dict):
+            node_type = node.get("node_type", "unknown")
+        else:
+            node_type = getattr(node, "node_type", "unknown")
+        node_by_type[node_type] = node_by_type.get(node_type, 0) + 1
+
     node_stats = {
-        "total": len(all_nodes),
+        "total": len(open_project_nodes) + len(closed_project_nodes),
+        "open_project_nodes": len(open_project_nodes),
+        "closed_project_nodes": len(closed_project_nodes),
         "by_type": node_by_type,
         "by_status": node_by_status,
     }
