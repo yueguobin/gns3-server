@@ -51,7 +51,16 @@ class Docker(BaseManager):
     def __init__(self):
 
         super().__init__()
-        self._server_url = "/var/run/docker.sock"
+        docker_host = os.environ.get("DOCKER_HOST")
+        if docker_host:
+            # Support DOCKER_HOST (Docker standard env var), e.g. unix:///run/user/1000/docker.sock
+            if docker_host.startswith("unix://"):
+                self._server_url = docker_host[7:]  # Strip unix:// prefix to get socket path
+            else:
+                log.warning(f"DOCKER_HOST={docker_host} is not a Unix socket URL (unix://), falling back to default")
+                self._server_url = "/var/run/docker.sock"
+        else:
+            self._server_url = "/var/run/docker.sock"
         self._connected = False
         # Allow locking during ubridge operations
         self.ubridge_lock = asyncio.Lock()
