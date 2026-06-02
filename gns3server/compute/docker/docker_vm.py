@@ -469,11 +469,10 @@ class DockerVM(BaseNode):
             "StdinOnce": False,
             "HostConfig": {
                 "CapAdd": ["ALL"],
-                "Privileged": True,
+                "Privileged": False,
                 "Mounts": self._mount_binds(image_infos),
                 "Memory": self._memory * (1024 * 1024),  # convert memory to bytes
-                "NanoCpus": int(self._cpus * 1e9),  # convert cpus to nano cpus
-                "UsernsMode": "host"
+                "NanoCpus": int(self._cpus * 1e9)  # convert cpus to nano cpus
             },
             "Volumes": {},
             "Env": ["container=docker"],  # Systemd compliant: https://github.com/GNS3/gns3-server/issues/573
@@ -738,45 +737,8 @@ class DockerVM(BaseNode):
         log.debug(f"Docker container '{self.name}' started listening for auxiliary {self.aux_type} on {self.aux}")
 
     async def _fix_permissions(self):
-        """
-        Because docker run as root we need to fix permission and ownership to allow user to interact
-        with it from their filesystem and do operation like file delete
-        """
-
-        state = await self._get_container_state()
-        log.info(f"Docker container '{self._name}' fix ownership, state = {state}")
-        if state == "stopped" or state == "exited":
-            # We need to restart it to fix permissions
-            await self.manager.query("POST", f"containers/{self._cid}/start")
-
-        for volume in self._volumes:
-            log.debug(
-                "Docker container '{name}' [{image}] fix ownership on {path}".format(
-                    name=self._name, image=self._image, path=volume
-                )
-            )
-
-            try:
-                process = await asyncio.subprocess.create_subprocess_exec(
-                    "docker",
-                    "exec",
-                    self._cid,
-                    "/gns3/bin/busybox",
-                    "sh",
-                    "-c",
-                    "("
-                    '/gns3/bin/busybox find "{path}" -depth -print0'
-                    " | /gns3/bin/busybox xargs -0 /gns3/bin/busybox stat -c '%a:%u:%g:%n' > \"{path}/.gns3_perms\""
-                    ")"
-                    ' && /gns3/bin/busybox chmod -R u+rX "{path}"'
-                    ' && /gns3/bin/busybox chown {uid}:{gid} -R "{path}"'.format(
-                        uid=os.getuid(), gid=os.getgid(), path=volume
-                    ),
-                )
-            except OSError as e:
-                raise DockerError(f"Could not fix permissions for {volume}: {e}")
-            await process.wait()
-            self._permissions_fixed = True
+        """Rootless 模式下不需要权限修复"""
+        self._permissions_fixed = True
 
     async def _start_vnc_process(self, restart=False):
         """
