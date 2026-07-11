@@ -32,6 +32,7 @@ import struct
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gns3server.db.repositories.users import UsersRepository
+from gns3server.schemas.controller.users import extract_totp_code
 
 log = logging.getLogger(__name__)
 
@@ -191,9 +192,36 @@ async def _do_greeting(reader, writer):
 # RFC 1929 username / password authentication
 # ---------------------------------------------------------------------------
 
+async def _authenticate(app, username, password):
+    """
+    Resolve SOCKS5 credentials, branching on the reserved 'totp:' prefix.
+
+    A password of the form ``totp:<code>`` is verified as a TOTP code via
+    :meth:`UsersRepository.authenticate_user_totp`; any other value is treated
+    as a static password via :meth:`UsersRepository.authenticate_user`.
+
+    :returns: ``(user, method)`` where method is ``"totp"`` or ``"password"``;
+              on failure ``(None, None)`` is returned.
+    """
+
+    code = extract_totp_code(password)
+    async with AsyncSession(app.state._db_engine, expire_on_commit=False) as db_session:
+        users_repo = UsersRepository(db_session)
+        if code is not None:
+            user = await users_repo.authenticate_user_totp(username, code)
+            method = "totp"
+        else:
+            user = await users_repo.authenticate_user(username, password)
+            method = "password"
+    return user, (method if user is not None else None)
+
+
 async def _do_auth(reader, writer, app):
     """
-    Authenticate the client using GNS3 user credentials.
+    Authenticate the client using GNS3 credentials.
+
+    The password field carries either a static password or, prefixed with
+    ``totp:``, a current TOTP code — both are accepted (see _authenticate).
 
     RFC 1929 sub-negotiation:
       Client: [0x01, ulen, username, plen, password]
@@ -218,10 +246,7 @@ async def _do_auth(reader, writer, app):
     password_bytes = await reader.readexactly(plen)
     password = password_bytes.decode("utf-8", errors="replace")
 
-    async with AsyncSession(app.state._db_engine, expire_on_commit=False) as db_session:
-        users_repo = UsersRepository(db_session)
-        user = await users_repo.authenticate_user(username, password)
-
+    user, method = await _authenticate(app, username, password)
     if user is None:
         log.warning(f"SOCKS5 authentication failed for user '{username}'")
         writer.write(struct.pack("!BB", 0x01, 0x01))
@@ -229,7 +254,7 @@ async def _do_auth(reader, writer, app):
         writer.close()
         return None
 
-    log.info(f"SOCKS5 user '{username}' authenticated")
+    log.info(f"SOCKS5 user '{username}' authenticated via {method}")
     writer.write(struct.pack("!BB", 0x01, 0x00))
     await writer.drain()
     return username

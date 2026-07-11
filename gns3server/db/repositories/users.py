@@ -26,6 +26,7 @@ from .base import BaseRepository
 import gns3server.db.models as models
 from gns3server import schemas
 from gns3server.services import auth_service
+from gns3server.utils.encryption import encrypt, decrypt, is_encrypted
 
 import logging
 
@@ -162,6 +163,56 @@ class UsersRepository(BaseRepository):
         user.updated_at = updated_at
         await self._db_session.commit()
         return user
+
+    async def authenticate_user_totp(self, username: str, code: str) -> Optional[models.User]:
+        """
+        Authenticate a user via a TOTP code (used by the SOCKS5 proxy).
+
+        Returns None if the user is unknown, has no TOTP secret configured, or
+        the code is wrong. This path never touches hashed_password, so a user
+        whose password was cleared for manual recovery can still authenticate
+        via TOTP as long as a secret is set.
+        """
+
+        user = await self.get_user_by_username(username)
+        if not user or not user.totp_secret:
+            return None
+
+        secret = decrypt(user.totp_secret) if is_encrypted(user.totp_secret) else user.totp_secret
+        if not self._auth_service.verify_totp(secret, code):
+            return None
+
+        # Mirror the last_login bookkeeping of authenticate_user, preserving
+        # updated_at so it is not bumped by the login update.
+        updated_at = user.updated_at
+        user.last_login = func.current_timestamp()
+        await self._db_session.commit()
+        user.updated_at = updated_at
+        await self._db_session.commit()
+        return user
+
+    async def set_totp_secret(self, user_id: UUID, secret: str) -> Optional[models.User]:
+        """
+        Store (and enable) a user's TOTP secret, encrypted at rest.
+        """
+
+        query = update(models.User).\
+            where(models.User.user_id == user_id).\
+            values(totp_secret=encrypt(secret))
+        await self._db_session.execute(query)
+        await self._db_session.commit()
+        return await self.get_user(user_id)
+
+    async def clear_totp_secret(self, user_id: UUID) -> None:
+        """
+        Clear a user's TOTP secret (disables TOTP authentication).
+        """
+
+        query = update(models.User).\
+            where(models.User.user_id == user_id).\
+            values(totp_secret=None)
+        await self._db_session.execute(query)
+        await self._db_session.commit()
 
     async def get_user_memberships(self, user_id: UUID) -> List[models.UserGroup]:
         """

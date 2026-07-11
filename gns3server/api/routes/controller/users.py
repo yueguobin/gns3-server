@@ -179,6 +179,66 @@ async def update_logged_in_user(
     return await users_repo.update_user(current_user.user_id, user_update)
 
 
+@router.post("/me/totp", response_model=schemas.TotpSetupResponse)
+async def setup_totp(
+        request: schemas.TotpPasswordRequest,
+        current_user: schemas.User = Depends(get_current_active_user),
+        users_repo: UsersRepository = Depends(get_repository(UsersRepository)),
+) -> schemas.TotpSetupResponse:
+    """
+    Enable TOTP for the current user.
+
+    Requires the current password to prevent a stolen bearer token from
+    silently enabling 2FA. Returns the new secret and an otpauth:// URI exactly
+    once — the secret is encrypted at rest and never readable again, so the
+    caller must add it to an authenticator app immediately.
+    """
+
+    if not await users_repo.authenticate_user(current_user.username, request.password.get_secret_value()):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect.",
+        )
+
+    secret = auth_service.generate_totp_secret()
+    await users_repo.set_totp_secret(current_user.user_id, secret)
+    return schemas.TotpSetupResponse(
+        secret=secret,
+        provisioning_uri=auth_service.totp_provisioning_uri(secret, current_user.username),
+    )
+
+
+@router.get("/me/totp", response_model=schemas.TotpStatus)
+async def get_totp_status(
+        current_user: schemas.User = Depends(get_current_active_user),
+) -> schemas.TotpStatus:
+    """
+    Report whether TOTP is enabled for the current user.
+    """
+
+    # current_user is the ORM User object at runtime (see get_current_active_user)
+    return schemas.TotpStatus(totp_enabled=bool(current_user.totp_secret))
+
+
+@router.delete("/me/totp", status_code=status.HTTP_204_NO_CONTENT)
+async def disable_totp(
+        request: schemas.TotpPasswordRequest,
+        current_user: schemas.User = Depends(get_current_active_user),
+        users_repo: UsersRepository = Depends(get_repository(UsersRepository)),
+) -> None:
+    """
+    Disable TOTP for the current user (requires the current password).
+    """
+
+    if not await users_repo.authenticate_user(current_user.username, request.password.get_secret_value()):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect.",
+        )
+
+    await users_repo.clear_totp_secret(current_user.user_id)
+
+
 @router.get(
     "",
     response_model=List[schemas.User],

@@ -44,6 +44,7 @@ class User(BaseTable):
     email = Column(String, unique=True, index=True)
     full_name = Column(String)
     hashed_password = Column(String)
+    totp_secret = Column(String)  # Fernet-encrypted TOTP secret; NULL when TOTP is not configured
     last_login = Column(DateTime)
     token_version = Column(Integer, default=0, nullable=False, server_default="0")
     is_active = Column(Boolean, default=True)

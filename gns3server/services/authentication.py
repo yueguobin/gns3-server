@@ -20,6 +20,7 @@ from joserfc.errors import JoseError
 import time
 from datetime import datetime, timedelta, timezone
 import bcrypt
+import pyotp
 
 from typing import Optional
 from fastapi import HTTPException, status
@@ -45,6 +46,34 @@ class AuthService:
     def verify_password(self, password, hashed_password) -> bool:
 
         return bcrypt.checkpw(password=password.encode('utf-8'), hashed_password=hashed_password.encode('utf-8'))
+
+    # Issuer label shown in authenticator apps for GNS3 TOTP secrets
+    TOTP_ISSUER = "GNS3"
+
+    def generate_totp_secret(self) -> str:
+        """
+        Generate a new base32 TOTP secret for a user.
+        """
+
+        return pyotp.random_base32()
+
+    def verify_totp(self, secret: str, code: str) -> bool:
+        """
+        Verify a TOTP code against the secret.
+
+        A valid_window of 1 tolerates +/-30s of clock skew between client and
+        server, which suits lab machines whose clocks are not strictly
+        synchronised.
+        """
+
+        return pyotp.TOTP(secret).verify(code, valid_window=1)
+
+    def totp_provisioning_uri(self, secret: str, username: str) -> str:
+        """
+        Build the otpauth:// URI for adding the secret to an authenticator app.
+        """
+
+        return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=self.TOTP_ISSUER)
 
     def _create_token(self, username, token_version, token_type, expires_in, secret_key=None) -> str:
         """Shared helper to create any kind of signed JWT token."""

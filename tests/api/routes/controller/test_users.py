@@ -30,6 +30,8 @@ from gns3server.services import auth_service
 from gns3server.config import Config
 from gns3server.schemas.controller.users import User
 import gns3server.db.models as models
+from gns3server.utils.encryption import is_encrypted
+import pyotp
 
 pytestmark = pytest.mark.asyncio
 
@@ -705,4 +707,119 @@ class TestSuperAdmin:
         }
         response = await unauthorized_client.post(app.url_path_for("login"), data=login_data)
         assert response.status_code == status.HTTP_200_OK
+
+
+class TestTotpRoutes:
+    """TOTP setup/status/disable endpoints scoped to the current user."""
+
+    async def test_totp_lifecycle(
+            self,
+            app: FastAPI,
+            authorized_client: AsyncClient,
+            test_user: User,
+            db_session: AsyncSession,
+    ) -> None:
+
+        # Initially TOTP is not configured for the user.
+        response = await authorized_client.get(app.url_path_for("get_totp_status"))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == {"totp_enabled": False}
+
+        # The current password is required to enable TOTP.
+        response = await authorized_client.post(
+            app.url_path_for("setup_totp"), json={"password": "wrong_password"}
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+        # Correct password enables TOTP and returns the secret + otpauth URI once.
+        response = await authorized_client.post(
+            app.url_path_for("setup_totp"), json={"password": "user1_password"}
+        )
+        assert response.status_code == status.HTTP_200_OK
+        body = response.json()
+        assert len(body["secret"]) == 32
+        assert body["provisioning_uri"].startswith("otpauth://")
+
+        # Status now reflects an enabled TOTP.
+        response = await authorized_client.get(app.url_path_for("get_totp_status"))
+        assert response.json() == {"totp_enabled": True}
+
+        # The secret is persisted encrypted at rest.
+        user_repo = UsersRepository(db_session)
+        user_in_db = await user_repo.get_user_by_username(test_user.username)
+        assert user_in_db.totp_secret
+        assert is_encrypted(user_in_db.totp_secret) is True
+
+        # The current password is also required to disable TOTP.
+        response = await authorized_client.request(
+            "DELETE", app.url_path_for("disable_totp"), json={"password": "wrong_password"}
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+        # Correct password disables TOTP.
+        response = await authorized_client.request(
+            "DELETE", app.url_path_for("disable_totp"), json={"password": "user1_password"}
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        response = await authorized_client.get(app.url_path_for("get_totp_status"))
+        assert response.json() == {"totp_enabled": False}
+
+    async def test_totp_prefix_rejected_on_password_update(
+            self,
+            app: FastAPI,
+            authorized_client: AsyncClient,
+    ) -> None:
+        # The totp: prefix ban also applies when the logged-in user updates
+        # their own password (covered for all schemas in tests/schemas, this
+        # asserts it at the API layer too).
+        response = await authorized_client.put(
+            app.url_path_for("update_logged_in_user"),
+            json={"password": "totp:123456"},
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+class TestTotpRepository:
+    """authenticate_user_totp edge cases against a real session."""
+
+    async def test_authenticate_user_totp_without_secret_returns_none(
+            self,
+            db_session: AsyncSession,
+    ) -> None:
+
+        repo = UsersRepository(db_session)
+        # the default admin has no TOTP secret configured
+        assert await repo.authenticate_user_totp("admin", "123456") is None
+
+    async def test_authenticate_user_totp_with_valid_code(
+            self,
+            db_session: AsyncSession,
+    ) -> None:
+
+        repo = UsersRepository(db_session)
+        secret = auth_service.generate_totp_secret()
+        admin = await repo.get_user_by_username("admin")
+        await repo.set_totp_secret(admin.user_id, secret)
+
+        code = pyotp.TOTP(secret).now()
+        user = await repo.authenticate_user_totp("admin", code)
+        assert user is not None
+        assert user.username == "admin"
+
+    async def test_authenticate_user_totp_with_expired_code_returns_none(
+            self,
+            db_session: AsyncSession,
+    ) -> None:
+
+        from datetime import datetime, timedelta, timezone
+
+        repo = UsersRepository(db_session)
+        secret = auth_service.generate_totp_secret()
+        admin = await repo.get_user_by_username("admin")
+        await repo.set_totp_secret(admin.user_id, secret)
+
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+        expired_code = pyotp.TOTP(secret).at(old_time)
+        assert await repo.authenticate_user_totp("admin", expired_code) is None
 

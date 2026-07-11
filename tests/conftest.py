@@ -367,6 +367,10 @@ def run_around_tests(monkeypatch, config, port_manager):
     secrets_dir = os.path.join(tmppath, 'secrets')
     os.makedirs(secrets_dir)
     config.settings.Server.secrets_dir = secrets_dir
+    # Initialize Fernet encryption so tests that persist secrets (e.g. TOTP
+    # secrets used by the SOCKS5 proxy) exercise the real encrypt/decrypt path.
+    from gns3server.utils.encryption import init_encryption
+    init_encryption(secrets_dir)
 
     projects_dir = os.path.join(tmppath, 'projects')
     os.makedirs(projects_dir)

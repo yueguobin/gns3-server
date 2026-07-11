@@ -16,10 +16,43 @@
 
 from datetime import datetime
 from typing import Optional
-from pydantic import ConfigDict, EmailStr, BaseModel, Field, SecretStr
+from pydantic import ConfigDict, EmailStr, BaseModel, Field, SecretStr, field_validator
 from uuid import UUID
 
 from .base import DateTimeModelMixin
+
+
+# Reserved prefix used by the SOCKS5 proxy (RFC 1929 password field) to signal
+# that the supplied value is a TOTP code rather than a static password. Static
+# passwords must never start with this prefix (enforced below) so the proxy can
+# branch unambiguously on startswith(TOTP_PASSWORD_PREFIX).
+TOTP_PASSWORD_PREFIX = "totp:"
+
+
+def extract_totp_code(password: str) -> Optional[str]:
+    """
+    If *password* carries the reserved TOTP prefix, return the code that
+    follows it; otherwise return None (the value is treated as a static
+    password).
+    """
+
+    if password.startswith(TOTP_PASSWORD_PREFIX):
+        return password[len(TOTP_PASSWORD_PREFIX):]
+    return None
+
+
+def _reject_totp_prefixed(value: Optional[SecretStr]) -> Optional[SecretStr]:
+    """
+    Reject static passwords that start with the reserved TOTP prefix.
+    Applied to every password-setting schema so the value can never be
+    confused with a TOTP code at the SOCKS5 proxy.
+    """
+
+    if value is not None and value.get_secret_value().startswith(TOTP_PASSWORD_PREFIX):
+        raise ValueError(
+            f"Passwords must not start with the reserved prefix '{TOTP_PASSWORD_PREFIX}'"
+        )
+    return value
 
 
 class UserBase(BaseModel):
@@ -41,6 +74,11 @@ class UserCreate(UserBase):
     username: str = Field(..., min_length=3, pattern="[a-zA-Z0-9_-]+$")
     password: SecretStr = Field(..., min_length=8, max_length=100)
 
+    @field_validator("password")
+    @classmethod
+    def _ban_totp_prefix(cls, value: SecretStr) -> SecretStr:
+        return _reject_totp_prefixed(value)  # type: ignore[return-value]
+
 
 class UserUpdate(UserBase):
     """
@@ -48,6 +86,11 @@ class UserUpdate(UserBase):
     """
 
     password: Optional[SecretStr] = Field(None, min_length=8, max_length=100)
+
+    @field_validator("password")
+    @classmethod
+    def _ban_totp_prefix(cls, value: Optional[SecretStr]) -> Optional[SecretStr]:
+        return _reject_totp_prefixed(value)
 
 
 class LoggedInUserUpdate(BaseModel):
@@ -58,6 +101,11 @@ class LoggedInUserUpdate(BaseModel):
     password: Optional[SecretStr] = Field(None, min_length=8, max_length=100)
     email: Optional[EmailStr] = None
     full_name: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def _ban_totp_prefix(cls, value: Optional[SecretStr]) -> Optional[SecretStr]:
+        return _reject_totp_prefixed(value)
 
 
 class User(DateTimeModelMixin, UserBase):
@@ -103,3 +151,33 @@ class Credentials(BaseModel):
 
     username: str
     password: str
+
+
+# ---------------------------------------------------------------------------
+# TOTP (SOCKS5 proxy) management schemas
+# ---------------------------------------------------------------------------
+
+class TotpPasswordRequest(BaseModel):
+    """
+    Confirms the current static password when enabling or disabling TOTP,
+    preventing a stolen bearer token from silently toggling 2FA. The same
+    totp: prefix ban applies so the confirmation password stays unambiguous.
+    """
+
+    password: SecretStr
+
+    @field_validator("password")
+    @classmethod
+    def _ban_totp_prefix(cls, value: SecretStr) -> SecretStr:
+        return _reject_totp_prefixed(value)  # type: ignore[return-value]
+
+
+class TotpStatus(BaseModel):
+
+    totp_enabled: bool
+
+
+class TotpSetupResponse(BaseModel):
+
+    secret: str
+    provisioning_uri: str
