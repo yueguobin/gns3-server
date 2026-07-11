@@ -1,7 +1,7 @@
 """add totp_secret to users
 
 Revision ID: 20260711_add_totp_secret_to_users
-Revises: 20260303_create_llm_model_configs
+Revises: f0b0de2a9
 Create Date: 2026-07-11
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy import inspect
 
 # revision identifiers, used by Alembic.
 revision = '20260711_add_totp_secret_to_users'
-down_revision = '20260303_create_llm_model_configs'
+down_revision = 'f0b0de2a9'
 branch_labels = None
 depends_on = None
 
