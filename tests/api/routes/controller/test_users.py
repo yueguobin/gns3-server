@@ -740,6 +740,13 @@ class TestTotpRoutes:
         assert len(body["secret"]) == 32
         assert body["provisioning_uri"].startswith("otpauth://")
 
+        # Re-binding is rejected while a secret already exists (must DELETE first
+        # to avoid silently invalidating the old key).
+        response = await authorized_client.post(
+            app.url_path_for("setup_totp"), json={"password": "user1_password"}
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+
         # Status now reflects an enabled TOTP.
         response = await authorized_client.get(app.url_path_for("get_totp_status"))
         assert response.json() == {"totp_enabled": True}

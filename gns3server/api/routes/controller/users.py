@@ -200,6 +200,16 @@ async def setup_totp(
             detail="Current password is incorrect.",
         )
 
+    # Defense in depth: never silently overwrite an existing secret. A second
+    # setup would invalidate the old key — and any other client still holding
+    # it — so re-binding must be explicit: DELETE first, then POST.
+    # (current_user is the ORM User object at runtime, so totp_secret is readable.)
+    if current_user.totp_secret:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="TOTP is already configured; delete it before generating a new secret.",
+        )
+
     secret = auth_service.generate_totp_secret()
     await users_repo.set_totp_secret(current_user.user_id, secret)
     return schemas.TotpSetupResponse(
