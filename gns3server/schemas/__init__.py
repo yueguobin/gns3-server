@@ -63,6 +63,7 @@ from .controller.snapshots import SnapshotCreate, Snapshot
 from .controller.iou_license import IOULicense
 from .controller.capabilities import Capabilities
 from .controller.netmiko import NetmikoDeviceType, NetmikoDeviceTypeList
+from .controller.llm_providers import LLMProvider, LLMProviderList, LLMModel, LLMModelsRequest, LLMModelList
 
 # Controller template schemas
 from .controller.templates.vpcs_templates import VPCSTemplate, VPCSTemplateUpdate

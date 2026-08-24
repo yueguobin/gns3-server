@@ -62,6 +62,7 @@ from . import pools
 from . import privileges
 from . import api_keys
 from . import netmiko
+from . import llm_providers
 from . import settings
 
 from .dependencies.authentication import get_current_active_user
@@ -192,6 +193,12 @@ router.include_router(
     prefix="/access",
     dependencies=[Depends(get_current_active_user)],
     tags=["LLM Model Configurations"]
+)
+
+router.include_router(
+    llm_providers.router,
+    prefix="/copilot",
+    tags=["GNS3 Copilot"]
 )
 
 router.include_router(
