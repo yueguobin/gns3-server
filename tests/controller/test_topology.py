@@ -54,7 +54,8 @@ async def test_project_to_topology_empty(tmpdir):
                 "nodes": [],
                 "links": [],
                 "computes": [],
-                "drawings": []
+                "drawings": [],
+                "zones": []
             },
             "type": "topology",
             "supplier": None,
@@ -82,6 +83,7 @@ async def test_basic_topology(controller):
         await link.add_node(node2, 0, 0)
 
     drawing = await project.add_drawing(svg="<svg></svg>")
+    zone = await project.add_zone(name="site-A", node_ids=[node1.id], drawing_id=drawing.id)
 
     topo = project_to_topology(project)
     assert len(topo["topology"]["nodes"]) == 2
@@ -89,6 +91,7 @@ async def test_basic_topology(controller):
     assert topo["topology"]["links"][0] == link.asdict(topology_dump=True)
     assert topo["topology"]["computes"][0] == compute.asdict(topology_dump=True)
     assert topo["topology"]["drawings"][0] == drawing.asdict(topology_dump=True)
+    assert topo["topology"]["zones"][0] == zone.asdict(topology_dump=True)
 
 
 @pytest.mark.asyncio
@@ -133,6 +136,41 @@ def test_load_topology(tmpdir):
         json.dump(data, f)
     topo = load_topology(path)
     assert topo == data
+
+
+def test_load_topology_with_zones(tmpdir):
+    """
+    A topology file containing zones loads fine (the legacy test above proves
+    a file without the zones key still validates)
+    """
+
+    zone = {
+        "zone_id": "d51d6b32-5a1d-4c3d-9c3e-1f2a9c3e5d7f",
+        "name": "site-A",
+        "description": None,
+        "color": "#4A90D9",
+        "node_ids": ["5b1d6b32-5a1d-4c3d-9c3e-1f2a9c3e5d7f"],
+        "drawing_id": None,
+    }
+    data = {
+        "project_id": "69f26504-7aa3-48aa-9f29-798d44841211",
+        "name": "Test",
+        "revision": GNS3_FILE_FORMAT_REVISION,
+        "topology": {
+            "nodes": [],
+            "links": [],
+            "computes": [],
+            "drawings": [],
+            "zones": [zone]
+        },
+        "type": "topology",
+        "version": __version__}
+
+    path = str(tmpdir / "test_zones.gns3")
+    with open(path, "w+") as f:
+        json.dump(data, f)
+    topo = load_topology(path)
+    assert topo["topology"]["zones"] == [zone]
 
 
 def test_load_topology_file_error(tmpdir):

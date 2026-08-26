@@ -23,6 +23,7 @@ from .computes import Compute
 from .drawings import Drawing
 from .links import Link
 from .nodes import Node
+from .zones import Zone
 
 from .projects import Supplier, Variable
 
@@ -43,6 +44,10 @@ class TopologyContent(BaseModel):
     drawings: List[Drawing] = Field(..., description="List of drawings")
     links: List[Link] = Field(..., description="List of links")
     nodes: List[Node] = Field(..., description="List of nodes")
+    zones: List[Zone] = Field(
+        default_factory=list,
+        description="List of zones. Empty for topology files written before zones existed",
+    )
 
 
 class Topology(BaseModel):

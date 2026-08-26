@@ -104,6 +104,12 @@ HANDLER_FILES = {
     "device_config_send_handler": "device_config.py",
     "device_show_run_handler": "device_config.py",
     "vpcs_config_set_handler": "device_config.py",
+    "get_zones_handler": "zones.py",
+    "create_zone_handler": "zones.py",
+    "get_zone_handler": "zones.py",
+    "get_zone_topology_handler": "zones.py",
+    "update_zone_handler": "zones.py",
+    "delete_zone_handler": "zones.py",
 }
 
 

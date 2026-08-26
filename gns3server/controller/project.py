@@ -35,6 +35,7 @@ from .node import Node
 from .compute import ComputeError
 from .snapshot import Snapshot
 from .drawing import Drawing
+from .zone import Zone
 from .topology import project_to_topology, load_topology
 from .udp_link import UDPLink
 from .link import _UNSET
@@ -220,6 +221,7 @@ class Project:
         self._links = {}
         self._marker_definitions = {}  # name → {bpf, tag, color, highlight_duration}
         self._drawings = {}
+        self._zones = {}
         self._snapshots = {}
         self._computes = []
         self._load_snapshot_config()
@@ -685,11 +687,17 @@ class Project:
         await self.__delete_node_links(node)
         self.remove_allocated_node_name(node.name)
         del self._nodes[node.id]
+        # remove the node from any zone it belongs to
+        updated_zones = [z for z in self._zones.values() if node.id in z.node_ids]
+        for zone in updated_zones:
+            zone.node_ids = [nid for nid in zone.node_ids if nid != node.id]
         await node.destroy()
         # refresh the compute IDs list
         self._computes = [n.compute.id for n in self.nodes.values()]
         self.dump()
         self.emit_notification("node.deleted", node.asdict())
+        for zone in updated_zones:
+            self.emit_notification("zone.updated", zone.asdict())
 
     @open_required
     def get_node(self, node_id):
@@ -743,6 +751,15 @@ class Project:
             return self._get_closed_data("drawings", "drawing_id")
         return self._drawings
 
+    @property
+    def zones(self):
+        """
+        :returns: Dictionary of the zones
+        """
+        if self._status == "closed":
+            return self._get_closed_data("zones", "zone_id")
+        return self._zones
+
     @open_required
     async def add_drawing(self, drawing_id=None, dump=True, **kwargs):
         """
@@ -776,8 +793,48 @@ class Project:
         if drawing.locked:
             raise ControllerError(f"Drawing ID {drawing_id} cannot be deleted because it is locked")
         del self._drawings[drawing.id]
+        # a zone using this drawing as its visual representation keeps its data, just unbind it
+        updated_zones = [z for z in self._zones.values() if z.drawing_id == drawing.id]
+        for zone in updated_zones:
+            zone.drawing_id = None
         self.dump()
         self.emit_notification("drawing.deleted", drawing.asdict())
+        for zone in updated_zones:
+            self.emit_notification("zone.updated", zone.asdict())
+
+    @open_required
+    async def add_zone(self, zone_id=None, dump=True, **kwargs):
+        """
+        Create a zone or return an existing zone
+
+        :param dump: Dump the topology to disk
+        :param kwargs: See the documentation of Zone
+        """
+        if zone_id not in self._zones:
+            zone = Zone(self, zone_id=zone_id, **kwargs)
+            self._zones[zone.id] = zone
+            self.emit_notification("zone.created", zone.asdict())
+            if dump:
+                self.dump()
+            return zone
+        return self._zones[zone_id]
+
+    @open_required
+    def get_zone(self, zone_id):
+        """
+        Return the Zone or raise a 404 if the zone is unknown
+        """
+        try:
+            return self._zones[zone_id]
+        except KeyError:
+            raise ControllerNotFoundError(f"Zone ID {zone_id} doesn't exist")
+
+    @open_required
+    async def delete_zone(self, zone_id):
+        zone = self.get_zone(zone_id)
+        del self._zones[zone.id]
+        self.dump()
+        self.emit_notification("zone.deleted", zone.asdict())
 
     async def _create_link_from_topology_data(self, link_data):
         """
@@ -1901,6 +1958,8 @@ class Project:
             self._preallocated_udp_ports.clear()
             for drawing_data in topology.get("drawings", []):
                 await self.add_drawing(dump=False, **drawing_data)
+            for zone_data in topology.get("zones", []):
+                await self.add_zone(dump=False, **zone_data)
 
             # Note: project-level marker definitions are applied to each link
             # inside UDPLink.create() (the inheritance hook), so they are

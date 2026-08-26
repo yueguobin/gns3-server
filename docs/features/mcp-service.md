@@ -94,7 +94,7 @@ All subsequent tool handler REST API calls use this JWT → zero extra bcrypt
 
 ## Available Tools
 
-**76 tools** across 11 categories:
+**89 tools** across 12 categories:
 
 ### Project (14)
 
@@ -190,6 +190,17 @@ All subsequent tool handler REST API calls use this JWT → zero extra bcrypt
 | `drawing_create` | Create drawing (SVG label/shape/image) |
 | `drawing_update` | Update drawing (position, rotation, SVG) |
 | `drawing_delete` | Delete a drawing |
+
+### Zone (6)
+
+| Tool | Description |
+|------|-------------|
+| `zone_list` | List zones (named node groups) |
+| `zone_get` | Get zone definition |
+| `zone_create` | Create a zone (name, node_ids, color, optional bound drawing) |
+| `zone_topology` | Get a zone's sub-topology: member nodes, internal links, boundary links with remote_node |
+| `zone_update` | Update a zone (node_ids replaces the member list wholesale) |
+| `zone_delete` | Delete a zone (member nodes untouched) |
 
 <!--
 Symbol tools (symbol_list / symbol_get / symbol_dimensions /

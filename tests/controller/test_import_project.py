@@ -658,3 +658,63 @@ async def test_import_project_name_and_location(projects_dir, controller):
     with open(zip_path, "rb") as f:
         project = await import_project(controller, str(uuid.uuid4()), f, name="hello", location=str(tmpdir / "test"))
     assert project.name == "hello-1"
+
+
+def test_regenerate_topology_ids_zones(tmpdir):
+    """
+    On import/duplication, zone IDs are regenerated and their member node IDs
+    and drawing reference are remapped to the new IDs. Stale node references
+    are dropped, and a topology without the zones key doesn't raise.
+    """
+
+    from gns3server.controller.import_project import regenerate_topology_ids
+
+    node1_id = "0fd3dd4d-dc93-4a04-a9b9-7396a9e22e8b"
+    node2_id = "c3ae286c-c81f-40d9-a2d0-5874b2f2478d"
+    stale_id = "eeeeeeee-0000-0000-0000-000000000000"
+    drawing_id = "08d665ba-e982-4d54-82b4-aa0c4d5ba6a3"
+    zone_id = "d51d6b32-5a1d-4c3d-9c3e-1f2a9c3e5d7f"
+
+    topology = {
+        "project_id": str(uuid.uuid4()),
+        "name": "test",
+        "type": "topology",
+        "topology": {
+            "nodes": [
+                {"compute_id": "local", "node_id": node1_id, "node_type": "iou", "name": "test", "properties": {}},
+                {"compute_id": "local", "node_id": node2_id, "node_type": "iou", "name": "test2", "properties": {}},
+            ],
+            "links": [],
+            "computes": [],
+            "drawings": [{"drawing_id": drawing_id, "rotation": 0, "x": -210, "y": -108, "z": 0}],
+            "zones": [
+                {"zone_id": zone_id, "name": "site-A", "color": None,
+                 "description": None, "node_ids": [node1_id, stale_id], "drawing_id": drawing_id}
+            ],
+        },
+        "revision": 10,
+        "version": __version__,
+    }
+
+    regenerate_topology_ids(topology, str(tmpdir))
+
+    zone = topology["topology"]["zones"][0]
+    assert zone["zone_id"] != zone_id
+    new_node_ids = {n["node_id"] for n in topology["topology"]["nodes"]}
+    assert len(zone["node_ids"]) == 1
+    assert zone["node_ids"][0] in new_node_ids  # remapped, stale reference dropped
+    assert zone["node_ids"][0] != node1_id
+    new_drawing_id = topology["topology"]["drawings"][0]["drawing_id"]
+    assert zone["drawing_id"] == new_drawing_id  # follows the drawing remap
+
+    # a legacy topology without the zones key must not raise
+    legacy = {
+        "project_id": str(uuid.uuid4()),
+        "name": "legacy",
+        "type": "topology",
+        "topology": {"nodes": [], "links": [], "computes": [], "drawings": []},
+        "revision": 10,
+        "version": __version__,
+    }
+    regenerate_topology_ids(legacy, str(tmpdir))
+    assert "zones" not in legacy["topology"]

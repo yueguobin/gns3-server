@@ -32,6 +32,7 @@ from ..compute.dynamips import PLATFORMS_DEFAULT_RAM
 from .controller_error import ControllerError
 from .compute import Compute
 from .drawing import Drawing
+from .zone import Zone
 from .node import Node
 from .link import Link
 
@@ -89,7 +90,7 @@ def project_to_topology(project):
         "supplier": project.supplier,
         "created_by": project.created_by,
         "marker_definitions": project.marker_definitions,
-        "topology": {"nodes": [], "links": [], "computes": [], "drawings": []},
+        "topology": {"nodes": [], "links": [], "computes": [], "drawings": [], "zones": []},
         "type": "topology",
         "revision": GNS3_FILE_FORMAT_REVISION,
         "version": __version__,
@@ -110,6 +111,11 @@ def project_to_topology(project):
             data["topology"]["drawings"].append(drawing.asdict(topology_dump=True))
         else:
             data["topology"]["drawings"].append(drawing)
+    for zone in project.zones.values():
+        if isinstance(zone, Zone):
+            data["topology"]["zones"].append(zone.asdict(topology_dump=True))
+        else:
+            data["topology"]["zones"].append(zone)
     for compute in project.computes:
         if isinstance(compute, Compute):
             compute = compute.asdict(topology_dump=True)

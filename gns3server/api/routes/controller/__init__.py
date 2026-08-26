@@ -46,6 +46,7 @@ from . import controller
 from . import appliances
 from . import computes
 from . import drawings
+from . import zones
 from . import gns3vm
 from . import links
 from . import nodes
@@ -143,6 +144,11 @@ router.include_router(
     drawings.router,
     prefix="/projects/{project_id}/drawings",
     tags=["Drawings"])
+
+router.include_router(
+    zones.router,
+    prefix="/projects/{project_id}/zones",
+    tags=["Zones"])
 
 router.include_router(
     symbols.router,

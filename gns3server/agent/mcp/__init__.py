@@ -119,6 +119,11 @@ from .drawings import (
     get_drawings_handler, create_drawing_handler,
     get_drawing_handler, update_drawing_handler, delete_drawing_handler,
 )
+from .zones import (
+    get_zones_handler, create_zone_handler,
+    get_zone_handler, get_zone_topology_handler,
+    update_zone_handler, delete_zone_handler,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1234,6 +1239,133 @@ async def drawing_delete(
     """Delete a drawing from a project canvas. Cannot be undone."""
     return await asyncio.to_thread(_run_handler_sync, delete_drawing_handler, {
         "project_id": project_id, "drawing_id": drawing_id,
+    })
+
+
+# ── Zone tools ────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def zone_list(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+) -> list[dict[str, Any]]:
+    """List all zones (named node groups) in a project.
+
+    Each zone has: zone_id, name, description, color, node_ids (member
+    nodes — a node may belong to several zones) and an optional drawing_id
+    (a rectangle/ellipse drawing used as its visual representation).
+    Use zone_topology to load only one zone's part of a big topology.
+    """
+    return await asyncio.to_thread(_run_handler_sync, get_zones_handler, {
+        "project_id": project_id,
+    })
+
+
+@mcp.tool()
+async def zone_create(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    name: Annotated[str, Field(description="Zone name, 1-64 characters (e.g. 'core', 'site-A')")],
+    node_ids: Annotated[list[str] | None, Field(description="UUIDs of the member nodes. A node may belong to several zones. Defaults to an empty list")] = None,
+    description: Annotated[str | None, Field(description="What this zone represents (max 1024 characters)")] = None,
+    color: Annotated[str | None, Field(description="Hex color like '#4A90D9' (6 hex digits, starts with #)")] = None,
+    drawing_id: Annotated[str | None, Field(description="UUID of an existing drawing used as the visual representation of this zone. A drawing can be bound to at most one zone")] = None,
+) -> list[dict[str, Any]]:
+    """Create a zone: a named group of nodes used to work on one part of a big topology.
+
+    On big topologies (50+ nodes), create zones per part (core, access,
+    branch site A...) and have each agent load only its own zone with
+    zone_topology instead of the whole topology.
+
+    Parameters:
+    - name: required, unique per project is recommended but not enforced
+    - node_ids: list of existing node UUIDs (use node_list to find them);
+      a node may belong to several zones
+    - color: must match '#rrggbb' or the server rejects it (422)
+    - drawing_id: optional, bind a rectangle/ellipse drawing as the
+      zone's visual representation (409 if already bound to another zone)
+
+    Example: {"name": "site-A", "node_ids": ["<uuid1>", "<uuid2>"], "color": "#4A90D9"}
+    """
+    params = {"project_id": project_id, "name": name, "node_ids": node_ids,
+              "description": description, "color": color, "drawing_id": drawing_id}
+    params = {k: v for k, v in params.items() if v is not None}
+    return await asyncio.to_thread(_run_handler_sync, create_zone_handler, params)
+
+
+@mcp.tool()
+async def zone_get(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+) -> list[dict[str, Any]]:
+    """Get a zone's definition (name, description, color, member node_ids, drawing_id)."""
+    return await asyncio.to_thread(_run_handler_sync, get_zone_handler, {
+        "project_id": project_id, "zone_id": zone_id,
+    })
+
+
+@mcp.tool()
+async def zone_topology(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+) -> list[dict[str, Any]]:
+    """Get the sub-topology of a zone — load only one part of a big topology.
+
+    Returns:
+    - zone: the zone definition
+    - nodes: full node objects of the zone members
+    - links: links with BOTH endpoints inside the zone
+    - boundary_links: links crossing the zone boundary; each entry is the
+      link object plus remote_node (the full node on the far side), so no
+      second lookup is needed. A link between two zones is a boundary
+      link for both zones (appears in each zone's result with its own
+      remote_node)
+    - missing_node_ids: members that no longer exist in the project
+
+    This is the tool for working on one zone at a time: instead of
+    node_list + link_list over the whole project, call zone_topology and
+    get only the relevant nodes, internal links and what the zone
+    connects to.
+    """
+    return await asyncio.to_thread(_run_handler_sync, get_zone_topology_handler, {
+        "project_id": project_id, "zone_id": zone_id,
+    })
+
+
+@mcp.tool()
+async def zone_update(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+    name: Annotated[str | None, Field(description="New zone name, 1-64 characters")] = None,
+    description: Annotated[str | None, Field(description="New description")] = None,
+    color: Annotated[str | None, Field(description="New hex color like '#4A90D9'")] = None,
+    node_ids: Annotated[list[str] | None, Field(description="REPLACES the member list wholesale — pass the complete list, not a delta")] = None,
+    drawing_id: Annotated[str | None, Field(description="UUID of a drawing to bind as visual representation (must not be bound to another zone)")] = None,
+) -> list[dict[str, Any]]:
+    """Update a zone. All fields optional; only provided fields change.
+
+    node_ids replaces the member list wholesale (not merged): to add a
+    node, fetch the current list (zone_get), add the new UUID, then pass
+    the complete list. Same for removals.
+
+    Example: {"node_ids": ["<existing1>", "<existing2>", "<new>"]}
+    """
+    params = {"project_id": project_id, "zone_id": zone_id}
+    local_vars = {"name": name, "description": description, "color": color,
+                  "node_ids": node_ids, "drawing_id": drawing_id}
+    for key, val in local_vars.items():
+        if val is not None:
+            params[key] = val
+    return await asyncio.to_thread(_run_handler_sync, update_zone_handler, params)
+
+
+@mcp.tool()
+async def zone_delete(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone to delete")],
+) -> list[dict[str, Any]]:
+    """Delete a zone. Member nodes are not touched; only the grouping is removed."""
+    return await asyncio.to_thread(_run_handler_sync, delete_zone_handler, {
+        "project_id": project_id, "zone_id": zone_id,
     })
 
 

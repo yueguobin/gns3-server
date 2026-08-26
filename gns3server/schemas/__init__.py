@@ -26,6 +26,7 @@ from .controller.templates import TemplateCreate, TemplateUpdate, TemplateUsage,
 from .controller.images import Image, ImageType
 from .controller.appliances import ApplianceVersion, ApplianceVersionV8, Appliance
 from .controller.drawings import Drawing
+from .controller.zones import ZoneCreate, ZoneUpdate, Zone, ZoneBoundaryLink, ZoneTopology
 from .controller.gns3vm import GNS3VM
 from .controller.nodes import NodeCreate, NodeUpdate, NodeDuplicate, NodeCapture, Node
 from .controller.projects import ProjectCreate, ProjectUpdate, ProjectDuplicate, Project, ProjectFile, ProjectCompression, NodeFile

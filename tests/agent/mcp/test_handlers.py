@@ -768,3 +768,80 @@ class TestMarkerDefinition:
                 {"project_id": "p", "action": "update", "def_name": "arp"}, ctx,
             )
         assert "error" in result
+
+
+# ── Zone ────────────────────────────────────────────────────────────────
+
+
+class TestZone:
+
+    mod = "zones"
+
+    def test_list(self, ctx):
+        from gns3server.agent.mcp.zones import get_zones_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn([{"zone_id": "z1", "name": "site-A"}])
+            m.return_value = conn
+            result = get_zones_handler({"project_id": "p1"}, ctx)
+            assert result["count"] == 1
+            conn.http_call.assert_called_once_with("get", f"{conn.base_url}/projects/p1/zones")
+
+    def test_list_missing_id(self, ctx):
+        from gns3server.agent.mcp.zones import get_zones_handler
+        assert "error" in get_zones_handler({}, ctx)
+
+    def test_create(self, ctx):
+        from gns3server.agent.mcp.zones import create_zone_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({"zone_id": "z1", "name": "site-A"})
+            m.return_value = conn
+            result = create_zone_handler(
+                {"project_id": "p1", "name": "site-A", "node_ids": ["n1"], "color": "#4A90D9"}, ctx
+            )
+            assert result["zone"]["zone_id"] == "z1"
+            conn.http_call.assert_called_once_with(
+                "post", f"{conn.base_url}/projects/p1/zones",
+                json_data={"name": "site-A", "node_ids": ["n1"], "color": "#4A90D9"},
+            )
+
+    def test_create_missing_name(self, ctx):
+        from gns3server.agent.mcp.zones import create_zone_handler
+        assert "error" in create_zone_handler({"project_id": "p1"}, ctx)
+
+    def test_get(self, ctx):
+        from gns3server.agent.mcp.zones import get_zone_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({"zone_id": "z1"})
+            m.return_value = conn
+            result = get_zone_handler({"project_id": "p1", "zone_id": "z1"}, ctx)
+            assert result["zone_id"] == "z1"
+            conn.http_call.assert_called_once_with("get", f"{conn.base_url}/projects/p1/zones/z1")
+
+    def test_topology(self, ctx):
+        from gns3server.agent.mcp.zones import get_zone_topology_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({"zone": {"zone_id": "z1"}, "nodes": [], "links": [], "boundary_links": []})
+            m.return_value = conn
+            result = get_zone_topology_handler({"project_id": "p1", "zone_id": "z1"}, ctx)
+            assert result["zone"]["zone_id"] == "z1"
+            conn.http_call.assert_called_once_with("get", f"{conn.base_url}/projects/p1/zones/z1/topology")
+
+    def test_update(self, ctx):
+        from gns3server.agent.mcp.zones import update_zone_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({"zone_id": "z1", "name": "renamed"})
+            m.return_value = conn
+            result = update_zone_handler({"project_id": "p1", "zone_id": "z1", "name": "renamed"}, ctx)
+            assert result["name"] == "renamed"
+            conn.http_call.assert_called_once_with(
+                "put", f"{conn.base_url}/projects/p1/zones/z1", json_data={"name": "renamed"}
+            )
+
+    def test_delete(self, ctx):
+        from gns3server.agent.mcp.zones import delete_zone_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({})
+            m.return_value = conn
+            result = delete_zone_handler({"project_id": "p1", "zone_id": "z1"}, ctx)
+            assert result["zone_id"] == "z1"
+            conn.http_call.assert_called_once_with("delete", f"{conn.base_url}/projects/p1/zones/z1")

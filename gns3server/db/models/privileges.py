@@ -192,6 +192,18 @@ def create_default_roles(target, connection, **kw):
             "name": "Drawing.Modify"
         },
         {
+            "description": "Create or delete a zone",
+            "name": "Zone.Allocate"
+        },
+        {
+            "description": "View a zone",
+            "name": "Zone.Audit"
+        },
+        {
+            "description": "Update a zone",
+            "name": "Zone.Modify"
+        },
+        {
             "description": "Create or delete a symbol",
             "name": "Symbol.Allocate"
         },
@@ -310,6 +322,9 @@ def add_privileges_to_default_roles(target, connection, **kw):
         "Drawing.Allocate",
         "Drawing.Audit",
         "Drawing.Modify",
+        "Zone.Allocate",
+        "Zone.Audit",
+        "Zone.Modify",
         "Template.Audit",
         "Symbol.Audit",
         "Image.Audit",
@@ -329,6 +344,7 @@ def add_privileges_to_default_roles(target, connection, **kw):
         "Node.Audit",
         "Link.Audit",
         "Drawing.Audit",
+        "Zone.Audit",
         "Template.Audit",
         "Symbol.Audit",
         "Image.Audit",
