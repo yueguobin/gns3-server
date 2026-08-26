@@ -81,6 +81,9 @@ Console for vendor NOS containers (SR Linux, XRd, …) whose CLI is a TUI off PI
 ### Cisco XRd Control Plane (`features/vendor-nos-xrd.md`)
 Cisco XRd as a GNS3 Docker router: vendor path + shm/device injection (`GNS3_SHM_SIZE`/`GNS3_DEVICES`), config-file injection (`extra_configs`), udev masking (`GNS3_MASK_UDEV`) so privileged systemd containers don't disturb the host, and the host-readiness check.
 
+### Zones (`features/zones.md`)
+Named node groups persisted in the `.gns3` file for working on one part of a big topology: per-zone sub-topology endpoint (internal/boundary links), precise single-member add/remove, nesting via `parent_zone_id`, zone-scoped bulk start/stop, optional drawing as visual representation, and node-side `zone_ids` write-through.
+
 ---
 
 ## GNS3 AI Copilot (`gns3-copilot/`)
