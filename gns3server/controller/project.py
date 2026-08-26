@@ -832,9 +832,81 @@ class Project:
     @open_required
     async def delete_zone(self, zone_id):
         zone = self.get_zone(zone_id)
+        # child zones survive, just unparent them
+        updated_zones = [z for z in self._zones.values() if z.parent_zone_id == zone.id]
+        for child_zone in updated_zones:
+            child_zone.parent_zone_id = None
         del self._zones[zone.id]
         self.dump()
         self.emit_notification("zone.deleted", zone.asdict())
+        for child_zone in updated_zones:
+            self.emit_notification("zone.updated", child_zone.asdict())
+
+    def node_zone_ids(self, node_id):
+        """
+        Reverse lookup: the IDs of the zones a node belongs to.
+        Works on closed projects too (zones are read from the .gns3).
+        """
+
+        zone_ids = []
+        for zone_id, zone in self.zones.items():
+            members = zone.node_ids if isinstance(zone, Zone) else zone.get("node_ids", [])
+            if node_id in members:
+                zone_ids.append(zone_id)
+        return zone_ids
+
+    @open_required
+    async def set_node_zones(self, node, zone_ids):
+        """
+        Set which zones a node belongs to (node-side write-through: the
+        membership itself is still stored on the zones).
+
+        :param node: the node
+        :param zone_ids: the complete target list of zone IDs
+        """
+
+        target_ids = [str(zone_id) for zone_id in zone_ids]
+        current_zones = [z for z in self._zones.values() if node.id in z.node_ids]
+        current_ids = {z.id for z in current_zones}
+
+        changed_zones = []
+        for zone_id in target_ids:
+            if zone_id not in current_ids:
+                zone = self.get_zone(zone_id)  # 404 on unknown zone
+                zone.node_ids = zone.node_ids + [node.id]
+                changed_zones.append(zone)
+        for zone in current_zones:
+            if zone.id not in target_ids:
+                zone.node_ids = [nid for nid in zone.node_ids if nid != node.id]
+                changed_zones.append(zone)
+
+        if changed_zones:
+            self.dump()
+            for zone in changed_zones:
+                self.emit_notification("zone.updated", zone.asdict())
+
+    def zone_subtree(self, zone):
+        """
+        Walk a zone and its descendants: returns (node_ids, descendant_zone_ids)
+        where node_ids is the union of all their members. A visited set guards
+        against cycles in hand-edited topology files (the API rejects cycles
+        on write).
+        """
+
+        def _collect(current, visited, node_ids, zone_ids):
+            if current.id in visited:
+                return
+            visited.add(current.id)
+            node_ids.update(current.node_ids)
+            for child in self._zones.values():
+                if child.parent_zone_id == current.id:
+                    zone_ids.append(child.id)
+                    _collect(child, visited, node_ids, zone_ids)
+
+        node_ids = set()
+        descendant_zone_ids = []
+        _collect(zone, set(), node_ids, descendant_zone_ids)
+        return node_ids, descendant_zone_ids
 
     async def _create_link_from_topology_data(self, link_data):
         """

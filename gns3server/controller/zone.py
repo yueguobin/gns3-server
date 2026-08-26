@@ -31,7 +31,8 @@ class Zone:
     of node IDs, optionally shown on the scene by a bound drawing.
     """
 
-    def __init__(self, project, zone_id=None, name=None, description=None, color=None, node_ids=None, drawing_id=None):
+    def __init__(self, project, zone_id=None, name=None, description=None, color=None,
+                 node_ids=None, drawing_id=None, parent_zone_id=None):
         self._project = project
         if zone_id is None:
             self._id = str(uuid.uuid4())
@@ -42,6 +43,7 @@ class Zone:
         self._color = color
         self._node_ids = list(node_ids) if node_ids else []
         self._drawing_id = drawing_id
+        self._parent_zone_id = parent_zone_id
 
     @property
     def id(self):
@@ -87,6 +89,14 @@ class Zone:
     def drawing_id(self, val):
         self._drawing_id = val
 
+    @property
+    def parent_zone_id(self):
+        return self._parent_zone_id
+
+    @parent_zone_id.setter
+    def parent_zone_id(self, val):
+        self._parent_zone_id = val
+
     async def update(self, **kwargs):
         """
         Update the zone.
@@ -115,6 +125,7 @@ class Zone:
                 "color": self._color,
                 "node_ids": self._node_ids,
                 "drawing_id": self._drawing_id,
+                "parent_zone_id": self._parent_zone_id,
             }
         return {
             "project_id": self._project.id,
@@ -124,6 +135,7 @@ class Zone:
             "color": self._color,
             "node_ids": self._node_ids,
             "drawing_id": self._drawing_id,
+            "parent_zone_id": self._parent_zone_id,
         }
 
     def __repr__(self):

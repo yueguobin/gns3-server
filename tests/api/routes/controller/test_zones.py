@@ -288,3 +288,266 @@ class TestZonesRoutes:
         response = await client.get(app.url_path_for("get_zone", project_id=project.id, zone_id=zone_id))
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["node_ids"] == [node_b.id]
+
+    async def test_add_remove_zone_member(
+            self,
+            app: FastAPI,
+            client: AsyncClient,
+            project: Project,
+            nodes: Tuple[Node, Node, Node]
+    ) -> None:
+        """
+        Precise membership: add/remove a single node, idempotent on both sides
+        """
+
+        node_a, _, _ = nodes
+        response = await client.post(app.url_path_for("create_zone", project_id=project.id), json={"name": "z1"})
+        zone_id = response.json()["zone_id"]
+
+        response = await client.post(
+            app.url_path_for("add_node_to_zone", project_id=project.id, zone_id=zone_id),
+            json={"node_id": node_a.id}
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        # idempotent: adding again is a no-op
+        response = await client.post(
+            app.url_path_for("add_node_to_zone", project_id=project.id, zone_id=zone_id),
+            json={"node_id": node_a.id}
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        response = await client.get(app.url_path_for("get_zone", project_id=project.id, zone_id=zone_id))
+        assert response.json()["node_ids"] == [node_a.id]
+
+        # unknown node -> 404
+        response = await client.post(
+            app.url_path_for("add_node_to_zone", project_id=project.id, zone_id=zone_id),
+            json={"node_id": "9f1d6b32-5a1d-4c3d-9c3e-1f2a9c3e5d7f"}
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+        # remove, idempotent
+        response = await client.delete(
+            app.url_path_for("remove_node_from_zone", project_id=project.id, zone_id=zone_id, node_id=node_a.id)
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        response = await client.delete(
+            app.url_path_for("remove_node_from_zone", project_id=project.id, zone_id=zone_id, node_id=node_a.id)
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        response = await client.get(app.url_path_for("get_zone", project_id=project.id, zone_id=zone_id))
+        assert response.json()["node_ids"] == []
+
+    async def test_nested_zones(
+            self,
+            app: FastAPI,
+            client: AsyncClient,
+            project: Project
+    ) -> None:
+        """
+        parent_zone_id: nesting works, self/cycle/unknown are rejected,
+        deleting the parent unparents the children
+        """
+
+        response = await client.post(app.url_path_for("create_zone", project_id=project.id), json={"name": "dc-1"})
+        dc1_id = response.json()["zone_id"]
+        response = await client.post(
+            app.url_path_for("create_zone", project_id=project.id),
+            json={"name": "core", "parent_zone_id": dc1_id}
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        core_id = response.json()["zone_id"]
+        assert response.json()["parent_zone_id"] == dc1_id
+
+        # a zone cannot be its own parent
+        response = await client.post(
+            app.url_path_for("create_zone", project_id=project.id),
+            json={"name": "bad", "parent_zone_id": None}  # placeholder, real check below via PUT
+        )
+        bad_id = response.json()["zone_id"]
+        response = await client.put(
+            app.url_path_for("update_zone", project_id=project.id, zone_id=bad_id),
+            json={"parent_zone_id": bad_id}
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+
+        # cycle: dc-1 under core (its own child)
+        response = await client.put(
+            app.url_path_for("update_zone", project_id=project.id, zone_id=dc1_id),
+            json={"parent_zone_id": core_id}
+        )
+        assert response.status_code == status.HTTP_409_CONFLICT
+
+        # unknown parent
+        response = await client.post(
+            app.url_path_for("create_zone", project_id=project.id),
+            json={"name": "bad2", "parent_zone_id": "9f1d6b32-5a1d-4c3d-9c3e-1f2a9c3e5d7f"}
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+        # deleting the parent keeps the child, unparented
+        response = await client.delete(app.url_path_for("delete_zone", project_id=project.id, zone_id=dc1_id))
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        response = await client.get(app.url_path_for("get_zone", project_id=project.id, zone_id=core_id))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["parent_zone_id"] is None
+
+    async def test_zone_topology_recursive(
+            self,
+            app: FastAPI,
+            client: AsyncClient,
+            project: Project,
+            nodes: Tuple[Node, Node, Node],
+            links: List
+    ) -> None:
+        """
+        zone-parent = {A}, zone-child = {B} nested under it; recursive folds
+        B in: A-B becomes internal, B-C becomes boundary with remote C
+        """
+
+        node_a, node_b, node_c = nodes
+        response = await client.post(
+            app.url_path_for("create_zone", project_id=project.id),
+            json={"name": "parent", "node_ids": [node_a.id]}
+        )
+        parent_id = response.json()["zone_id"]
+        response = await client.post(
+            app.url_path_for("create_zone", project_id=project.id),
+            json={"name": "child", "node_ids": [node_b.id], "parent_zone_id": parent_id}
+        )
+        child_id = response.json()["zone_id"]
+
+        # non-recursive: only A, A-B and A-C are boundary
+        response = await client.get(app.url_path_for("get_zone_topology", project_id=project.id, zone_id=parent_id))
+        data = response.json()
+        assert {n["node_id"] for n in data["nodes"]} == {node_a.id}
+        assert len(data["links"]) == 0
+        assert {bl["remote_node"]["node_id"] for bl in data["boundary_links"]} == {node_b.id, node_c.id}
+        assert data["sub_zone_ids"] == []
+
+        # recursive: {A, B}; A-B internal, only B-C crosses out
+        response = await client.get(
+            app.url_path_for("get_zone_topology", project_id=project.id, zone_id=parent_id) + "?recursive=true"
+        )
+        data = response.json()
+        assert {n["node_id"] for n in data["nodes"]} == {node_a.id, node_b.id}
+        assert len(data["links"]) == 1  # A-B now internal
+        assert {n["node_id"] for n in data["links"][0]["nodes"]} == {node_a.id, node_b.id}
+        assert {bl["remote_node"]["node_id"] for bl in data["boundary_links"]} == {node_c.id}
+        assert data["sub_zone_ids"] == [child_id]
+
+    async def test_zone_bulk_start(
+            self,
+            app: FastAPI,
+            client: AsyncClient,
+            project: Project,
+            nodes: Tuple[Node, Node, Node]
+    ) -> None:
+        """
+        Zone-scoped start touches members only, and recursive covers descendants
+        """
+
+        from unittest.mock import AsyncMock
+
+        node_a, node_b, node_c = nodes
+        for node in nodes:
+            # AsyncMock (not AsyncioMagicMock): Pool feeds these to
+            # asyncio.create_task, which needs real coroutines
+            node.start = AsyncMock()
+
+        response = await client.post(
+            app.url_path_for("create_zone", project_id=project.id), json={"name": "parent", "node_ids": [node_a.id]}
+        )
+        parent_id = response.json()["zone_id"]
+        await client.post(
+            app.url_path_for("create_zone", project_id=project.id),
+            json={"name": "child", "node_ids": [node_b.id], "parent_zone_id": parent_id}
+        )
+
+        response = await client.post(
+            app.url_path_for("start_zone_nodes", project_id=project.id, zone_id=parent_id)
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        node_a.start.assert_called_once()
+        node_b.start.assert_not_called()
+        node_c.start.assert_not_called()
+
+        node_a.start.reset_mock()
+        response = await client.post(
+            app.url_path_for("start_zone_nodes", project_id=project.id, zone_id=parent_id) + "?recursive=true"
+        )
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        node_a.start.assert_called_once()
+        node_b.start.assert_called_once()
+        node_c.start.assert_not_called()
+
+    async def test_node_create_with_zone_ids(
+            self,
+            app: FastAPI,
+            client: AsyncClient,
+            project: Project,
+            compute: Compute
+    ) -> None:
+        """
+        A node can be created directly inside zones (write-through)
+        """
+
+        response = MagicMock()
+        response.json = {"console": 2048}
+        compute.post = AsyncioMagicMock(return_value=response)
+
+        response = await client.post(app.url_path_for("create_zone", project_id=project.id), json={"name": "z1"})
+        zone_id = response.json()["zone_id"]
+
+        response = await client.post(app.url_path_for("create_node", project_id=project.id), json={
+            "name": "born-in-zone",
+            "node_type": "vpcs",
+            "compute_id": "example.com",
+            "zone_ids": [zone_id]
+        })
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.json()["zone_ids"] == [zone_id]
+
+        response = await client.get(app.url_path_for("get_zone", project_id=project.id, zone_id=zone_id))
+        assert response.json()["node_ids"] == [response.json()["node_ids"][0]]  # exactly one member
+
+    async def test_node_update_zone_ids(
+            self,
+            app: FastAPI,
+            client: AsyncClient,
+            project: Project,
+            nodes: Tuple[Node, Node, Node]
+    ) -> None:
+        """
+        PUT /nodes with zone_ids moves the node between zones;
+        GET /nodes echoes the computed memberships
+        """
+
+        node_a, _, _ = nodes
+        response = await client.post(app.url_path_for("create_zone", project_id=project.id), json={"name": "z1"})
+        z1 = response.json()["zone_id"]
+        response = await client.post(app.url_path_for("create_zone", project_id=project.id), json={"name": "z2"})
+        z2 = response.json()["zone_id"]
+
+        response = await client.put(
+            app.url_path_for("update_node", project_id=project.id, node_id=node_a.id),
+            json={"zone_ids": [z1]}
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["zone_ids"] == [z1]
+
+        # move to z2
+        response = await client.put(
+            app.url_path_for("update_node", project_id=project.id, node_id=node_a.id),
+            json={"zone_ids": [z2]}
+        )
+        assert response.json()["zone_ids"] == [z2]
+        response = await client.get(app.url_path_for("get_zone", project_id=project.id, zone_id=z1))
+        assert response.json()["node_ids"] == []
+        response = await client.get(app.url_path_for("get_zone", project_id=project.id, zone_id=z2))
+        assert response.json()["node_ids"] == [node_a.id]
+
+        # GET /nodes echoes memberships
+        response = await client.get(app.url_path_for("get_nodes", project_id=project.id))
+        memberships = {n["node_id"]: n["zone_ids"] for n in response.json()}
+        assert memberships[node_a.id] == [z2]

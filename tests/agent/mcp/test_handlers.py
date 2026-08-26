@@ -845,3 +845,59 @@ class TestZone:
             result = delete_zone_handler({"project_id": "p1", "zone_id": "z1"}, ctx)
             assert result["zone_id"] == "z1"
             conn.http_call.assert_called_once_with("delete", f"{conn.base_url}/projects/p1/zones/z1")
+
+    def test_topology_recursive(self, ctx):
+        from gns3server.agent.mcp.zones import get_zone_topology_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({"zone": {"zone_id": "z1"}, "sub_zone_ids": ["z2"]})
+            m.return_value = conn
+            result = get_zone_topology_handler({"project_id": "p1", "zone_id": "z1", "recursive": True}, ctx)
+            assert result["sub_zone_ids"] == ["z2"]
+            conn.http_call.assert_called_once_with(
+                "get", f"{conn.base_url}/projects/p1/zones/z1/topology?recursive=true"
+            )
+
+    def test_node_add(self, ctx):
+        from gns3server.agent.mcp.zones import add_node_to_zone_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({})
+            m.return_value = conn
+            result = add_node_to_zone_handler({"project_id": "p1", "zone_id": "z1", "node_id": "n1"}, ctx)
+            assert result["node_id"] == "n1"
+            conn.http_call.assert_called_once_with(
+                "post", f"{conn.base_url}/projects/p1/zones/z1/nodes", json_data={"node_id": "n1"}
+            )
+
+    def test_node_add_missing_id(self, ctx):
+        from gns3server.agent.mcp.zones import add_node_to_zone_handler
+        assert "error" in add_node_to_zone_handler({"project_id": "p1", "zone_id": "z1"}, ctx)
+
+    def test_node_remove(self, ctx):
+        from gns3server.agent.mcp.zones import remove_node_from_zone_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({})
+            m.return_value = conn
+            result = remove_node_from_zone_handler({"project_id": "p1", "zone_id": "z1", "node_id": "n1"}, ctx)
+            assert result["node_id"] == "n1"
+            conn.http_call.assert_called_once_with(
+                "delete", f"{conn.base_url}/projects/p1/zones/z1/nodes/n1"
+            )
+
+    def test_bulk_start(self, ctx):
+        from gns3server.agent.mcp.zones import zone_bulk_action_handler
+        with patch(f"{BASE}.{self.mod}._get_connector") as m:
+            conn = _mock_conn({})
+            m.return_value = conn
+            result = zone_bulk_action_handler(
+                {"project_id": "p1", "zone_id": "z1", "action": "start", "recursive": True}, ctx
+            )
+            assert result["action"] == "start"
+            conn.http_call.assert_called_once_with(
+                "post", f"{conn.base_url}/projects/p1/zones/z1/nodes/start?recursive=true"
+            )
+
+    def test_bulk_invalid_action(self, ctx):
+        from gns3server.agent.mcp.zones import zone_bulk_action_handler
+        assert "error" in zone_bulk_action_handler(
+            {"project_id": "p1", "zone_id": "z1", "action": "reboot"}, ctx
+        )

@@ -136,8 +136,11 @@ async def create_node(node_data: schemas.NodeCreate, project: Project = Depends(
     controller = Controller.instance()
     compute = controller.get_compute(str(node_data.compute_id))
     node_data = jsonable_encoder(node_data, exclude_unset=True)
+    zone_ids = node_data.pop("zone_ids", None)
     node = await project.add_node(compute, node_data.pop("name"), node_data.pop("node_id", None), **node_data)
-    return node.asdict()
+    if zone_ids is not None:
+        await project.set_node_zones(node, zone_ids)
+    return dict(node.asdict(), zone_ids=project.node_zone_ids(node.id))
 
 
 @router.get(
@@ -162,9 +165,9 @@ def get_nodes(
 
     if project.status == "closed":
         # allow to retrieve nodes from a closed project
-        nodes = list(project.nodes.values())
+        nodes = [dict(v, zone_ids=project.node_zone_ids(v["node_id"])) for v in project.nodes.values()]
     else:
-        nodes = [v.asdict() for v in project.nodes.values()]
+        nodes = [dict(v.asdict(), zone_ids=project.node_zone_ids(v.id)) for v in project.nodes.values()]
 
     # Filter by tags if provided (all filter tags have to match the node tags)
     if tags:
@@ -248,7 +251,7 @@ _HOST_INTERFACE_NODE_TYPES = {"cloud", "nat"}
 
 
 @router.get("/{node_id}", response_model=schemas.Node, dependencies=[Depends(has_privilege("Node.Audit"))])
-async def get_node(node: Node = Depends(dep_node)) -> schemas.Node:
+async def get_node(node: Node = Depends(dep_node), project: Project = Depends(dep_project)) -> schemas.Node:
     """
     Return a node from a given project.
 
@@ -262,7 +265,7 @@ async def get_node(node: Node = Depends(dep_node)) -> schemas.Node:
         except Exception:
             # If compute is unreachable, still return cached data
             log.warning(f"Could not refresh node {node.id} from compute, returning cached data")
-    return node.asdict()
+    return dict(node.asdict(), zone_ids=project.node_zone_ids(node.id))
 
 
 @router.put(
@@ -285,8 +288,13 @@ async def update_node(node_data: schemas.NodeUpdate, node: Node = Depends(dep_no
     node_data.pop("node_type", None)
     node_data.pop("compute_id", None)
 
+    # zone membership lives on the zones, apply it there instead of the node
+    zone_ids = node_data.pop("zone_ids", None)
+
     await node.update(**node_data)
-    return node.asdict()
+    if zone_ids is not None:
+        await node._project.set_node_zones(node, zone_ids)
+    return dict(node.asdict(), zone_ids=node._project.node_zone_ids(node.id))
 
 
 @router.delete(

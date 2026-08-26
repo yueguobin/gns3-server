@@ -123,6 +123,8 @@ from .zones import (
     get_zones_handler, create_zone_handler,
     get_zone_handler, get_zone_topology_handler,
     update_zone_handler, delete_zone_handler,
+    add_node_to_zone_handler, remove_node_from_zone_handler,
+    zone_bulk_action_handler,
 )
 
 log = logging.getLogger(__name__)
@@ -1269,12 +1271,15 @@ async def zone_create(
     description: Annotated[str | None, Field(description="What this zone represents (max 1024 characters)")] = None,
     color: Annotated[str | None, Field(description="Hex color like '#4A90D9' (6 hex digits, starts with #)")] = None,
     drawing_id: Annotated[str | None, Field(description="UUID of an existing drawing used as the visual representation of this zone. A drawing can be bound to at most one zone")] = None,
+    parent_zone_id: Annotated[str | None, Field(description="UUID of a parent zone, for nesting (e.g. 'dc-1' contains 'core'). Cannot be itself or a descendant (409)")] = None,
 ) -> list[dict[str, Any]]:
     """Create a zone: a named group of nodes used to work on one part of a big topology.
 
     On big topologies (50+ nodes), create zones per part (core, access,
     branch site A...) and have each agent load only its own zone with
-    zone_topology instead of the whole topology.
+    zone_topology instead of the whole topology. Zones can nest via
+    parent_zone_id (campus > dc > rack); membership never cascades
+    implicitly — zone_topology folds sub-zones in only with recursive=true.
 
     Parameters:
     - name: required, unique per project is recommended but not enforced
@@ -1283,11 +1288,13 @@ async def zone_create(
     - color: must match '#rrggbb' or the server rejects it (422)
     - drawing_id: optional, bind a rectangle/ellipse drawing as the
       zone's visual representation (409 if already bound to another zone)
+    - parent_zone_id: optional parent zone (404 if unknown, 409 on cycles)
 
     Example: {"name": "site-A", "node_ids": ["<uuid1>", "<uuid2>"], "color": "#4A90D9"}
     """
     params = {"project_id": project_id, "name": name, "node_ids": node_ids,
-              "description": description, "color": color, "drawing_id": drawing_id}
+              "description": description, "color": color, "drawing_id": drawing_id,
+              "parent_zone_id": parent_zone_id}
     params = {k: v for k, v in params.items() if v is not None}
     return await asyncio.to_thread(_run_handler_sync, create_zone_handler, params)
 
@@ -1307,6 +1314,7 @@ async def zone_get(
 async def zone_topology(
     project_id: Annotated[str, Field(description="UUID of the project")],
     zone_id: Annotated[str, Field(description="UUID of the zone")],
+    recursive: Annotated[bool, Field(description="Fold member nodes of all descendant zones in (default: false — only the zone's own members)")] = False,
 ) -> list[dict[str, Any]]:
     """Get the sub-topology of a zone — load only one part of a big topology.
 
@@ -1320,6 +1328,11 @@ async def zone_topology(
       link for both zones (appears in each zone's result with its own
       remote_node)
     - missing_node_ids: members that no longer exist in the project
+    - sub_zone_ids: descendant zones folded in (recursive=true only)
+
+    With recursive=true the members of all descendant zones (nested via
+    parent_zone_id) are treated as one scope — useful for "give me the
+    whole dc-1 region including its sub-zones".
 
     This is the tool for working on one zone at a time: instead of
     node_list + link_list over the whole project, call zone_topology and
@@ -1327,7 +1340,7 @@ async def zone_topology(
     connects to.
     """
     return await asyncio.to_thread(_run_handler_sync, get_zone_topology_handler, {
-        "project_id": project_id, "zone_id": zone_id,
+        "project_id": project_id, "zone_id": zone_id, "recursive": recursive,
     })
 
 
@@ -1338,20 +1351,21 @@ async def zone_update(
     name: Annotated[str | None, Field(description="New zone name, 1-64 characters")] = None,
     description: Annotated[str | None, Field(description="New description")] = None,
     color: Annotated[str | None, Field(description="New hex color like '#4A90D9'")] = None,
-    node_ids: Annotated[list[str] | None, Field(description="REPLACES the member list wholesale — pass the complete list, not a delta")] = None,
+    node_ids: Annotated[list[str] | None, Field(description="REPLACES the member list wholesale — pass the complete list, not a delta. For adding/removing a single node prefer zone_node_add / zone_node_remove")] = None,
     drawing_id: Annotated[str | None, Field(description="UUID of a drawing to bind as visual representation (must not be bound to another zone)")] = None,
+    parent_zone_id: Annotated[str | None, Field(description="UUID of the new parent zone (409 if that would create a cycle)")] = None,
 ) -> list[dict[str, Any]]:
     """Update a zone. All fields optional; only provided fields change.
 
-    node_ids replaces the member list wholesale (not merged): to add a
-    node, fetch the current list (zone_get), add the new UUID, then pass
-    the complete list. Same for removals.
+    node_ids replaces the member list wholesale (not merged). To add or
+    remove a single node, prefer zone_node_add / zone_node_remove — they
+    are one atomic call with no read-modify-write race.
 
     Example: {"node_ids": ["<existing1>", "<existing2>", "<new>"]}
     """
     params = {"project_id": project_id, "zone_id": zone_id}
     local_vars = {"name": name, "description": description, "color": color,
-                  "node_ids": node_ids, "drawing_id": drawing_id}
+                  "node_ids": node_ids, "drawing_id": drawing_id, "parent_zone_id": parent_zone_id}
     for key, val in local_vars.items():
         if val is not None:
             params[key] = val
@@ -1363,9 +1377,93 @@ async def zone_delete(
     project_id: Annotated[str, Field(description="UUID of the project")],
     zone_id: Annotated[str, Field(description="UUID of the zone to delete")],
 ) -> list[dict[str, Any]]:
-    """Delete a zone. Member nodes are not touched; only the grouping is removed."""
+    """Delete a zone. Member nodes are not touched; only the grouping is removed.
+
+    Child zones (nested via parent_zone_id) survive and become parentless.
+    """
     return await asyncio.to_thread(_run_handler_sync, delete_zone_handler, {
         "project_id": project_id, "zone_id": zone_id,
+    })
+
+
+@mcp.tool()
+async def zone_node_add(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+    node_id: Annotated[str, Field(description="UUID of the node to add")],
+) -> list[dict[str, Any]]:
+    """Add a single node to a zone — the precise, race-free way to grow a zone.
+
+    Idempotent: adding an existing member is a no-op (204). The node must
+    exist (404 otherwise). Prefer this over zone_update when adding one
+    node: no read-modify-write, no risk of clobbering concurrent edits.
+    """
+    return await asyncio.to_thread(_run_handler_sync, add_node_to_zone_handler, {
+        "project_id": project_id, "zone_id": zone_id, "node_id": node_id,
+    })
+
+
+@mcp.tool()
+async def zone_node_remove(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+    node_id: Annotated[str, Field(description="UUID of the node to remove")],
+) -> list[dict[str, Any]]:
+    """Remove a single node from a zone — precise, race-free, idempotent.
+
+    The node itself is not touched (it may belong to other zones). Also
+    works on stale member IDs (node already deleted) to clean up.
+    """
+    return await asyncio.to_thread(_run_handler_sync, remove_node_from_zone_handler, {
+        "project_id": project_id, "zone_id": zone_id, "node_id": node_id,
+    })
+
+
+@mcp.tool()
+async def zone_start(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+    recursive: Annotated[bool, Field(description="Also start nodes of all descendant zones (default: false)")] = False,
+) -> list[dict[str, Any]]:
+    """Start all nodes in a zone (always-running types like switches/NAT are skipped)."""
+    return await asyncio.to_thread(_run_handler_sync, zone_bulk_action_handler, {
+        "project_id": project_id, "zone_id": zone_id, "action": "start", "recursive": recursive,
+    })
+
+
+@mcp.tool()
+async def zone_stop(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+    recursive: Annotated[bool, Field(description="Also stop nodes of all descendant zones (default: false)")] = False,
+) -> list[dict[str, Any]]:
+    """Stop all nodes in a zone."""
+    return await asyncio.to_thread(_run_handler_sync, zone_bulk_action_handler, {
+        "project_id": project_id, "zone_id": zone_id, "action": "stop", "recursive": recursive,
+    })
+
+
+@mcp.tool()
+async def zone_suspend(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+    recursive: Annotated[bool, Field(description="Also suspend nodes of all descendant zones (default: false)")] = False,
+) -> list[dict[str, Any]]:
+    """Suspend all nodes in a zone."""
+    return await asyncio.to_thread(_run_handler_sync, zone_bulk_action_handler, {
+        "project_id": project_id, "zone_id": zone_id, "action": "suspend", "recursive": recursive,
+    })
+
+
+@mcp.tool()
+async def zone_reload(
+    project_id: Annotated[str, Field(description="UUID of the project")],
+    zone_id: Annotated[str, Field(description="UUID of the zone")],
+    recursive: Annotated[bool, Field(description="Also reload nodes of all descendant zones (default: false)")] = False,
+) -> list[dict[str, Any]]:
+    """Reload (stop then start) all nodes in a zone."""
+    return await asyncio.to_thread(_run_handler_sync, zone_bulk_action_handler, {
+        "project_id": project_id, "zone_id": zone_id, "action": "reload", "recursive": recursive,
     })
 
 

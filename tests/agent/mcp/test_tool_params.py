@@ -110,6 +110,9 @@ HANDLER_FILES = {
     "get_zone_topology_handler": "zones.py",
     "update_zone_handler": "zones.py",
     "delete_zone_handler": "zones.py",
+    "add_node_to_zone_handler": "zones.py",
+    "remove_node_from_zone_handler": "zones.py",
+    "zone_bulk_action_handler": "zones.py",
 }
 
 

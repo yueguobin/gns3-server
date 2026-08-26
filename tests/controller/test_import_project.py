@@ -689,7 +689,13 @@ def test_regenerate_topology_ids_zones(tmpdir):
             "drawings": [{"drawing_id": drawing_id, "rotation": 0, "x": -210, "y": -108, "z": 0}],
             "zones": [
                 {"zone_id": zone_id, "name": "site-A", "color": None,
-                 "description": None, "node_ids": [node1_id, stale_id], "drawing_id": drawing_id}
+                 "description": None, "node_ids": [node1_id, stale_id], "drawing_id": drawing_id},
+                {"zone_id": "a51d6b32-5a1d-4c3d-9c3e-1f2a9c3e5d7f", "name": "child",
+                 "color": None, "description": None, "node_ids": [node2_id],
+                 "drawing_id": None, "parent_zone_id": zone_id},
+                {"zone_id": "b51d6b32-5a1d-4c3d-9c3e-1f2a9c3e5d7f", "name": "orphan",
+                 "color": None, "description": None, "node_ids": [],
+                 "drawing_id": None, "parent_zone_id": "cccccccc-0000-0000-0000-000000000000"},
             ],
         },
         "revision": 10,
@@ -707,6 +713,12 @@ def test_regenerate_topology_ids_zones(tmpdir):
     new_drawing_id = topology["topology"]["drawings"][0]["drawing_id"]
     assert zone["drawing_id"] == new_drawing_id  # follows the drawing remap
 
+    child = topology["topology"]["zones"][1]
+    assert child["zone_id"] != "a51d6b32-5a1d-4c3d-9c3e-1f2a9c3e5d7f"
+    assert child["parent_zone_id"] == zone["zone_id"]  # parent follows the zone remap
+
+    orphan = topology["topology"]["zones"][2]
+    assert orphan["parent_zone_id"] is None  # stale parent dropped, zone kept
     # a legacy topology without the zones key must not raise
     legacy = {
         "project_id": str(uuid.uuid4()),

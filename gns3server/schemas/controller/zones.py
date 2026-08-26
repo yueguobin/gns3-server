@@ -53,6 +53,14 @@ class ZoneBase(BaseModel):
             "membership stays in node_ids"
         ),
     )
+    parent_zone_id: Optional[UUID] = Field(
+        None,
+        description=(
+            "Optional parent zone, allowing zones to nest (e.g. 'dc-1' contains "
+            "'core' and 'edge'). Membership never cascades implicitly: the "
+            "sub-topology endpoint folds child zones in only with recursive=true"
+        ),
+    )
 
 
 class ZoneCreate(ZoneBase):
@@ -90,6 +98,9 @@ class ZoneTopology(BaseModel):
     The sub-topology of a zone: member nodes, links internal to the zone
     and links crossing the zone boundary. A link between two zones is a
     boundary link for both of them.
+
+    With recursive=true the members of all descendant zones are folded in
+    and sub_zone_ids lists which zones were included.
     """
 
     zone: Zone
@@ -103,3 +114,15 @@ class ZoneTopology(BaseModel):
         default_factory=list,
         description="Zone members which no longer exist in the project (stale references)",
     )
+    sub_zone_ids: List[UUID] = Field(
+        default_factory=list,
+        description="Descendant zones folded into this result (recursive=true only)",
+    )
+
+
+class ZoneMember(BaseModel):
+    """
+    Body for adding a single node to a zone.
+    """
+
+    node_id: UUID

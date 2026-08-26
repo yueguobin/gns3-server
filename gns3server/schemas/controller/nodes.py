@@ -150,6 +150,14 @@ class NodeBase(BaseModel):
         default_factory=list,
         description="User-defined metadata tags (e.g. 'vendor:cisco' or 'model:7200')"
     )
+    zone_ids: Optional[List[UUID]] = Field(
+        None,
+        description=(
+            "Zones this node belongs to. Write-through: membership is stored on "
+            "the zones, this field replaces the node's zone memberships on "
+            "create/update and is computed back on read"
+        ),
+    )
 
 
 class NodeCreate(NodeBase):

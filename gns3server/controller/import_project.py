@@ -262,13 +262,23 @@ def regenerate_topology_ids(topology, new_project_path, reset_mac_addresses=Fals
             drawing_old_to_new[drawing["drawing_id"]] = new_drawing_id
         drawing["drawing_id"] = new_drawing_id
 
-    # Generate new zone IDs and remap the node IDs and drawing ID they reference.
-    # Stale node references are dropped instead of raising.
-    for zone in topology["topology"].get("zones", []):
-        zone["zone_id"] = str(uuid.uuid4())
+    # Generate new zone IDs, then remap the node, drawing and parent zone IDs
+    # they reference. Stale node references are dropped instead of raising.
+    zones = topology["topology"].get("zones", [])
+    zone_old_to_new = {}
+    for zone in zones:
+        new_zone_id = str(uuid.uuid4())
+        if "zone_id" in zone:
+            zone_old_to_new[zone["zone_id"]] = new_zone_id
+        zone["zone_id"] = new_zone_id
+    for zone in zones:
         zone["node_ids"] = [node_old_to_new[n] for n in zone.get("node_ids", []) if n in node_old_to_new]
         if zone.get("drawing_id") in drawing_old_to_new:
             zone["drawing_id"] = drawing_old_to_new[zone["drawing_id"]]
+        if zone.get("parent_zone_id") in zone_old_to_new:
+            zone["parent_zone_id"] = zone_old_to_new[zone["parent_zone_id"]]
+        elif zone.get("parent_zone_id"):
+            zone["parent_zone_id"] = None  # parent was dropped, keep the zone parentless
 
 def _move_node_file(path, old_id, new_id):
     """

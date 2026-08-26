@@ -76,7 +76,45 @@ def get_zone_topology_handler(params: dict[str, Any], gns3_ctx: dict[str, Any]) 
     if not project_id or not zone_id:
         return {"error": "project_id and zone_id are required"}
     conn = _get_connector(gns3_ctx)
-    return conn.http_call("get", f"{conn.base_url}/projects/{project_id}/zones/{zone_id}/topology").json()
+    query = "?recursive=true" if params.get("recursive") else ""
+    return conn.http_call("get", f"{conn.base_url}/projects/{project_id}/zones/{zone_id}/topology{query}").json()
+
+
+def add_node_to_zone_handler(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
+    project_id = params.get("project_id")
+    zone_id = params.get("zone_id")
+    node_id = params.get("node_id")
+    if not project_id or not zone_id or not node_id:
+        return {"error": "project_id, zone_id and node_id are required"}
+    conn = _get_connector(gns3_ctx)
+    conn.http_call("post", f"{conn.base_url}/projects/{project_id}/zones/{zone_id}/nodes",
+                   json_data={"node_id": node_id})
+    return {"message": f"Node {node_id} added to zone {zone_id}", "zone_id": zone_id, "node_id": node_id}
+
+
+def remove_node_from_zone_handler(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
+    project_id = params.get("project_id")
+    zone_id = params.get("zone_id")
+    node_id = params.get("node_id")
+    if not project_id or not zone_id or not node_id:
+        return {"error": "project_id, zone_id and node_id are required"}
+    conn = _get_connector(gns3_ctx)
+    conn.http_call("delete", f"{conn.base_url}/projects/{project_id}/zones/{zone_id}/nodes/{node_id}")
+    return {"message": f"Node {node_id} removed from zone {zone_id}", "zone_id": zone_id, "node_id": node_id}
+
+
+def zone_bulk_action_handler(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
+    project_id = params.get("project_id")
+    zone_id = params.get("zone_id")
+    action = params.get("action")
+    if not project_id or not zone_id or not action:
+        return {"error": "project_id, zone_id and action are required"}
+    if action not in ("start", "stop", "suspend", "reload"):
+        return {"error": "action must be one of: start, stop, suspend, reload"}
+    conn = _get_connector(gns3_ctx)
+    query = "?recursive=true" if params.get("recursive") else ""
+    conn.http_call("post", f"{conn.base_url}/projects/{project_id}/zones/{zone_id}/nodes/{action}{query}")
+    return {"message": f"Zone {zone_id} {action} completed", "zone_id": zone_id, "action": action}
 
 
 def update_zone_handler(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:

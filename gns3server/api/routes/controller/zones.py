@@ -19,10 +19,12 @@
 API routes for zones.
 """
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from typing import List
 from uuid import UUID
+
+from gns3server.utils.asyncio.pool import Pool
 
 from gns3server.controller import Controller
 from gns3server.controller.controller_error import ControllerError
@@ -49,6 +51,34 @@ def _check_drawing_binding(project, drawing_id, zone_id=None) -> None:
             raise ControllerError(
                 f"Drawing {drawing_id} is already the visual representation of zone {other_zone.id}"
             )
+
+
+def _check_parent_zone(project, parent_zone_id, zone_id=None) -> None:
+    """
+    A parent zone must exist, cannot be the zone itself and cannot be one of
+    its descendants (that would create a cycle).
+    """
+
+    parent = project.get_zone(str(parent_zone_id))
+    if zone_id and parent.id == str(zone_id):
+        raise ControllerError(f"Zone {zone_id} cannot be its own parent")
+    if zone_id:
+        ancestor = parent
+        while ancestor is not None:
+            if ancestor.id == str(zone_id):
+                raise ControllerError(f"Zone {zone_id} cannot be a parent of one of its ancestors")
+            ancestor = project.zones.get(ancestor.parent_zone_id) if ancestor.parent_zone_id else None
+
+
+def _zone_member_nodes(project, zone, recursive: bool):
+    """
+    The node IDs a zone covers — its own members, plus the members of all
+    descendant zones when recursive. Returns (member_ids, sub_zone_ids).
+    """
+
+    if not recursive:
+        return set(zone.node_ids), []
+    return project.zone_subtree(zone)
 
 
 @router.get(
@@ -89,6 +119,8 @@ async def create_zone(project_id: UUID, zone_data: schemas.ZoneCreate) -> schema
     zone_properties = jsonable_encoder(zone_data, exclude_unset=True)
     if zone_properties.get("drawing_id"):
         _check_drawing_binding(project, zone_properties["drawing_id"])
+    if zone_properties.get("parent_zone_id"):
+        _check_parent_zone(project, zone_properties["parent_zone_id"])
     zone = await project.add_zone(**zone_properties)
     return zone.asdict()
 
@@ -117,23 +149,30 @@ async def get_zone(project_id: UUID, zone_id: UUID) -> schemas.Zone:
     response_model_exclude_unset=True,
     dependencies=[Depends(has_privilege("Zone.Audit"))]
 )
-async def get_zone_topology(project_id: UUID, zone_id: UUID) -> schemas.ZoneTopology:
+async def get_zone_topology(
+        project_id: UUID,
+        zone_id: UUID,
+        recursive: bool = Query(False, description="Fold member nodes of all descendant zones in")
+) -> schemas.ZoneTopology:
     """
     Return the sub-topology of a zone: its member nodes, the links internal
     to the zone and the links crossing the zone boundary (with the node on
     the far side inlined in remote_node). A link between two zones is a
     boundary link for both of them.
 
+    With recursive=true the members of all descendant zones are folded in
+    (sub_zone_ids lists them).
+
     Required privilege: Zone.Audit
     """
 
     project = await Controller.instance().get_loaded_project(str(project_id))
     zone = project.get_zone(str(zone_id))
-    member_ids = set(zone.node_ids)
+    member_ids, sub_zone_ids = _zone_member_nodes(project, zone, recursive)
 
     nodes = []
     missing_node_ids = []
-    for node_id in zone.node_ids:
+    for node_id in member_ids:
         node = project.nodes.get(node_id)
         if node is None:
             # tolerate stale references: report them instead of failing
@@ -159,6 +198,7 @@ async def get_zone_topology(project_id: UUID, zone_id: UUID) -> schemas.ZoneTopo
         "links": links,
         "boundary_links": boundary_links,
         "missing_node_ids": missing_node_ids,
+        "sub_zone_ids": sub_zone_ids,
     }
 
 
@@ -180,6 +220,8 @@ async def update_zone(project_id: UUID, zone_id: UUID, zone_data: schemas.ZoneUp
     zone_properties = jsonable_encoder(zone_data, exclude_unset=True)
     if zone_properties.get("drawing_id"):
         _check_drawing_binding(project, zone_properties["drawing_id"], zone_id=str(zone.id))
+    if zone_properties.get("parent_zone_id"):
+        _check_parent_zone(project, zone_properties["parent_zone_id"], zone_id=str(zone.id))
     await zone.update(**zone_properties)
     return zone.asdict()
 
@@ -203,3 +245,165 @@ async def delete_zone(
     project = await Controller.instance().get_loaded_project(str(project_id))
     await project.delete_zone(str(zone_id))
     await rbac_repo.delete_all_ace_starting_with_path(f"/zones/{zone_id}")
+
+
+@router.post(
+    "/{zone_id}/nodes",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(has_privilege("Zone.Modify"))]
+)
+async def add_node_to_zone(project_id: UUID, zone_id: UUID, member: schemas.ZoneMember) -> None:
+    """
+    Add a single node to a zone. Idempotent: adding an existing member is a no-op.
+
+    Required privilege: Zone.Modify
+    """
+
+    project = await Controller.instance().get_loaded_project(str(project_id))
+    zone = project.get_zone(str(zone_id))
+    project.get_node(str(member.node_id))  # 404 if the node doesn't exist
+    if str(member.node_id) not in zone.node_ids:
+        zone.node_ids = zone.node_ids + [str(member.node_id)]
+        project.dump()
+        project.emit_notification("zone.updated", zone.asdict())
+
+
+@router.delete(
+    "/{zone_id}/nodes/{node_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(has_privilege("Zone.Modify"))]
+)
+async def remove_node_from_zone(project_id: UUID, zone_id: UUID, node_id: UUID) -> None:
+    """
+    Remove a single node from a zone. Idempotent; the node itself is not
+    touched. Also usable to clean up stale member references.
+
+    Required privilege: Zone.Modify
+    """
+
+    project = await Controller.instance().get_loaded_project(str(project_id))
+    zone = project.get_zone(str(zone_id))
+    if str(node_id) in zone.node_ids:
+        zone.node_ids = [nid for nid in zone.node_ids if nid != str(node_id)]
+        project.dump()
+        project.emit_notification("zone.updated", zone.asdict())
+
+
+async def _zone_lifecycle(project, zone, recursive: bool, action: str) -> None:
+    """
+    Run a lifecycle action (start/stop/suspend) on the nodes of a zone,
+    mirroring the project-level bulk endpoints.
+    """
+
+    member_ids, _ = _zone_member_nodes(project, zone, recursive)
+    nodes = [
+        n for nid in member_ids
+        if (n := project.nodes.get(nid)) is not None and not n.is_always_running()
+    ]
+    if not nodes:
+        return
+    pool = Pool(concurrency=10)
+    for node in nodes:
+        pool.append(getattr(node, action))
+    await pool.join()
+
+
+@router.post(
+    "/{zone_id}/nodes/start",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(has_privilege("Node.PowerMgmt"))]
+)
+async def start_zone_nodes(
+        project_id: UUID,
+        zone_id: UUID,
+        recursive: bool = Query(False, description="Also start nodes of descendant zones")
+) -> None:
+    """
+    Start all nodes in a zone.
+
+    Required privilege: Node.PowerMgmt
+    """
+
+    project = await Controller.instance().get_loaded_project(str(project_id))
+    zone = project.get_zone(str(zone_id))
+    try:
+        await _zone_lifecycle(project, zone, recursive, "start")
+    except HTTPException as e:
+        if e.status_code != status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
+
+
+@router.post(
+    "/{zone_id}/nodes/stop",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(has_privilege("Node.PowerMgmt"))]
+)
+async def stop_zone_nodes(
+        project_id: UUID,
+        zone_id: UUID,
+        recursive: bool = Query(False, description="Also stop nodes of descendant zones")
+) -> None:
+    """
+    Stop all nodes in a zone.
+
+    Required privilege: Node.PowerMgmt
+    """
+
+    project = await Controller.instance().get_loaded_project(str(project_id))
+    zone = project.get_zone(str(zone_id))
+    try:
+        await _zone_lifecycle(project, zone, recursive, "stop")
+    except HTTPException as e:
+        if e.status_code != status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
+
+
+@router.post(
+    "/{zone_id}/nodes/suspend",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(has_privilege("Node.PowerMgmt"))]
+)
+async def suspend_zone_nodes(
+        project_id: UUID,
+        zone_id: UUID,
+        recursive: bool = Query(False, description="Also suspend nodes of descendant zones")
+) -> None:
+    """
+    Suspend all nodes in a zone.
+
+    Required privilege: Node.PowerMgmt
+    """
+
+    project = await Controller.instance().get_loaded_project(str(project_id))
+    zone = project.get_zone(str(zone_id))
+    try:
+        await _zone_lifecycle(project, zone, recursive, "suspend")
+    except HTTPException as e:
+        if e.status_code != status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise
+
+
+@router.post(
+    "/{zone_id}/nodes/reload",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(has_privilege("Node.PowerMgmt"))]
+)
+async def reload_zone_nodes(
+        project_id: UUID,
+        zone_id: UUID,
+        recursive: bool = Query(False, description="Also reload nodes of descendant zones")
+) -> None:
+    """
+    Reload (stop then start) all nodes in a zone.
+
+    Required privilege: Node.PowerMgmt
+    """
+
+    project = await Controller.instance().get_loaded_project(str(project_id))
+    zone = project.get_zone(str(zone_id))
+    try:
+        await _zone_lifecycle(project, zone, recursive, "stop")
+        await _zone_lifecycle(project, zone, recursive, "start")
+    except HTTPException as e:
+        if e.status_code != status.HTTP_405_METHOD_NOT_ALLOWED:
+            raise

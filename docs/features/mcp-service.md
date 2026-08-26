@@ -94,7 +94,7 @@ All subsequent tool handler REST API calls use this JWT → zero extra bcrypt
 
 ## Available Tools
 
-**89 tools** across 12 categories:
+**95 tools** across 12 categories:
 
 ### Project (14)
 
@@ -191,16 +191,22 @@ All subsequent tool handler REST API calls use this JWT → zero extra bcrypt
 | `drawing_update` | Update drawing (position, rotation, SVG) |
 | `drawing_delete` | Delete a drawing |
 
-### Zone (6)
+### Zone (12)
 
 | Tool | Description |
 |------|-------------|
 | `zone_list` | List zones (named node groups) |
 | `zone_get` | Get zone definition |
-| `zone_create` | Create a zone (name, node_ids, color, optional bound drawing) |
-| `zone_topology` | Get a zone's sub-topology: member nodes, internal links, boundary links with remote_node |
+| `zone_create` | Create a zone (name, node_ids, color, optional bound drawing, optional parent for nesting) |
+| `zone_topology` | Get a zone's sub-topology: member nodes, internal links, boundary links with remote_node; recursive=true folds sub-zones in |
 | `zone_update` | Update a zone (node_ids replaces the member list wholesale) |
-| `zone_delete` | Delete a zone (member nodes untouched) |
+| `zone_delete` | Delete a zone (member nodes untouched, child zones unparented) |
+| `zone_node_add` | Add a single node to a zone (precise, race-free, idempotent) |
+| `zone_node_remove` | Remove a single node from a zone (idempotent) |
+| `zone_start` | Start all nodes in a zone (optional recursive over sub-zones) |
+| `zone_stop` | Stop all nodes in a zone |
+| `zone_suspend` | Suspend all nodes in a zone |
+| `zone_reload` | Reload all nodes in a zone |
 
 <!--
 Symbol tools (symbol_list / symbol_get / symbol_dimensions /
