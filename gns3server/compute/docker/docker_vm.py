@@ -890,19 +890,24 @@ class DockerVM(BaseNode):
             await self._start_ubridge(require_privileged_access=True)
 
             for adapter_number in range(0, self.adapters):
-                nio = self._ethernet_adapters[adapter_number].get_nio(0)
-                async with self.manager.ubridge_lock:
-                    try:
-                        await self._add_ubridge_connection(nio, adapter_number)
-                    except UbridgeNamespaceError:
-                        log.error("Container %s failed to start", self.name)
-                        await self.stop()
+                adapter = self._ethernet_adapters[adapter_number]
+                # Single-port adapters (the standard case) loop once, keeping
+                # the historical command sequence; multi-port adapters
+                # (e.g. IOL's 4-port units) get one bridge per port.
+                for port_number in range(0, adapter.interfaces):
+                    nio = adapter.get_nio(port_number)
+                    async with self.manager.ubridge_lock:
+                        try:
+                            await self._add_ubridge_connection(nio, adapter_number, port_number)
+                        except UbridgeNamespaceError:
+                            log.error("Container %s failed to start", self.name)
+                            await self.stop()
 
-                        # The container can crash soon after the start, this means we can not move the interface to the container namespace
-                        logdata = await self._get_log()
-                        for line in logdata.split("\n"):
-                            log.error(line)
-                        raise DockerError(logdata)
+                            # The container can crash soon after the start, this means we can not move the interface to the container namespace
+                            logdata = await self._get_log()
+                            for line in logdata.split("\n"):
+                                log.error(line)
+                            raise DockerError(logdata)
 
             await self._start_console_server()
 
@@ -1393,12 +1398,29 @@ class DockerVM(BaseNode):
         """
         return f"eth{adapter_number}"
 
-    async def _add_ubridge_connection(self, nio, adapter_number):
+    def _bridge_name(self, adapter_number, port_number=0):
+        """
+        uBridge bridge name for an adapter port. Adapters with a single
+        port (every standard Docker node) keep the historical
+        "bridge{adapter}" name; multi-port adapters (e.g. IOL's 4-port
+        units) get one bridge per port.
+
+        :param adapter_number: adapter number
+        :param port_number: port number on the adapter
+        """
+
+        if port_number:
+            return f"bridge{adapter_number}_{port_number}"
+        return f"bridge{adapter_number}"
+
+    async def _add_ubridge_connection(self, nio, adapter_number, port_number=0):
         """
         Creates a connection in uBridge.
 
         :param nio: NIO instance or None if it's a dummy interface (if an interface is missing in ubridge you can't see it via ifconfig in the container)
         :param adapter_number: adapter number
+        :param port_number: port number on the adapter (standard Docker
+            adapters have a single port, so this is always 0 on the TAP path)
         """
 
         try:
@@ -1407,6 +1429,13 @@ class DockerVM(BaseNode):
             raise DockerError(
                 "Adapter {adapter_number} doesn't exist on Docker container '{name}'".format(
                     name=self.name, adapter_number=adapter_number
+                )
+            )
+
+        if port_number and adapter.interfaces == 1:
+            raise DockerError(
+                "Port {port_number} doesn't exist on adapter {adapter_number} of Docker container '{name}'".format(
+                    name=self.name, port_number=port_number, adapter_number=adapter_number
                 )
             )
 
@@ -1420,12 +1449,12 @@ class DockerVM(BaseNode):
                     name=self.name, adapter_number=adapter_number
                 )
             )
-        bridge_name = f"bridge{adapter_number}"
+        bridge_name = self._bridge_name(adapter_number, port_number)
         await self._ubridge_send(f"bridge create {bridge_name}")
         self._bridges.add(bridge_name)
         await self._ubridge_send(
-            "bridge add_nio_tap bridge{adapter_number} {hostif}".format(
-                adapter_number=adapter_number, hostif=adapter.host_ifc
+            "bridge add_nio_tap {bridge_name} {hostif}".format(
+                bridge_name=bridge_name, hostif=adapter.host_ifc
             )
         )
 
@@ -1453,16 +1482,16 @@ class DockerVM(BaseNode):
             log.debug(f"Created adapter {adapter_number} with MAC address {mac_address} in namespace {self._namespace}")
 
         if nio:
-            await self._connect_nio(adapter_number, nio)
+            await self._connect_nio(adapter_number, nio, port_number)
 
     async def _get_namespace(self):
 
         result = await self.manager.query("GET", f"containers/{self._cid}/json")
         return int(result["State"]["Pid"])
 
-    async def _connect_nio(self, adapter_number, nio):
+    async def _connect_nio(self, adapter_number, nio, port_number=0):
 
-        bridge_name = f"bridge{adapter_number}"
+        bridge_name = self._bridge_name(adapter_number, port_number)
         await self._ubridge_send(
             "bridge add_nio_udp {bridge_name} {lport} {rhost} {rport}".format(
                 bridge_name=bridge_name, lport=nio.lport, rhost=nio.rhost, rport=nio.rport
@@ -1478,12 +1507,13 @@ class DockerVM(BaseNode):
         await self._ubridge_apply_filters(bridge_name, nio.filters)
         await self._ubridge_apply_markers(bridge_name, nio)
 
-    async def adapter_add_nio_binding(self, adapter_number, nio):
+    async def adapter_add_nio_binding(self, adapter_number, nio, port_number=0):
         """
         Adds an adapter NIO binding.
 
         :param adapter_number: adapter number
-        :param nio: NIO instance to add to the slot/port
+        :param nio: NIO instance to add to the adapter/port
+        :param port_number: port number on the adapter (0 for single-port adapters)
         """
 
         try:
@@ -1495,34 +1525,43 @@ class DockerVM(BaseNode):
                 )
             )
 
-        if self.status == "started" and self.ubridge:
-            await self._connect_nio(adapter_number, nio)
+        if not adapter.port_exists(port_number):
+            raise DockerError(
+                "Port {port_number} doesn't exist on adapter {adapter_number} of Docker container '{name}'".format(
+                    name=self.name, port_number=port_number, adapter_number=adapter_number
+                )
+            )
 
-        adapter.add_nio(0, nio)
+        if self.status == "started" and self.ubridge:
+            await self._connect_nio(adapter_number, nio, port_number)
+
+        adapter.add_nio(port_number, nio)
         log.debug(
             "Docker container '{name}' [{id}]: {nio} added to adapter {adapter_number}".format(
                 name=self.name, id=self._id, nio=nio, adapter_number=adapter_number
             )
         )
 
-    async def adapter_update_nio_binding(self, adapter_number, nio):
+    async def adapter_update_nio_binding(self, adapter_number, nio, port_number=0):
         """
         Update an adapter NIO binding.
 
         :param adapter_number: adapter number
         :param nio: NIO instance to update the adapter
+        :param port_number: port number on the adapter (0 for single-port adapters)
         """
 
         if self.ubridge:
-            bridge_name = f"bridge{adapter_number}"
+            bridge_name = self._bridge_name(adapter_number, port_number)
             if bridge_name in self._bridges:
                 await self._ubridge_apply_filters(bridge_name, nio.filters)
                 await self._ubridge_apply_markers(bridge_name, nio)
-    async def adapter_remove_nio_binding(self, adapter_number):
+    async def adapter_remove_nio_binding(self, adapter_number, port_number=0):
         """
         Removes an adapter NIO binding.
 
         :param adapter_number: adapter number
+        :param port_number: port number on the adapter (0 for single-port adapters)
 
         :returns: NIO instance
         """
@@ -1536,18 +1575,18 @@ class DockerVM(BaseNode):
                 )
             )
 
-        await self.stop_capture(adapter_number)
+        await self.stop_capture(adapter_number, port_number)
         if self.ubridge:
-            nio = adapter.get_nio(0)
-            bridge_name = f"bridge{adapter_number}"
+            nio = adapter.get_nio(port_number)
+            bridge_name = self._bridge_name(adapter_number, port_number)
             await self._ubridge_send(f"bridge stop {bridge_name}")
             await self._ubridge_send(
-                "bridge remove_nio_udp bridge{adapter} {lport} {rhost} {rport}".format(
-                    adapter=adapter_number, lport=nio.lport, rhost=nio.rhost, rport=nio.rport
+                "bridge remove_nio_udp {bridge_name} {lport} {rhost} {rport}".format(
+                    bridge_name=bridge_name, lport=nio.lport, rhost=nio.rhost, rport=nio.rport
                 )
             )
 
-        adapter.remove_nio(0)
+        adapter.remove_nio(port_number)
 
         log.debug(
             "Docker VM '{name}' [{id}]: {nio} removed from adapter {adapter_number}".format(
@@ -1555,11 +1594,12 @@ class DockerVM(BaseNode):
             )
         )
 
-    def get_nio(self, adapter_number):
+    def get_nio(self, adapter_number, port_number=0):
         """
         Gets an adapter NIO binding.
 
         :param adapter_number: adapter number
+        :param port_number: port number on the adapter (0 for single-port adapters)
 
         :returns: NIO instance
         """
@@ -1573,10 +1613,10 @@ class DockerVM(BaseNode):
                 )
             )
 
-        nio = adapter.get_nio(0)
+        nio = adapter.get_nio(port_number)
 
         if not nio:
-            raise DockerError(f"Adapter {adapter_number} is not connected")
+            raise DockerError(f"Adapter {adapter_number} port {port_number} is not connected")
 
         return nio
 
@@ -1622,46 +1662,49 @@ class DockerVM(BaseNode):
 
         await self.manager.pull_image(image, progress_callback=callback)
 
-    async def _start_ubridge_capture(self, adapter_number, output_file):
+    async def _start_ubridge_capture(self, adapter_number, output_file, port_number=0):
         """
         Starts a packet capture in uBridge.
 
         :param adapter_number: adapter number
         :param output_file: PCAP destination file for the capture
+        :param port_number: port number on the adapter (0 for single-port adapters)
         """
 
-        adapter = f"bridge{adapter_number}"
+        bridge_name = self._bridge_name(adapter_number, port_number)
         if not self.ubridge:
             raise DockerError("Cannot start the packet capture: uBridge is not running")
-        await self._ubridge_send(f'bridge start_capture {adapter} "{output_file}"')
+        await self._ubridge_send(f'bridge start_capture {bridge_name} "{output_file}"')
 
-    async def _stop_ubridge_capture(self, adapter_number):
+    async def _stop_ubridge_capture(self, adapter_number, port_number=0):
         """
         Stops a packet capture in uBridge.
 
         :param adapter_number: adapter number
+        :param port_number: port number on the adapter (0 for single-port adapters)
         """
 
-        adapter = f"bridge{adapter_number}"
+        bridge_name = self._bridge_name(adapter_number, port_number)
         if not self.ubridge:
             raise DockerError("Cannot stop the packet capture: uBridge is not running")
-        await self._ubridge_send(f"bridge stop_capture {adapter}")
+        await self._ubridge_send(f"bridge stop_capture {bridge_name}")
 
-    async def start_capture(self, adapter_number, output_file):
+    async def start_capture(self, adapter_number, output_file, port_number=0):
         """
         Starts a packet capture.
 
         :param adapter_number: adapter number
         :param output_file: PCAP destination file for the capture
+        :param port_number: port number on the adapter (0 for single-port adapters)
         """
 
-        nio = self.get_nio(adapter_number)
+        nio = self.get_nio(adapter_number, port_number)
         if nio.capturing:
             raise DockerError(f"Packet capture is already activated on adapter {adapter_number}")
 
         nio.start_packet_capture(output_file)
         if self.status == "started" and self.ubridge:
-            await self._start_ubridge_capture(adapter_number, output_file)
+            await self._start_ubridge_capture(adapter_number, output_file, port_number)
 
         log.debug(
             "Docker VM '{name}' [{id}]: starting packet capture on adapter {adapter_number}".format(
@@ -1669,19 +1712,20 @@ class DockerVM(BaseNode):
             )
         )
 
-    async def stop_capture(self, adapter_number):
+    async def stop_capture(self, adapter_number, port_number=0):
         """
         Stops a packet capture.
 
         :param adapter_number: adapter number
+        :param port_number: port number on the adapter (0 for single-port adapters)
         """
 
-        nio = self.get_nio(adapter_number)
+        nio = self.get_nio(adapter_number, port_number)
         if not nio.capturing:
             return
         nio.stop_packet_capture()
         if self.status == "started" and self.ubridge:
-            await self._stop_ubridge_capture(adapter_number)
+            await self._stop_ubridge_capture(adapter_number, port_number)
 
         log.debug(
             "Docker VM '{name}' [{id}]: stopping packet capture on adapter {adapter_number}".format(
