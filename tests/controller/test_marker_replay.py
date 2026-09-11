@@ -170,6 +170,12 @@ class _FakeSession:
         self.closed = True
 
 
+def _pretend_sharkd(monkeypatch):
+    """The manager-level tests run entirely against fakes — the sharkd binary
+    must not be a precondition (the suite stays green without the engine)."""
+    monkeypatch.setattr(marker_replay.shutil, "which", lambda name: "/usr/bin/sharkd")
+
+
 # ---------------------------------------------------------------------------
 # pcap scanning (engine-free backbone)
 # ---------------------------------------------------------------------------
@@ -473,7 +479,8 @@ class TestSessions:
             with pytest.raises(SharkdMissingError):
                 await build_timeline(project, tag=7)
 
-    async def test_cap_evicts_idle_lru_only(self, tmp_path):
+    async def test_cap_evicts_idle_lru_only(self, tmp_path, monkeypatch):
+        _pretend_sharkd(monkeypatch)
         manager = marker_replay._SharkdManager()
         fakes = {}
 
@@ -495,7 +502,8 @@ class TestSessions:
         assert fakes[str(tmp_path / "pcap1")].closed is True
         assert fakes[str(tmp_path / "pcap2")].closed is False
 
-    async def test_in_use_session_survives_cap_pressure(self, tmp_path):
+    async def test_in_use_session_survives_cap_pressure(self, tmp_path, monkeypatch):
+        _pretend_sharkd(monkeypatch)
         manager = marker_replay._SharkdManager()
 
         async def fake_spawn(pcap, stat):
@@ -518,7 +526,8 @@ class TestSessions:
             assert len(manager._sessions) <= marker_replay.SESSION_MAX
         await manager.close_all()
 
-    async def test_concurrent_acquire_spawns_once(self, tmp_path):
+    async def test_concurrent_acquire_spawns_once(self, tmp_path, monkeypatch):
+        _pretend_sharkd(monkeypatch)
         manager = marker_replay._SharkdManager()
         spawns = []
 
@@ -582,6 +591,7 @@ class TestSessions:
         assert proc.returncode is not None
 
     async def test_filter_error_only_for_the_filter_code(self, tmp_path, monkeypatch):
+        _pretend_sharkd(monkeypatch)
         manager = marker_replay._SharkdManager()
         monkeypatch.setattr(marker_replay, "_manager", manager)
         pcap = tmp_path / "n1_linkA_icmp.pcap"
