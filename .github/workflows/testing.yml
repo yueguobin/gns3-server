@@ -30,6 +30,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         python -m pip install .[ai-features,dev]
+    - name: Install sharkd (marker replay engine)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wireshark-common
 
     - name: Lint with flake8
       run: |
