@@ -1092,10 +1092,14 @@ class DockerVM(BaseNode):
         # as the container-side pass in _fix_permissions). --pull=never keeps
         # a stale tag reference from turning into a registry pull attempt,
         # and the create-time image ID (when known) is immune to retagging.
+        # --user 0:0 overrides a USER baked into the image (e.g.
+        # ghcr.io/nokia/srlinux runs as "user"): without it the "privileged"
+        # helper is exactly as unprivileged as the server itself and
+        # chmod/chown fail with EPERM on files written by other uids.
         image_ref = self._image_id or self._image
         try:
             process = await asyncio.subprocess.create_subprocess_exec(
-                "docker", "run", "--rm", "--network", "none", "--pull", "never",
+                "docker", "run", "--rm", "--network", "none", "--pull", "never", "--user", "0:0",
                 "--entrypoint", "/gns3/bin/busybox",
                 "-v", f"{resources_path}:/gns3:ro",
                 "-v", f"{directory}:/target",
@@ -2049,7 +2053,7 @@ class DockerVM(BaseNode):
                     pass
             raise ComputeError(
                 f"Could not delete the node directory '{self.working_dir}': files left owned by "
-                f"root could not be reclaimed ({e}). Reclaim them manually with: "
-                f"docker run --rm -v \"{self.working_dir}\":/target --entrypoint /bin/sh "
+                f"another user could not be reclaimed ({e}). Reclaim them manually with: "
+                f"docker run --rm --user 0:0 -v \"{self.working_dir}\":/target --entrypoint /bin/sh "
                 f"{self._image} -c 'chown -R {os.getuid()}:{os.getgid()} /target'"
             )

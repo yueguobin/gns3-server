@@ -2093,7 +2093,7 @@ async def test_reclaim_runs_helper_container(vm, tmp_path):
                 assert await vm._reclaim_directory_ownership(str(directory)) is True
 
     args, _ = mock_exec.call_args
-    assert args[:7] == ("docker", "run", "--rm", "--network", "none", "--pull", "never")
+    assert args[:9] == ("docker", "run", "--rm", "--network", "none", "--pull", "never", "--user", "0:0")
     assert args[args.index("--entrypoint") + 1] == "/gns3/bin/busybox"
     assert "/gns3-share:/gns3:ro" in args
     assert f"{directory}:/target" in args
@@ -2149,7 +2149,7 @@ async def test_delete_reports_root_files_when_reclaim_fails(vm):
         with patch.object(vm, "_reclaim_directory_ownership", new_callable=AsyncioMagicMock, return_value=False):
             with patch("gns3server.compute.base_node.shutil.rmtree",
                        side_effect=OSError("permission denied")):
-                with pytest.raises(ComputeError, match="owned by root"):
+                with pytest.raises(ComputeError, match="owned by another user"):
                     await vm.delete()
 
 
