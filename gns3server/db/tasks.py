@@ -309,7 +309,8 @@ async def monitor_images_on_filesystem(app: FastAPI):
         async with AsyncSession(app.state._db_engine) as db_session:
             images_repository = ImagesRepository(db_session)
             try:
-                image = await read_image_info(image_path, expected_image_type)
+                image = await read_image_info(
+                    image_path, expected_image_type, Config.instance().settings.Server.allow_raw_images)
             except InvalidImageError as e:
                 log.warning(str(e))
                 continue

@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 
 from gns3server.utils import force_unix_path
-from gns3server.utils.images import md5sum, remove_checksum, images_directories, list_images
+from gns3server.utils.images import md5sum, remove_checksum, images_directories, list_images, discover_images
 
 
 def test_images_directories(tmpdir, config):
@@ -200,3 +200,23 @@ async def test_list_images(tmpdir, config):
             'path': 'qemu_image.qcow2'
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_discover_images_allow_raw_images(tmpdir, config):
+
+    # raw image starting with zeros (e.g. an OVMF firmware file)
+    raw_image = tmpdir / "images1" / "QEMU" / "OVMF-edk2-stable202305.fd"
+    raw_image.write(b'\x00' * 7, ensure=True)
+
+    config.settings.Server.images_path = str(tmpdir / "images1")
+    config.settings.Server.additional_images_paths = []
+
+    config.settings.Server.allow_raw_images = True
+    images = await discover_images("qemu")
+    assert len(images) == 1
+    assert images[0]["image_name"] == "OVMF-edk2-stable202305.fd"
+    assert images[0]["image_type"] == "qemu"
+
+    config.settings.Server.allow_raw_images = False
+    assert await discover_images("qemu") == []

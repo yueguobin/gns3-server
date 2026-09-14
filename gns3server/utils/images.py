@@ -123,14 +123,14 @@ def get_builtin_disks() -> List[str]:
     return builtin_disks
 
 
-async def read_image_info(path: str, expected_image_type: str = None) -> dict:
+async def read_image_info(path: str, expected_image_type: str = None, allow_raw_image: bool = False) -> dict:
 
     header_magic_len = 7
     try:
         async with aiofiles.open(path, "rb") as f:
             image_header = await f.read(header_magic_len)  # read the first 7 bytes of the file
             if len(image_header) >= header_magic_len:
-                detected_image_type = check_valid_image_header(path, image_header)
+                detected_image_type = check_valid_image_header(path, image_header, allow_raw_image)
                 if expected_image_type and detected_image_type != expected_image_type:
                     raise InvalidImageError(f"Detected image type for '{path}' is {detected_image_type}, "
                                             f"expected type is {expected_image_type}")
@@ -158,6 +158,7 @@ async def discover_images(image_type: str, skip_image_paths: list = None) -> Lis
     files = set()
     images = []
 
+    allow_raw_image = Config.instance().settings.Server.allow_raw_images
     for directory in images_directories(image_type, include_parent_directory=False):
         log.info(f"Discovering images in '{directory}'")
         for root, _, filenames in os.walk(os.path.normpath(directory)):
@@ -173,7 +174,7 @@ async def discover_images(image_type: str, skip_image_paths: list = None) -> Lis
                 files.add(path)
 
                 try:
-                    images.append(await read_image_info(path, image_type))
+                    images.append(await read_image_info(path, image_type, allow_raw_image))
                 except InvalidImageError as e:
                     log.debug(str(e))
                     continue
