@@ -43,6 +43,7 @@ from .base_node import BaseNode
 from .nios.nio_udp import NIOUDP
 from .nios.nio_tap import NIOTAP
 from .nios.nio_ethernet import NIOEthernet
+from .nios.nio_bridge import NIOBridge
 from ..utils.images import md5sum, remove_checksum, images_directories, default_images_directory, list_images
 from .error import NodeError, ImageMissingError
 
@@ -356,6 +357,11 @@ class BaseManager:
             nio = NIOUDP(lport, rhost, rport)
             nio.filters = nio_settings.get("filters", {})
             nio.markers = nio_settings.get("markers", {})
+            nio.suspend = nio_settings.get("suspend", False)
+        elif nio_settings["type"] == "nio_bridge":
+            nio = NIOBridge(nio_settings["bridge"])
+            if nio_settings.get("filters") or nio_settings.get("markers"):
+                raise ComputeError("Packet filters and markers are not supported on kernel-datapath links")
             nio.suspend = nio_settings.get("suspend", False)
         elif nio_settings["type"] == "nio_tap":
             tap_device = nio_settings["tap_device"]
