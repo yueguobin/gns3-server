@@ -15,6 +15,12 @@ class FilterValidationError(Exception):
     pass
 
 
+# Packet filters with no kernel-datapath equivalent (no tc netem mapping):
+# they only run in the uBridge userspace relay, so a link carrying one is
+# wired on the relay, and adding them to a kernel-datapath link is rejected.
+KERNEL_UNSUPPORTED_FILTERS = frozenset({"frequency_drop", "bpf"})
+
+
 def validate_bpf_syntax(bpf_expression: str) -> Dict[str, Optional[str]]:
     """
     Validate BPF filter expression syntax using tcpdump.
