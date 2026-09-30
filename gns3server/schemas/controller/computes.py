@@ -22,6 +22,7 @@ from enum import Enum
 
 from .nodes import NodeType
 from .base import DateTimeModelMixin
+from .capabilities import UbridgeTcCapabilities
 
 
 class Protocol(str, Enum):
@@ -103,6 +104,9 @@ class Capabilities(BaseModel):
     cpus: int = Field(..., description="Number of CPUs on this compute")
     memory: int = Field(..., description="Amount of memory on this compute")
     disk_size: int = Field(..., description="Disk size on this compute")
+    ubridge_tc: Optional[UbridgeTcCapabilities] = Field(
+        None, description="uBridge tc-module capabilities; absent when the probe failed or uBridge has no tc module"
+    )
 
 
 class Compute(DateTimeModelMixin, ComputeBase):
