@@ -29,6 +29,12 @@ from gns3server.utils.path import get_default_project_directory
 pytestmark = pytest.mark.asyncio
 
 
+async def _no_tap_probe():
+    """The tap probe spawns uBridge — stub it out for payload assertions."""
+
+    return None
+
+
 class TestCapabilitiesRoutes:
     async def test_get(self, app: FastAPI, compute_client: AsyncClient, windows_platform, monkeypatch) -> None:
 
@@ -36,6 +42,7 @@ class TestCapabilitiesRoutes:
             return None
 
         monkeypatch.setattr("gns3server.api.routes.compute.capabilities.probe_tc_capabilities", no_probe)
+        monkeypatch.setattr("gns3server.api.routes.compute.capabilities.probe_tap_support", _no_tap_probe)
         response = await compute_client.get(app.url_path_for("compute:get_capabilities"))
         assert response.status_code == status.HTTP_200_OK
         assert response.json() == {
@@ -60,6 +67,7 @@ class TestCapabilitiesRoutes:
             "memory": psutil.virtual_memory().total,
             "disk_size": psutil.disk_usage(get_default_project_directory()).total,
             "ubridge_tc": None,
+            "ubridge_tap": None,
         }
 
     async def test_get_on_gns3vm(self, app: FastAPI, compute_client: AsyncClient, on_gns3vm, monkeypatch) -> None:
@@ -68,6 +76,7 @@ class TestCapabilitiesRoutes:
             return None
 
         monkeypatch.setattr("gns3server.api.routes.compute.capabilities.probe_tc_capabilities", no_probe)
+        monkeypatch.setattr("gns3server.api.routes.compute.capabilities.probe_tap_support", _no_tap_probe)
         response = await compute_client.get(app.url_path_for("compute:get_capabilities"))
         assert response.status_code == status.HTTP_200_OK
         assert response.json() == {
@@ -92,6 +101,7 @@ class TestCapabilitiesRoutes:
             "memory": psutil.virtual_memory().total,
             "disk_size": psutil.disk_usage(get_default_project_directory()).total,
             "ubridge_tc": None,
+            "ubridge_tap": None,
         }
 
     async def test_get_reports_ubridge_tc(self, app: FastAPI, compute_client: AsyncClient, monkeypatch) -> None:
@@ -100,6 +110,7 @@ class TestCapabilitiesRoutes:
             return {"netem": "delay,rate", "ebpf": "1", "cbpf": "0", "ebpf_modes": "nth,quota,window,flow"}
 
         monkeypatch.setattr("gns3server.api.routes.compute.capabilities.probe_tc_capabilities", fake_probe)
+        monkeypatch.setattr("gns3server.api.routes.compute.capabilities.probe_tap_support", _no_tap_probe)
         response = await compute_client.get(app.url_path_for("compute:get_capabilities"))
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["ubridge_tc"] == {
@@ -108,3 +119,17 @@ class TestCapabilitiesRoutes:
             "ebpf_modes": ["nth", "quota", "window", "flow"],
             "cbpf": False,
         }
+
+    async def test_get_reports_ubridge_tap(self, app: FastAPI, compute_client: AsyncClient, monkeypatch) -> None:
+        """
+        The tap capability is what makes a QEMU node kernel-eligible, so it
+        travels with the other compute capabilities.
+        """
+
+        async def fake_tap_probe():
+            return True
+
+        monkeypatch.setattr("gns3server.api.routes.compute.capabilities.probe_tap_support", fake_tap_probe)
+        response = await compute_client.get(app.url_path_for("compute:get_capabilities"))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["ubridge_tap"] is True
