@@ -44,6 +44,7 @@ from .nios.nio_udp import NIOUDP
 from .nios.nio_tap import NIOTAP
 from .nios.nio_ethernet import NIOEthernet
 from .nios.nio_bridge import NIOBridge
+from .nios.nio_anchor import NIOAnchor
 from ..utils.images import md5sum, remove_checksum, images_directories, default_images_directory, list_images
 from .error import NodeError, ImageMissingError
 
@@ -377,6 +378,14 @@ class BaseManager:
             nio.filters = nio_settings.get("filters", {})
             # Markers ride the NIO and attach to the veth host interface via
             # uBridge's AF_PACKET marker module (marker add_kernel).
+            nio.markers = nio_settings.get("markers", {})
+            nio.suspend = nio_settings.get("suspend", False)
+        elif nio_settings["type"] == "nio_anchor":
+            # The node-owned-bridge mirror of nio_bridge: the Ethernet
+            # switch joins the named foreign anchor to its own kernel
+            # bridge (AnchorNIO/NIOAnchor).
+            nio = NIOAnchor(nio_settings["anchor"])
+            nio.filters = nio_settings.get("filters", {})
             nio.markers = nio_settings.get("markers", {})
             nio.suspend = nio_settings.get("suspend", False)
         elif nio_settings["type"] == "nio_tap":
