@@ -28,6 +28,7 @@ from uuid import UUID
 
 from gns3server.compute.dynamips import Dynamips
 from gns3server.compute.dynamips.nodes.router import Router
+from gns3server.compute.nios.nio_bridge import NIOBridge
 from gns3server import schemas
 
 from .dependencies.authentication import compute_authentication, ws_compute_authentication
@@ -170,12 +171,15 @@ async def reload_router(node: Router = Depends(dep_node)) -> None:
 @router.post(
     "/{node_id}/adapters/{adapter_number}/ports/{port_number}/nio",
     status_code=status.HTTP_201_CREATED,
-    response_model=schemas.UDPNIO,
+    response_model=Union[schemas.UDPNIO, schemas.BridgeNIO],
     dependencies=[Depends(compute_authentication)],
 )
 async def create_nio(
-    adapter_number: int, port_number: int, nio_data: schemas.UDPNIO, node: Router = Depends(dep_node)
-) -> schemas.UDPNIO:
+    adapter_number: int,
+    port_number: int,
+    nio_data: Union[schemas.UDPNIO, schemas.BridgeNIO],
+    node: Router = Depends(dep_node),
+) -> Union[schemas.UDPNIO, schemas.BridgeNIO]:
     """
     Add a NIO (Network Input/Output) to the node.
     """
@@ -188,12 +192,15 @@ async def create_nio(
 @router.put(
     "/{node_id}/adapters/{adapter_number}/ports/{port_number}/nio",
     status_code=status.HTTP_201_CREATED,
-    response_model=schemas.UDPNIO,
+    response_model=Union[schemas.UDPNIO, schemas.BridgeNIO],
     dependencies=[Depends(compute_authentication)],
 )
 async def update_nio(
-    adapter_number: int, port_number: int, nio_data: schemas.UDPNIO, node: Router = Depends(dep_node)
-) -> schemas.UDPNIO:
+    adapter_number: int,
+    port_number: int,
+    nio_data: Union[schemas.UDPNIO, schemas.BridgeNIO],
+    node: Router = Depends(dep_node),
+) -> Union[schemas.UDPNIO, schemas.BridgeNIO]:
     """
     Update a NIO (Network Input/Output) on the node.
     """
@@ -203,6 +210,10 @@ async def update_nio(
     if nio_data.filters:
         nio.filters = nio_data.filters
     nio.markers = nio_data.markers or {}
+    # Suspend is what the compute turns into an admin-down anchor on a
+    # kernel link (native carrier), so it must reach the NIO like it does
+    # on the Docker/QEMU/IOU routes.
+    nio.suspend = getattr(nio_data, "suspend", None) or False
     await node.slot_update_nio_binding(adapter_number, port_number, nio)
     return nio.asdict()
 
@@ -218,7 +229,10 @@ async def delete_nio(adapter_number: int, port_number: int, node: Router = Depen
     """
 
     nio = await node.slot_remove_nio_binding(adapter_number, port_number)
-    await nio.delete()
+    if not isinstance(nio, NIOBridge):
+        # A kernel NIO has no hypervisor side left: its TAP NIO was deleted
+        # by the slot binding removal itself.
+        await nio.delete()
 
 
 @router.post(

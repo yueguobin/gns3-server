@@ -38,6 +38,7 @@ from gns3server.utils import parse_version
 from uuid import uuid4
 from ..base_manager import BaseManager
 from ..port_manager import PortManager
+from ..nios.nio_bridge import NIOBridge
 from .dynamips_error import DynamipsError
 from .hypervisor import Hypervisor
 from .nodes.router import Router
@@ -363,7 +364,16 @@ class Dynamips(BaseManager):
         """
 
         nio = None
-        if nio_settings["type"] == "nio_udp":
+        if nio_settings["type"] == "nio_bridge":
+            # Kernel-datapath NIO: the router binds the port's anchor TAP to
+            # a hypervisor nio_tap and enslaves it into this per-link bridge
+            # (Router._attach_kernel_nio). No hypervisor NIO is created here.
+            nio = NIOBridge(nio_settings["bridge"])
+            nio.filters = nio_settings.get("filters", {})
+            nio.markers = nio_settings.get("markers", {})
+            nio.suspend = nio_settings.get("suspend", False)
+            return nio
+        elif nio_settings["type"] == "nio_udp":
             lport = nio_settings["lport"]
             rhost = nio_settings["rhost"]
             rport = nio_settings["rport"]
