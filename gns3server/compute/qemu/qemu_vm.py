@@ -38,6 +38,7 @@ import psutil
 from pathlib import Path
 from gns3server.utils import parse_version
 from gns3server.utils.asyncio import subprocess_check_output, cancellable_wait_run_in_executor
+from gns3server.utils.kernel_anchor import kernel_anchor_name
 from .qemu_error import QemuError
 from .utils.qcow2 import Qcow2, Qcow2Error
 from .utils.ziputils import pack_zip, unpack_zip
@@ -1292,7 +1293,6 @@ class QemuVM(KernelDatapathMixin, BaseNode):
         Stops this QEMU VM.
         """
 
-        await self._stop_ubridge()
         async with self._execute_lock:
             # stop the QEMU process
             self._hw_virtualization = False
@@ -1333,6 +1333,14 @@ class QemuVM(KernelDatapathMixin, BaseNode):
                 await self._clear_save_vm_stated()
             await self._export_config()
             await super().stop()
+
+        # Release the datapath only once QEMU is gone: the process holds the
+        # adapter TAPs open (it is the guest side), and uBridge's tap delete
+        # refuses a held device ("Device or resource busy") — deleting them
+        # while QEMU still ran leaked the persistent TAPs, because that
+        # best-effort delete is suppressed. Order: process side first, then
+        # the devices (the same lesson as IOU's reverse stop order).
+        await self._stop_ubridge()
 
     async def _open_qemu_monitor_connection_vm(self, timeout=10):
         """
@@ -1558,13 +1566,12 @@ class QemuVM(KernelDatapathMixin, BaseNode):
 
     def _tap_name(self, adapter_number, port_number=0):
         """
-        Deterministic anchor TAP name for an adapter port. The ``gq`` prefix
-        keeps it out of the ``gns3`` bridge/TAP name space (and apart from
-        Docker's ``gv``/``gc`` veth names); 8 hex chars of the node id plus
-        adapter/port keep it unique and within IFNAMSIZ (15).
+        Deterministic anchor TAP name for an adapter port (the shared
+        utils.kernel_anchor naming contract — the controller names a peer's
+        anchor with the same function when an Ethernet switch absorbs it).
         """
 
-        return f"gq{self._id.replace('-', '')[:8]}e{adapter_number}p{port_number}"
+        return kernel_anchor_name("qemu", self._id, adapter_number, port_number)
 
     def _kernel_host_ifc(self, adapter_number, port_number=0):
         """
