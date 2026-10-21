@@ -50,7 +50,7 @@ import json
 import logging
 import operator
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 # Third-party imports
 from langchain.messages import AnyMessage, SystemMessage, ToolMessage
@@ -255,6 +255,17 @@ class MessagesState(TypedDict):
     abort: bool
 
 
+def _build_model_with_tools(mode_tools: list, llm_config: dict | None) -> Any:
+    """
+    Build the chat model with tools bound for one llm_call step.
+
+    Test seam for offline graph tests: they replace this per test case (at
+    call time, via monkeypatch) with a scripted model so the graph runs
+    without a real provider. See tests/agent/copilot_fakes.py.
+    """
+    return create_base_model_with_tools(mode_tools, llm_config=llm_config)
+
+
 # Define llm call  node
 def llm_call(state: dict, config: RunnableConfig | None = None):
     """
@@ -360,7 +371,7 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         copilot_mode,
         len(mode_tools),
     )
-    model_with_tools = create_base_model_with_tools(mode_tools, llm_config=llm_config)
+    model_with_tools = _build_model_with_tools(mode_tools, llm_config)
 
     # Call pre_hook directly to prepare messages (topology injection +
     # trimming)
@@ -402,6 +413,15 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     }
 
 
+def _build_title_model(llm_config: dict | None) -> Any:
+    """
+    Build the lightweight title generation model.
+
+    Test seam, same purpose as _build_model_with_tools.
+    """
+    return create_title_model(llm_config=llm_config)
+
+
 # Define generate title node
 def generate_title(state: MessagesState, config: RunnableConfig | None = None) -> dict:
     """
@@ -438,7 +458,7 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
 
         # Call the title generation model (create fresh instance for each call)
         try:
-            title_model = create_title_model(llm_config=llm_config)
+            title_model = _build_title_model(llm_config)
             response = title_model.invoke(
                 title_prompt_messages,
                 config={"configurable": {"foo_temperature": 1.0}},
@@ -605,7 +625,10 @@ def should_continue(
     current_title = state.get("conversation_title")
 
     # LLM requested one or more tool executions
-    if last_message.tool_calls:
+    # Defensive getattr: when llm_call returns early (for example with no
+    # llm_config), the last message is still the HumanMessage, which has no
+    # tool_calls attribute
+    if getattr(last_message, "tool_calls", None):
         return "tool_node"
 
     # First full interaction completed and title not yet generated
