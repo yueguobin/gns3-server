@@ -93,19 +93,22 @@ Phase 4 has no dependency and can run in parallel. Phase 5 waits for web UI work
 
 ## Phase 2 — Evidence Store
 
+**Status**: delivered on branch `copilot-hardening-phase2`.
+
 **Goal**: context stays small, evidence stays queryable, checkpoints stop growing with tool output.
 
 **Changes**:
 
-- New `tool_evidence` table in `copilot_checkpoints.db`, created the same way as `chat_sessions` (CREATE IF NOT EXISTS plus a column check), with a small repository class.
-- Write path in `tool_node`: store the full observation, then put a bounded view in the ToolMessage — head 2 KB plus tail 2 KB by default; for multi-device dict results, one status line per device plus the first error line.
-- The bounded view carries an evidence id and a hint to call the retrieval tool.
-- New `GetEvidenceTool(evidence_id, offset, limit)` registered in all three modes.
+- New `tool_evidence` table in `copilot_checkpoints.db`, created eagerly by the AgentService next to `chat_sessions` (and lazily by the store itself when opened directly), with a small store class.
+- Write path in `tool_node`: serialized outputs above 4000 characters are stored as evidence; the ToolMessage carries a bounded view — head 2 KB plus tail 2 KB, and for dict-shaped results a per-key summary (one first line per key, which for multi-device outputs is one status line per device). Smaller outputs pass through unchanged.
+- The bounded view carries the evidence id and a hint to call the retrieval tool. When no evidence database is configured, large outputs degrade to the bounded view without storage.
+- New `get_evidence` tool (`GetEvidenceTool`) registered in all three modes; input follows the tool_input JSON convention (evidence_id, offset, limit characters). Default window 3000 characters — it must stay below the 4000-character inline limit, or a retrieved window would be externalized again (evidence of evidence). Max window 32768.
 - Cap one evidence row at 2 MB; larger input is stored truncated with a flag.
-- The write path uses a dedicated synchronous `sqlite3` connection with `busy_timeout` set (tool_node is sync; the checkpointer connection is async; WAL mode is already on, so multiple connections are safe).
+- The store uses a dedicated synchronous `sqlite3` connection with `busy_timeout` (tool_node is sync; the checkpointer connection is async; WAL mode is already on, so multiple connections are safe). The database path reaches the graph through a request-scoped context variable, like the LLM config.
+- The SSE `tool_end` events carry the same head+tail preview, so the frontend no longer receives megabytes per tool call either.
 - No migration for old sessions; their checkpoints stay as they are.
 
-**Tests**: a fake tool returns 1 MB; the state message stays small; the evidence row holds the full text; `GetEvidenceTool` reads it back.
+**Tests**: a fake tool returns 1 MB; the state message stays small; the evidence row holds the full text; the model reads it back through `get_evidence` in a scripted loop; paging and the missing-id error; small outputs create no evidence rows; dict outputs get a keys summary; no-store degradation.
 
 ## Phase 3 — Approval Gate
 

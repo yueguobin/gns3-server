@@ -64,6 +64,7 @@ logger = logging.getLogger(__name__)
 # Automatically cleaned up when request context ends
 _jwt_token_context: ContextVar[Optional[str]] = ContextVar("_jwt_token_context", default=None)
 _llm_config_context: ContextVar[Optional[dict]] = ContextVar("_llm_config_context", default=None)
+_evidence_db_path_context: ContextVar[Optional[str]] = ContextVar("_evidence_db_path_context", default=None)
 
 
 def set_current_jwt_token(token: str) -> None:
@@ -123,9 +124,37 @@ def get_current_llm_config() -> Optional[dict]:
     return config
 
 
+def set_current_evidence_db_path(db_path: Optional[str]) -> None:
+    """
+    Set the tool evidence database path for the current request context.
+
+    Points the evidence externalization (large tool outputs stored in the
+    per-project checkpoint database) at the right project. None disables
+    evidence storage for this context.
+
+    Args:
+        db_path: Path to the copilot checkpoint database file, or None
+    """
+    _evidence_db_path_context.set(db_path)
+    if db_path:
+        logger.debug("Evidence database path set in context: %s", db_path)
+
+
+def get_current_evidence_db_path() -> Optional[str]:
+    """
+    Get the tool evidence database path for the current request context.
+
+    Returns:
+        Database path string if available, None otherwise
+    """
+    return _evidence_db_path_context.get()
+
+
 __all__ = [
+    "get_current_evidence_db_path",
     "get_current_jwt_token",
     "get_current_llm_config",
+    "set_current_evidence_db_path",
     "set_current_jwt_token",
     "set_current_llm_config",
 ]

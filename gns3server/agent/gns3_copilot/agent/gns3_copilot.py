@@ -64,6 +64,9 @@ from gns3server.agent.gns3_copilot.agent.context_manager import (
     count_tokens,
     create_pre_model_hook,
 )
+from gns3server.agent.gns3_copilot.agent.evidence_store import (
+    externalize_tool_output,
+)
 from gns3server.agent.gns3_copilot.agent.model_factory import (
     create_base_model_with_tools,
     create_title_model,
@@ -78,6 +81,7 @@ from gns3server.agent.gns3_copilot.skills.registry import get_prompt
 from gns3server.agent.gns3_copilot.tools_v2 import (
     ExecuteMultipleDeviceCommands,
     ExecuteMultipleDeviceConfigCommands,
+    GetEvidenceTool,
     GNS3CreateEllipseDrawingTool,
     GNS3CreateNodeTool,
     GNS3CreateRectangleDrawingTool,
@@ -116,6 +120,7 @@ TEACHING_ASSISTANT_MODE_TOOLS = [
     ExecuteMultipleDeviceCommands(),  # Execute show/display/debug commands
     # (READ-ONLY)
     PacketAnalysisTool(),  # Protocol-oriented packet analysis with tshark
+    GetEvidenceTool(),  # Retrieve full stored tool output (evidence)
     PacketAnalysisSkillsTool(),  # Query packet analysis protocol definitions
     DeviceSkillsTool(),  # Get device-specific skills and command knowledge
 ]
@@ -138,6 +143,7 @@ LAB_AUTOMATION_ASSISTANT_MODE_TOOLS = [
     ExecuteMultipleDeviceConfigCommands(),  # Execute configuration commands
     VPCSCommands(),  # Execute VPCS commands using Netmiko
     PacketAnalysisTool(),  # Protocol-oriented packet analysis with tshark
+    GetEvidenceTool(),  # Retrieve full stored tool output (evidence)
     PacketAnalysisSkillsTool(),  # Query packet analysis protocol definitions
     DeviceSkillsTool(),  # Get device-specific skills and command knowledge
 ]
@@ -148,6 +154,7 @@ TROUBLESHOOTING_INJECTION_MODE_TOOLS = [
     ExecuteMultipleDeviceCommands(),  # Get device configurations (READ-ONLY)
     ExecuteMultipleDeviceConfigCommands(),  # Inject configuration changes
     GNS3PacketFilterTool(),  # Manage packet filters on links (delay, loss, corrupt, etc.)
+    GetEvidenceTool(),  # Retrieve full stored tool output (evidence)
     InjectionSkillsTool(),  # Query injection skills and fault types
     GNS3TopologyTool(),  # Get topology information
 ]
@@ -663,8 +670,21 @@ def tool_node(state: dict, config: RunnableConfig | None = None):
         # Serialize observation to JSON string if it's not already a string
         # This ensures ToolMessage.content is always JSON format, not Python
         # str()
+        observation_obj = observation
         if not isinstance(observation, str):
             observation = json.dumps(observation, ensure_ascii=False, indent=2)
+
+        # Phase 2 (evidence externalization): large outputs go to the
+        # evidence store; the ToolMessage carries a bounded view with an
+        # evidence id the model retrieves through get_evidence. Small
+        # outputs pass through unchanged.
+        observation = externalize_tool_output(
+            tool_name=tool_name,
+            serialized=observation,
+            observation=observation_obj,
+            thread_id=state.get("session_id"),
+            tool_call_id=tool_call["id"],
+        )
 
         # Create ToolMessage with metadata including created_at
         tool_msg = ToolMessage(

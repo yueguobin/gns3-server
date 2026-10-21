@@ -55,6 +55,7 @@ Author: Yue Guobin (岳国宾)
 # Import main tool classes
 from .config_tools_nornir import ExecuteMultipleDeviceConfigCommands
 from .display_tools_nornir import ExecuteMultipleDeviceCommands
+from .get_evidence import GetEvidenceTool
 from .gns3_create_drawing import (
     GNS3CreateEllipseDrawingTool,
     GNS3CreateRectangleDrawingTool,
@@ -100,6 +101,7 @@ __all__ = [
     "GNS3TemplateTool",
     "GNS3UpdateNodeNameTool",
     "GNS3WaitTool",
+    "GetEvidenceTool",
     "PacketAnalysisTool",
 ]
 

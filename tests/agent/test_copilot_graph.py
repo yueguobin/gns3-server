@@ -40,8 +40,8 @@ from tests.agent.copilot_fakes import (
 
 
 @pytest.fixture
-def harness(monkeypatch):
-    harness = CopilotGraphHarness(monkeypatch)
+def harness(monkeypatch, tmp_path):
+    harness = CopilotGraphHarness(monkeypatch, evidence_db_path=tmp_path / "test_evidence.db")
     yield harness
     harness.close()
 
@@ -277,3 +277,164 @@ def test_token_estimate_used_when_usage_missing(harness):
     # No usage_metadata on the scripted response: the tiktoken estimate
     # over request and response text still feeds the counter
     assert result["turn_tokens"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: evidence externalization
+# ---------------------------------------------------------------------------
+
+
+def _evidence_row_count(harness) -> int:
+    import sqlite3
+
+    conn = sqlite3.connect(harness.evidence_db_path)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM tool_evidence").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_large_tool_output_externalized_to_evidence(harness):
+    big_output = "B" * 1_000_000
+    harness.register_tool(FakeTool("fake_big", result=big_output))
+    harness.model = ScriptedChatModel(
+        [
+            ai_tool_call("fake_big", {}),
+            ai_text("done"),
+        ]
+    )
+
+    result = harness.run("read something huge")
+
+    # The ToolMessage in the state is a small bounded view, not the payload
+    tool_msg = result["messages"][2]
+    assert len(tool_msg.content) < 6000
+    view = json.loads(tool_msg.content)
+    assert view["size_chars"] == 1_000_000
+    assert view["head"] == "B" * 2048
+    assert view["evidence_id"]
+    assert "get_evidence" in view["note"]
+
+    # The evidence row in the store holds the full output
+    from gns3server.agent.gns3_copilot.agent.evidence_store import get_store
+
+    row = get_store(harness.evidence_db_path).get(view["evidence_id"])
+    assert row is not None
+    assert row["content"] == big_output
+    assert row["tool_name"] == "fake_big"
+    assert row["thread_id"] == "test-session"
+
+
+def test_get_evidence_tool_reads_back_full_output(harness):
+    big_output = "".join(f"line {i:06d} of the device output\n" for i in range(2000))
+    harness.register_tool(FakeTool("fake_big", result=big_output))
+
+    class EvidenceReadingModel(ScriptedChatModel):
+        # First call requests the big tool; the second reads the evidence
+        # id out of the ToolMessage that came back and retrieves it; the
+        # third finishes from the scripted queue
+        def invoke(self, messages, config=None, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return ai_tool_call("fake_big", {})
+            if self.calls == 2:
+                tool_msgs = [m for m in messages if isinstance(m, ToolMessage)]
+                view = json.loads(tool_msgs[-1].content)
+                return ai_tool_call(
+                    "get_evidence",
+                    {"tool_input": json.dumps({"evidence_id": view["evidence_id"]})},
+                )
+            return super().invoke(messages, config, **kwargs)
+
+    harness.model = EvidenceReadingModel([ai_text("all read")])
+
+    result = harness.run("retrieve the full output")
+
+    messages = result["messages"]
+    # Human, AI tool call, bounded view, AI get_evidence call, window, final
+    assert len(messages) == 6
+    retrieval = json.loads(messages[4].content)
+    assert retrieval["evidence_id"] == json.loads(messages[2].content)["evidence_id"]
+    assert retrieval["returned_chars"] == 3000  # default window
+    assert retrieval["has_more"] is True
+    assert retrieval["content"].startswith("line 000000")
+    # The retrieval window is a result with a content field, not a
+    # truncated view: it stays inline and is not externalized again
+    assert "note" not in retrieval
+
+
+def test_get_evidence_tool_paging(harness):
+    from gns3server.agent.gns3_copilot.agent.evidence_store import get_store
+    from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
+        set_current_evidence_db_path,
+    )
+    from gns3server.agent.gns3_copilot.tools_v2 import GetEvidenceTool
+
+    content = "x" * 10000
+    row = get_store(harness.evidence_db_path).save(thread_id="test-session", tool_name="fake", content=content)
+    set_current_evidence_db_path(harness.evidence_db_path)
+
+    tool = GetEvidenceTool()
+    first = tool.invoke({"tool_input": json.dumps({"evidence_id": row["evidence_id"], "offset": 9000, "limit": 2000})})
+    assert first["returned_chars"] == 1000
+    assert first["has_more"] is False
+
+    missing = tool.invoke({"tool_input": json.dumps({"evidence_id": "no-such-id"})})
+    assert "error" in missing
+
+
+def test_small_tool_output_stays_inline(harness):
+    harness.register_tool(FakeTool("fake_small", result={"status": "ok"}))
+    harness.model = ScriptedChatModel(
+        [
+            ai_tool_call("fake_small", {}),
+            ai_text("done"),
+        ]
+    )
+
+    result = harness.run("small output")
+
+    # Unchanged behaviour: no evidence row, the result is the message
+    assert json.loads(result["messages"][2].content) == {"status": "ok"}
+    assert _evidence_row_count(harness) == 0
+
+
+def test_dict_output_keys_summary_in_view(harness):
+    big_dict = {
+        "r1": "interface up\n" + "detail " * 2000,
+        "r2": "interface down\n" + "detail " * 2000,
+    }
+    harness.register_tool(FakeTool("fake_devices", result=big_dict))
+    harness.model = ScriptedChatModel(
+        [
+            ai_tool_call("fake_devices", {}),
+            ai_text("done"),
+        ]
+    )
+
+    result = harness.run("check devices")
+
+    view = json.loads(result["messages"][2].content)
+    # One status line per key keeps the model oriented
+    assert view["keys_summary"] == {"r1": "interface up", "r2": "interface down"}
+    assert view["evidence_id"]
+
+
+def test_large_output_degrades_without_store(monkeypatch):
+    harness = CopilotGraphHarness(monkeypatch)  # no evidence database path
+    try:
+        harness.register_tool(FakeTool("fake_big", result="Z" * 100_000))
+        harness.model = ScriptedChatModel(
+            [
+                ai_tool_call("fake_big", {}),
+                ai_text("done"),
+            ]
+        )
+
+        result = harness.run("no store configured")
+
+        view = json.loads(result["messages"][2].content)
+        assert "evidence_id" not in view
+        assert view["head"] == "Z" * 2048
+    finally:
+        harness.close()

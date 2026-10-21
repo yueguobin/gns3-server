@@ -41,6 +41,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 # itself. Test-only reach into the module is acceptable here.
 from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
     _llm_config_context,
+    set_current_evidence_db_path,
     set_current_llm_config,
 )
 
@@ -133,10 +134,17 @@ class CopilotGraphHarness:
     into each other.
     """
 
-    def __init__(self, monkeypatch, llm_config=None):
+    def __init__(self, monkeypatch, llm_config=None, evidence_db_path=None):
         from gns3server.agent.gns3_copilot.agent import gns3_copilot as copilot_module
 
         self.copilot = copilot_module
+        # Per-test evidence database (Phase 2); None leaves externalization
+        # in its degraded no-store mode
+        self.evidence_db_path = str(evidence_db_path) if evidence_db_path else None
+        if self.evidence_db_path:
+            from gns3server.agent.gns3_copilot.agent.evidence_store import get_store
+
+            get_store(self.evidence_db_path)
         self.llm_config = llm_config or {
             "provider": "test",
             "model": "scripted",
@@ -199,6 +207,7 @@ class CopilotGraphHarness:
             set_current_llm_config(self.llm_config)
         else:
             _llm_config_context.set(llm_config)
+        set_current_evidence_db_path(self.evidence_db_path)
         self.copilot.clear_abort_flag(session_id)
 
         config = {
@@ -220,5 +229,10 @@ class CopilotGraphHarness:
         return self._graph.get_state({"configurable": {"thread_id": session_id}})
 
     def close(self):
-        """Clear the llm config context var so it cannot leak into later tests."""
+        """Clear the context vars and the evidence store so nothing leaks into later tests."""
         _llm_config_context.set(None)
+        set_current_evidence_db_path(None)
+        if self.evidence_db_path:
+            from gns3server.agent.gns3_copilot.agent.evidence_store import close_store
+
+            close_store(self.evidence_db_path)

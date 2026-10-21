@@ -43,11 +43,19 @@ import aiosqlite
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from gns3server.agent.gns3_copilot.agent.evidence_store import (
+    EVIDENCE_INLINE_MAX_CHARS,
+    EVIDENCE_VIEW_HEAD_CHARS,
+    EVIDENCE_VIEW_TAIL_CHARS,
+    close_store,
+    get_store,
+)
 from gns3server.agent.gns3_copilot.agent.gns3_copilot import agent_builder, resolve_turn_budget
 from gns3server.agent.gns3_copilot.chat_sessions_repository import (
     ChatSessionsRepository,
 )
 from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
+    set_current_evidence_db_path,
     set_current_jwt_token,
     set_current_llm_config,
 )
@@ -141,6 +149,10 @@ class AgentService:
 
             # Create chat_sessions table in the same database
             await self._create_chat_sessions_table(conn)
+
+            # Create the evidence store (and its table) eagerly, alongside
+            # the chat sessions table: large tool outputs land here
+            get_store(checkpointer_path)
 
             self._checkpointer_path = checkpointer_path
             self._initialized = True
@@ -280,6 +292,9 @@ class AgentService:
                 llm_config.get("provider"),
                 llm_config.get("model"),
             )
+        # Point evidence externalization (large tool outputs) at this
+        # project's checkpoint database
+        set_current_evidence_db_path(self._checkpointer_path)
 
         # Build config - only thread-safe identifiers
         # Determine recursion_limit based on copilot_mode
@@ -566,6 +581,19 @@ class AgentService:
             # frontend parsing
             if not isinstance(output, str):
                 output = json.dumps(output, ensure_ascii=False, indent=2)
+            # Large outputs are externalized to the evidence store for the
+            # model; the SSE event carries the same bounded preview so the
+            # frontend does not receive megabytes per tool call either
+            if len(output) > EVIDENCE_INLINE_MAX_CHARS:
+                output = json.dumps(
+                    {
+                        "note": "Tool output was too large to stream in full. The assistant can read the full stored output through the get_evidence tool.",
+                        "size_chars": len(output),
+                        "head": output[:EVIDENCE_VIEW_HEAD_CHARS],
+                        "tail": output[-EVIDENCE_VIEW_TAIL_CHARS:],
+                    },
+                    ensure_ascii=False,
+                )
             return {
                 "type": "tool_end",
                 "tool_name": event.get("name", ""),
@@ -707,6 +735,8 @@ class AgentService:
                 except Exception as e:
                     log.warning("Error closing checkpointer connection: %s", e)
                 finally:
+                    if self._checkpointer_path:
+                        close_store(self._checkpointer_path)
                     self._checkpointer_conn = None
                     self._checkpointer = None
                     self._graph = None
