@@ -114,7 +114,13 @@ Phase 4 has no dependency and can run in parallel. Phase 5 waits for web UI work
 
 **Goal**: the model proposes, the user approves, then commands run. This is also the teaching step between `teaching_assistant` and `lab_automation`.
 
-**Scope first**: `ExecuteMultipleDeviceConfigCommands` and `GNS3PacketFilterTool`.
+**Scope**: the gate is mode-scoped, held in a data table (mode → gated tool names) so the policy adjusts without touching gate logic.
+
+| Mode | Gated tools | Rationale |
+|---|---|---|
+| `troubleshooting_injection` | none | The mode is the consent: the user switches to it (or calls the inject endpoint) precisely to inject faults. Per-injection approval would only obstruct the mode's single purpose (decision D7). `GNS3PacketFilterTool` lives only in this mode, so it is never gated |
+| `lab_automation_assistant` | `ExecuteMultipleDeviceConfigCommands` | Multi-vendor device configuration is the one high-stakes mutation surface. `VPCSCommands` stays ungated for now: VPCS is lightweight and easily reset; tighten later by adding one table row |
+| `teaching_assistant` | open (D4) | Default plan: gate create node, link and start as the teaching bridge |
 
 **Mechanics**: `tool_node` calls `interrupt()` before a gated tool runs, with the command list and target devices in the payload. The AsyncSqliteSaver checkpointer already persists interrupt state. Approve resumes the graph with `Command(resume=...)`; reject returns a rejected ToolMessage to the model.
 
@@ -191,6 +197,7 @@ Three small, independent fixes that can land in any order:
 - **D4 — Teaching mode gate (open).** Default: gate the mutating tools, do not remove them. Final call during Phase 3.
 - **D5 — Budgets are per turn, not per session.** Sessions live for a whole lesson; a session-level token cap would cut off long classes.
 - **D6 — Budget defaults sized below the recursion limits** (10 calls per turn, 40 in injection mode), and the recursion limit grows with a configured budget. The original plan said 30/60, but 30 can never fire under the default `recursion_limit=25` (about 11 model calls fit): the recursion guard would stay the real limit and the budget would be decoration. The defaults preserve today's effective ceilings while making the budget the authoritative, explained limit.
+- **D7 — Fault injection needs no approval gate.** The `troubleshooting_injection` mode is explicit consent: the user switches the session to it, or calls the inject endpoint, precisely to inject faults. Gating each injection would obstruct the mode's only purpose. The gate table therefore has no entry for this mode, which also leaves `GNS3PacketFilterTool` ungated everywhere it exists.
 
 ## Out of Scope
 
