@@ -43,7 +43,7 @@ import aiosqlite
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from gns3server.agent.gns3_copilot.agent.gns3_copilot import agent_builder
+from gns3server.agent.gns3_copilot.agent.gns3_copilot import agent_builder, resolve_turn_budget
 from gns3server.agent.gns3_copilot.chat_sessions_repository import (
     ChatSessionsRepository,
 )
@@ -290,6 +290,19 @@ class AgentService:
         else:
             recursion_limit = 25  # Default recursion limit
 
+        # The per-turn model call budget is the authoritative loop limit:
+        # size the recursion limit so the budget always fires first (each
+        # budgeted call costs two graph steps, llm_call + tool_node)
+        max_llm_calls, _ = resolve_turn_budget(llm_config or {}, copilot_mode)
+        budget_steps = max_llm_calls * 2 + 8
+        if budget_steps > recursion_limit:
+            recursion_limit = budget_steps
+            log.debug(
+                "Recursion limit raised to %d to honor the turn budget of %d model calls",
+                recursion_limit,
+                max_llm_calls,
+            )
+
         config = {
             "configurable": {
                 "thread_id": session_id,
@@ -320,6 +333,7 @@ class AgentService:
                 )
             ],
             "llm_calls": 0,
+            "turn_tokens": 0,
             "remaining_steps": remaining_steps,
             "session_id": session_id,
             "abort": False,

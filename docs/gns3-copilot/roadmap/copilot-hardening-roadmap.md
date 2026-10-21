@@ -57,6 +57,8 @@ Phase 4 has no dependency and can run in parallel. Phase 5 waits for web UI work
 
 ## Phase 0 — Test Foundation
 
+**Status**: delivered on branch `copilot-hardening-phase0`.
+
 **Goal**: run and test the graph without a real model. Every later phase needs this.
 
 **Changes**:
@@ -72,19 +74,22 @@ Phase 4 has no dependency and can run in parallel. Phase 5 waits for web UI work
 
 ## Phase 1 — Hard Budgets
 
+**Status**: delivered on branch `copilot-hardening-phase1`.
+
 **Goal**: a runaway turn ends with a clear message, not a naked error.
 
 **Changes**:
 
 - Two optional keys in the `llm_model_configs` config JSON: `max_llm_calls_per_turn` and `max_total_tokens_per_turn`. The config column is JSON, so no schema migration is needed.
-- Add per-turn accumulators to the graph state; `stream_chat` resets them in the inputs for each turn.
-- Check at the `llm_call` entry: over the limit, do not call the model; return an AIMessage that explains the limit and route to END. The frontend sees a normal assistant message, not an error event.
-- Failed calls count: wrap the invoke; on failure, count the call and estimate input tokens with the existing tiktoken counter over the prepared messages (iCheck keeps usage from failed responses for the same reason: failed calls must not be free).
-- Read usage from `response.usage_metadata` inside the graph; today only the service layer outside the graph sees it.
+- Per-turn accumulators in the graph state (`llm_calls` already existed as a per-turn counter reset by the stream inputs; `turn_tokens` follows the same mechanism).
+- Check at the `llm_call` entry, before the topology fetch and the model call: over the limit, return an AIMessage that explains the limit and route to END. The frontend sees a normal assistant message, not an error event.
+- Token accounting prefers `response.usage_metadata` and falls back to a tiktoken estimate over request and response text, so providers that report no usage still feed the budget.
+- `stream_chat` sizes the recursion limit from the configured call budget (two graph steps per call plus headroom), so the budget — not the silent recursion guard — ends runaway turns.
+- Failed model calls keep the existing behaviour: the error propagates and the turn ends with an error event. In a graph with no retry and no fallback there is no free-failure loop to abuse — a failed call always ends the turn, and the budget resets on the next message. Failed-call accounting becomes worth adding when a fallback model chain lands (iCheck charges failed calls because its loop continues past them).
 
-**Defaults**: 30 LLM calls per turn; 60 for `troubleshooting_injection` (replaces the bare `recursion_limit=100` as the real guard).
+**Defaults** (decision D6): 10 model calls per turn, 40 for `troubleshooting_injection`. The call budget defaults sit below what the recursion limits allow, so today's effective ceilings are preserved while gaining the explained ending and configurability.
 
-**Tests**: a scripted model that always requests tools hits the call cap and ends with the graceful message; a model that raises still counts toward the budget.
+**Tests**: a scripted model that always requests tools hits a configured call cap and the default cap (before the recursion guard); reported usage accumulates; a configured token cap ends the turn; missing usage falls back to the estimate.
 
 ## Phase 2 — Evidence Store
 
@@ -182,6 +187,7 @@ Three small, independent fixes that can land in any order:
 - **D3 — Custom base URLs stay allowed.** Home lab model servers are a real GNS3 use case. Validate the URL and warn when a key leaves the preset origins; do not block.
 - **D4 — Teaching mode gate (open).** Default: gate the mutating tools, do not remove them. Final call during Phase 3.
 - **D5 — Budgets are per turn, not per session.** Sessions live for a whole lesson; a session-level token cap would cut off long classes.
+- **D6 — Budget defaults sized below the recursion limits** (10 calls per turn, 40 in injection mode), and the recursion limit grows with a configured budget. The original plan said 30/60, but 30 can never fire under the default `recursion_limit=25` (about 11 model calls fit): the recursion guard would stay the real limit and the budget would be decoration. The defaults preserve today's effective ceilings while making the budget the authoritative, explained limit.
 
 ## Out of Scope
 

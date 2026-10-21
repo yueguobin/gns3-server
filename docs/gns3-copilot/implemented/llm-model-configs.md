@@ -223,6 +223,8 @@ For a complete list of LangChain-supported providers, see: https://python.langch
 |-------|------|-------------|
 | `api_key` | string | API key (auto-encrypted) |
 | `max_tokens` | integer | **⚠️ Reserved for future use, not currently implemented** |
+| `max_llm_calls_per_turn` | integer | Hard limit on model calls per chat turn (default: 10; 40 in troubleshooting injection mode). When the limit is reached, the turn ends with an explained assistant message. The recursion limit is raised automatically so this budget, not the recursion guard, ends runaway turns |
+| `max_total_tokens_per_turn` | integer | Hard limit on accumulated tokens (input + output) per chat turn. Opt-in: no token cap when unset. Provider-reported usage is preferred; a tiktoken estimate is used when the provider reports none |
 | `context_strategy` | string | Context trimming strategy: "conservative" (60%), "balanced" (75%), "aggressive" (85%). Default: "balanced" |
 | `copilot_mode` | string | GNS3-Copilot mode: "teaching_assistant" (diagnostics only, default) or "lab_automation_assistant" (full configuration access) |
 | `is_default` | boolean | Set as default (default: false) |

@@ -188,3 +188,92 @@ def test_missing_llm_config_degrades_gracefully(harness):
     assert harness.model.calls == 0
     assert harness.title_model.calls == 0
     assert result["conversation_title"] == "Untitled Session"
+
+
+def test_call_budget_ends_turn_with_graceful_message(harness):
+    harness.register_tool(FakeTool("fake_show"))
+    harness.model = ScriptedChatModel([ai_tool_call("fake_show", {})] * 5 + [ai_text("done")])
+
+    result = harness.run(
+        "keep going",
+        llm_config=dict(harness.llm_config, max_llm_calls_per_turn=2),
+        recursion_limit=50,
+        remaining_steps=50,
+    )
+
+    # The third llm_call entry hits the budget guard before invoking the model
+    assert harness.model.calls == 2
+    assert result["llm_calls"] == 2
+    messages = result["messages"]
+    # Human, AI tool call, Tool, AI tool call, Tool, graceful message
+    assert len(messages) == 6
+    graceful = messages[-1]
+    assert "budget" in graceful.content.lower()
+    assert graceful.metadata.get("budget_exhausted") is True
+    assert not getattr(graceful, "tool_calls", None)
+
+
+def test_default_call_budget_fires_before_recursion_guard(harness):
+    harness.register_tool(FakeTool("fake_loop"))
+    harness.model = ScriptedChatModel([ai_tool_call("fake_loop", {})] * 20)
+
+    # Default recursion_limit (25) with no budget configured: the default
+    # budget of 10 model calls must end the turn, with the explained
+    # message, before the silent remaining_steps guard does
+    result = harness.run("loop forever")
+
+    assert harness.model.calls == 10
+    assert result["llm_calls"] == 10
+    assert result["messages"][-1].metadata.get("budget_exhausted") is True
+
+
+def test_token_accumulation_prefers_reported_usage(harness):
+    harness.register_tool(FakeTool("fake_show"))
+    harness.model = ScriptedChatModel(
+        [
+            ai_tool_call("fake_show", {}, usage={"input_tokens": 100, "output_tokens": 50}),
+            ai_text("done", usage={"input_tokens": 10, "output_tokens": 5}),
+        ]
+    )
+
+    result = harness.run("collect usage")
+
+    # No token cap configured, but the reported usage still accumulates
+    assert result["turn_tokens"] == 165
+    assert result["llm_calls"] == 2
+
+
+def test_token_budget_ends_turn(harness):
+    harness.register_tool(FakeTool("fake_show"))
+    harness.model = ScriptedChatModel(
+        [
+            ai_tool_call("fake_show", {}, usage={"input_tokens": 100, "output_tokens": 50}),
+            ai_tool_call("fake_show", {}),
+            ai_text("never reached"),
+        ]
+    )
+
+    result = harness.run(
+        "spend tokens",
+        llm_config=dict(harness.llm_config, max_total_tokens_per_turn=100),
+        recursion_limit=50,
+        remaining_steps=50,
+    )
+
+    # The first call reported 150 tokens, so the second entry is over budget
+    assert harness.model.calls == 1
+    assert result["turn_tokens"] == 150
+    graceful = result["messages"][-1]
+    assert graceful.metadata.get("budget_exhausted") is True
+    assert "tokens" in graceful.content
+
+
+def test_token_estimate_used_when_usage_missing(harness):
+    harness.register_tool(FakeTool("fake_show"))
+    harness.model = ScriptedChatModel([ai_text("a final answer with some words in it")])
+
+    result = harness.run("estimate tokens")
+
+    # No usage_metadata on the scripted response: the tiktoken estimate
+    # over request and response text still feeds the counter
+    assert result["turn_tokens"] > 0

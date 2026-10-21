@@ -51,17 +51,23 @@ DEFAULT_TITLE = "Test Session Title"
 _USE_HARNESS_CONFIG = object()
 
 
-def ai_text(text: str) -> AIMessage:
+def ai_text(text: str, usage: dict | None = None) -> AIMessage:
     """An AIMessage with plain text content (a final answer)."""
-    return AIMessage(content=text)
+    message = AIMessage(content=text)
+    if usage is not None:
+        message.usage_metadata = usage
+    return message
 
 
-def ai_tool_call(tool_name: str, args: dict, call_id: str = "call_1") -> AIMessage:
+def ai_tool_call(tool_name: str, args: dict, call_id: str = "call_1", usage: dict | None = None) -> AIMessage:
     """An AIMessage requesting one tool call."""
-    return AIMessage(
+    message = AIMessage(
         content="",
         tool_calls=[{"name": tool_name, "args": args, "id": call_id, "type": "tool_call"}],
     )
+    if usage is not None:
+        message.usage_metadata = usage
+    return message
 
 
 class ScriptedChatModel:
@@ -202,6 +208,7 @@ class CopilotGraphHarness:
         inputs = {
             "messages": [HumanMessage(content=message, id=str(uuid.uuid4()))],
             "llm_calls": 0,
+            "turn_tokens": 0,
             "remaining_steps": remaining_steps,
             "session_id": session_id,
             "abort": False,

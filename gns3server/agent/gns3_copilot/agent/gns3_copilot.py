@@ -53,7 +53,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 # Third-party imports
-from langchain.messages import AnyMessage, SystemMessage, ToolMessage
+from langchain.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.managed.is_last_step import RemainingSteps
@@ -61,6 +61,7 @@ from typing_extensions import TypedDict
 
 # Local imports
 from gns3server.agent.gns3_copilot.agent.context_manager import (
+    count_tokens,
     create_pre_model_hook,
 )
 from gns3server.agent.gns3_copilot.agent.model_factory import (
@@ -174,6 +175,14 @@ DEFAULT_CONVERSATION_TITLE = "New Conversation"
 UNTITLED_SESSION_FALLBACK = "Untitled Session"
 TITLE_MAX_LENGTH = 40
 
+# Per-turn hard budget defaults (Phase 1)
+# The defaults sit below what the recursion limit allows, so a runaway
+# turn ends with the budget's explained message instead of the silent
+# remaining_steps guard: 10 calls * 2 nodes + headroom fits well inside
+# recursion_limit=25, and 40 inside the injection mode limit of 100
+DEFAULT_MAX_LLM_CALLS_PER_TURN = 10
+DEFAULT_MAX_LLM_CALLS_PER_TURN_TROUBLESHOOTING = 40
+
 # Abort flags storage for session-level abort tracking
 # This is checked by conditional edge functions to stop the graph
 _abort_flags: dict[str, bool] = {}
@@ -226,7 +235,11 @@ class MessagesState(TypedDict):
     Attributes:
         messages: List of conversation messages with cumulative updates using
                  operator.add
-        llm_calls: Counter for tracking the number of LLM invocations
+        llm_calls: Per-turn counter of LLM invocations. Reset to 0 by the
+                 stream inputs at the start of each turn, incremented within
+                 the turn.
+        turn_tokens: Per-turn accumulated token cost of the model calls
+                 (input + output). Reset the same way as llm_calls.
         remaining_steps: Is automatically managed by LangGraph's RemainingSteps
                        to track and limit recursion depth.
         conversation_title: Optional conversation title for session
@@ -239,6 +252,8 @@ class MessagesState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
 
     llm_calls: int
+
+    turn_tokens: int
 
     remaining_steps: RemainingSteps
 
@@ -253,6 +268,75 @@ class MessagesState(TypedDict):
 
     # Abort flag to signal stop request
     abort: bool
+
+
+def resolve_turn_budget(llm_config: dict, copilot_mode: str) -> tuple[int, int | None]:
+    """
+    Resolve the per-turn hard budget from the LLM config.
+
+    Both keys are optional entries in the llm_model_configs config JSON.
+    Values of the wrong type, booleans, zero or negative numbers fall back
+    to the defaults. The token budget is opt-in: without a positive value
+    there is no token cap (token reporting quality varies by provider).
+    """
+    max_calls = llm_config.get("max_llm_calls_per_turn")
+    if not isinstance(max_calls, int) or isinstance(max_calls, bool) or max_calls <= 0:
+        max_calls = (
+            DEFAULT_MAX_LLM_CALLS_PER_TURN_TROUBLESHOOTING
+            if copilot_mode == "troubleshooting_injection"
+            else DEFAULT_MAX_LLM_CALLS_PER_TURN
+        )
+    max_tokens = llm_config.get("max_total_tokens_per_turn")
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens <= 0:
+        max_tokens = None
+    return max_calls, max_tokens
+
+
+def _response_token_cost(response: Any, prepared_messages: list) -> int:
+    """
+    Token cost of one model call.
+
+    Prefers provider-reported usage_metadata; falls back to a tiktoken
+    estimate over the request and response text, so providers that do not
+    report usage still feed the budget.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if usage:
+        try:
+            return int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+        except (TypeError, ValueError):
+            logger.debug("Unusable usage_metadata %r, falling back to estimate", usage)
+    estimated = sum(count_tokens(str(getattr(m, "content", "") or "")) for m in prepared_messages)
+    estimated += count_tokens(str(getattr(response, "content", "") or ""))
+    return estimated
+
+
+def _budget_exhausted_message(calls_used: int, max_calls: int, tokens_used: int, max_tokens: int | None) -> AIMessage:
+    """
+    Build the assistant message that ends a turn when the budget runs out.
+
+    The message is a plain assistant answer (no tool calls), so the turn
+    ends through the normal completion path and the frontend renders it
+    like any other reply instead of an error event.
+    """
+    if calls_used >= max_calls:
+        reason = f"{calls_used} model calls (limit: {max_calls})"
+    else:
+        reason = f"{tokens_used} tokens (limit: {max_tokens})"
+    content = (
+        f"I stopped here because this turn reached its budget: {reason}. "
+        "All commands and results collected so far are saved in this conversation. "
+        "Send a new message to continue with a fresh budget. If the limit is too "
+        "low for the task, raise 'max_llm_calls_per_turn' or "
+        "'max_total_tokens_per_turn' in the model configuration."
+    )
+    return AIMessage(
+        content=content,
+        metadata={
+            "created_at": datetime.utcnow().isoformat(),
+            "budget_exhausted": True,
+        },
+    )
 
 
 def _build_model_with_tools(mode_tools: list, llm_config: dict | None) -> Any:
@@ -305,6 +389,31 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
             "topology_info": None,
         }
 
+    # Select the copilot mode first: the budget defaults depend on it
+    copilot_mode = llm_config.get("copilot_mode", "teaching_assistant").lower()
+
+    # Hard budget guard (per turn): check before the model call so a
+    # runaway tool loop ends with an explained assistant message instead
+    # of the silent remaining_steps guard or a provider error
+    max_llm_calls, max_total_tokens = resolve_turn_budget(llm_config, copilot_mode)
+    llm_calls_used = state.get("llm_calls", 0) or 0
+    turn_tokens_used = state.get("turn_tokens", 0) or 0
+    if llm_calls_used >= max_llm_calls or (max_total_tokens is not None and turn_tokens_used >= max_total_tokens):
+        logger.info(
+            "Turn budget exhausted after %d calls / %d tokens (limits: %d calls / %s tokens) — ending turn",
+            llm_calls_used,
+            turn_tokens_used,
+            max_llm_calls,
+            max_total_tokens,
+        )
+        return {
+            "messages": [_budget_exhausted_message(llm_calls_used, max_llm_calls, turn_tokens_used, max_total_tokens)],
+            "llm_calls": llm_calls_used,
+            "turn_tokens": turn_tokens_used,
+            "topology_info": state.get("topology_info"),
+            "session_id": state.get("session_id"),
+        }
+
     # Get project_id from config configurable (set when starting the chat)
     project_id = None
     topology_info = None
@@ -340,8 +449,7 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     # Store topology_info in state for pre_model_hook to access
     state["topology_info"] = topology_info
 
-    # Select tools based on copilot_mode
-    copilot_mode = llm_config.get("copilot_mode", "teaching_assistant").lower()
+    # Select tools based on copilot_mode (computed before the budget check)
     if copilot_mode == "lab_automation_assistant":
         mode_tools = LAB_AUTOMATION_ASSISTANT_MODE_TOOLS
         logger.info("Using LAB_AUTOMATION_ASSISTANT mode tools (includes configuration tools)")
@@ -405,9 +513,14 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
         len(response.tool_calls) if hasattr(response, "tool_calls") else 0,
     )
 
+    # Accumulate the turn's token cost (provider-reported usage preferred,
+    # tiktoken estimate otherwise) so the next entry can enforce the budget
+    turn_tokens = turn_tokens_used + _response_token_cost(response, prepared_messages)
+
     return {
         "messages": [response],
-        "llm_calls": state.get("llm_calls", 0) + 1,
+        "llm_calls": llm_calls_used + 1,
+        "turn_tokens": turn_tokens,
         "topology_info": topology_info,
         "session_id": state.get("session_id"),
     }
