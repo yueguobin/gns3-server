@@ -17,7 +17,7 @@
 
 """
 Live end-to-end test for traffic-insight markers on the kernel datapath
-(pytest marker ``e2e``): two real Alpine containers on a kernel-only link,
+(pytest marker ``e2e``): two real Ubuntu containers on a kernel-only link,
 markers attached to a veth anchor (``marker add_kernel``) and observed on
 the dedicated marker notification WebSocket. Real ICMP proves:
 
@@ -72,7 +72,7 @@ R2_IP6 = "fd00:1:1::2"
 TAG = 4242
 TAG6 = 4243
 
-# busybox `ping` default frames: 14 Ethernet + 20/40 IP + 8 ICMP + 56 data.
+# the guests' `ping` default frames (56 data bytes): 14 Ethernet + 20/40 IP + 8 ICMP + 56 data.
 PING_FRAME_LEN = 98
 PING_FRAME_LEN6 = 118
 
@@ -104,7 +104,7 @@ def _create_topology(server, pid, image):
 
 def _start_topology(compute, pid, daemon, nodes):
     """Start the containers and wait for init.sh to have applied their v4
-    addresses (busybox ifup runs a moment after container start); the v6
+    addresses (ifup runs a moment after container start); the v6
     addresses are brought up by the harness after each start."""
     for node in nodes:
         compute.call("POST", f"/projects/{pid}/nodes/{node['node_id']}/start")

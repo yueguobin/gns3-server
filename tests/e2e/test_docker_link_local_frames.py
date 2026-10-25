@@ -24,7 +24,7 @@ contract lives in ``docs/design/ubridge-link-local-frame-forwarding-spec.md``),
 which makes STP, LACP, 802.1X and LLDP/DCBX flow between the guests while the
 kernel keeps hard-dropping MAC PAUSE.
 
-``test_docker_link_local_frames`` — two real Alpine containers on a kernel
+``test_docker_link_local_frames`` — two real Ubuntu containers on a kernel
 link; a static raw-Ethernet probe (built at run time, docker-cp'd in — the
 image has no raw-frame tool) injects frames from guest 1's eth0 while guest
 2's eth0 counts what actually arrived, per destination MAC. The scenario
@@ -90,7 +90,7 @@ _LLPROBE_C = r"""
 /*
  * llprobe — raw Ethernet send/recv with explicit destination MACs, for the
  * link-local forwarding e2e. Built static by the test, docker-cp'd into the
- * containers (the Alpine image has no raw-frame tool of its own).
+ * containers (the guest image ships no raw-frame tool of its own).
  *
  *   llprobe send <ifname> <dst-mac-hex> <ethertype-hex> <count>
  *   llprobe recv <ifname> <window-seconds> <dst-mac-hex>...

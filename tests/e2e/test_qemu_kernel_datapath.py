@@ -6,11 +6,11 @@
 
 """
 Live end-to-end test for the QEMU node's kernel datapath (pytest marker
-``e2e``): two real IOSv routers (a real qcow2 image run by the local qemu
-binary, the real IOS CLI behind the server's telnet console), driven through
-the controller REST API. QEMU is the node type whose guest leg *is* the
-anchor: uBridge creates one persistent TAP per adapter before launch and
-hands it to this user, and QEMU opens it by ifname as its netdev
+``e2e``): two real FRR routers (the gns3-registry FRR appliance's qcow2 run
+by the local qemu binary, a real Linux behind the server's telnet console),
+driven through the controller REST API. QEMU is the node type whose guest
+leg *is* the anchor: uBridge creates one persistent TAP per adapter before
+launch and hands it to this user, and QEMU opens it by ifname as its netdev
 (``-netdev tap,ifname=...,script=no,downscript=no,vnet_hdr=off``) — no userspace hop, no
 port bridge, the anchor is the NIC's host side.
 
@@ -40,7 +40,7 @@ and carrying while the link rides the uBridge relay. This differs from
 IOU's relay, where the fabric socket carries the traffic and the anchors
 sit idle: QEMU has no other leg, the TAP is the netdev either way.
 
-Every checkpoint runs dual-stack: the IOSv guests carry a ULA v6 address
+Every checkpoint runs dual-stack: the FRR guests carry a ULA v6 address
 next to their v4 one and each checkpoint pings both families.
 """
 
@@ -53,50 +53,41 @@ from tests.e2e import harness
 
 pytestmark = pytest.mark.e2e
 
-# One NIC per adapter, port number always 0: adapter 0 is GigabitEthernet0/0.
+# One NIC per adapter, port number always 0: adapter 0 is eth0.
 ETH = (0, 0)
-# IOSv boots a real IOS from an emulated disk — slower than IOU (the boot
-# wait is event-driven; this is only the failure cap).
-BOOT_TIMEOUT = 480
+# A full Linux boot from an emulated disk (the boot wait is event-driven;
+# this is only the failure cap).
+BOOT_TIMEOUT = 300
+GUEST_ETH_IF = "eth0"
 
-# L3 images only (an IOSv-L2 image switchports its interfaces). The first
-# is the image on this host the kernel datapath was validated with.
-IMAGE_PREFERENCE = ("vios-adventerprisek9-m.spa.159-3.m12.qcow2",)
-GUEST_ETH_IF = "GigabitEthernet0/0"
+# The pinned FRR appliance guest's boot transcript is fixed — the console
+# auto-logins straight into vtysh, whose banner is the boot-success marker
+# (and an identity tripwire: a wrong image in the cache fails in seconds,
+# not a BOOT_TIMEOUT). An image override skips the pin.
+FRR_BANNER_RE = re.compile(r"Hello, this is FRRouting")
 
 # the dual-stack half: a ULA mirroring 10.1.1.x
 R1_IP6 = "fd00:1:1::1"
 R2_IP6 = "fd00:1:1::2"
 
 
-def _pick_image(server):
-    images = server.compute.qemu_images()
-    for name in IMAGE_PREFERENCE:
-        if name in images:
-            return name
-    l3 = next(
-        (name for name in images if "vios" in name.lower() and "l2" not in name.lower() and name.endswith(".qcow2")),
-        None,
-    )
-    if not l3:
-        pytest.skip(f"no L3 IOSv qcow2 available on this server (images: {images[:5]})")
-    return l3
-
-
-def _boot(server, project_id, node_id, timeout=BOOT_TIMEOUT):
-    console = harness.ios_console(server, project_id, node_id)
-    console.boot_wait(timeout=timeout)
+def _boot(server, project_id, node_id, timeout=BOOT_TIMEOUT, banner=None):
+    console = harness.shell_console(server, project_id, node_id)
+    console.boot_wait(timeout=timeout, banner=banner)
     return console
 
 
+def _boot_banner(image):
+    """The pinned-boot criterion for *image* — pinned marker for the pinned
+    image, none for an override."""
+    return FRR_BANNER_RE if image == harness.QEMU_IMAGE else None
+
+
 def _eth_shutdown(console, shut):
-    """Shut/unshut the guest's GigabitEthernet0/0 — the only legitimate
-    speaker on the link segment (IOSv's own chatter) — for §E.2's silence
-    window; the address stays configured and answers once it is back."""
-    console.run("conf t")
-    console.run(f"interface {GUEST_ETH_IF}")
-    console.run("shutdown" if shut else "no shutdown")
-    console.run("end")
+    """Down/up the guest's eth0 — the only legitimate speaker on the link
+    segment (the guest's own chatter) — for §E.2's silence window; the
+    address stays configured and answers once it is back."""
+    console.run(f"ip link set {GUEST_ETH_IF} {'down' if shut else 'up'}")
 
 
 def test_qemu_kernel_datapath():
@@ -107,14 +98,14 @@ def test_qemu_kernel_datapath():
         pytest.skip(
             f"this compute's uBridge cannot create the QEMU adapter TAPs (ubridge_tap={caps.get('ubridge_tap')})"
         )
-    image = _pick_image(server)
+    image = harness.ensure_qemu_image(server)
 
     project = compute.create_project("qemu-e2e")
     pid = project["project_id"]
     a1 = a2 = None
     try:
-        n1 = compute.create_qemu_node(pid, "E2E-R1", image)
-        n2 = compute.create_qemu_node(pid, "E2E-R2", image)
+        n1 = compute.create_qemu_node(pid, "E2E-R1", image, ram=256, hda_disk_interface="ide")
+        n2 = compute.create_qemu_node(pid, "E2E-R2", image, ram=256, hda_disk_interface="ide")
         n1_id, n2_id = n1["node_id"], n2["node_id"]
         a1 = harness.qemu_anchor_name(n1_id, *ETH)
         a2 = harness.qemu_anchor_name(n2_id, *ETH)
@@ -128,11 +119,11 @@ def test_qemu_kernel_datapath():
         assert link["kernel_datapath"] is True, link
         assert not harness.tap_exists(a1), "anchors must not exist before start"
 
-        print(f".. starting IOSv routers on {image} (a real IOS boot — the slow leg of this scenario)")
+        print(f".. starting FRR routers on {image} (a real Linux boot)")
         compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
         compute.call("POST", f"/projects/{pid}/nodes/{n2_id}/start")
-        c1 = _boot(server, pid, n1_id)
-        c2 = _boot(server, pid, n2_id)
+        c1 = _boot(server, pid, n1_id, banner=_boot_banner(image))
+        c2 = _boot(server, pid, n2_id, banner=_boot_banner(image))
 
         # NetworkManager can release an NM-managed TAP from its bridge after
         # (re-)enslavement (docs/bugs/networkmanager-tap-release.md); take the
@@ -161,16 +152,15 @@ def test_qemu_kernel_datapath():
         harness.assert_forwarding(a1)
         harness.assert_forwarding(a2)
 
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
-        harness.configure_ios(c2, "R2", eth_ip="10.1.1.2", eth_if=GUEST_ETH_IF, eth_ipv6=R2_IP6)
-        out = c1.run("show ip int brief")
-        assert re.search(r"GigabitEthernet0/0\s+10\.1\.1\.1\s+\S+\s+\S+\s+up\s+up", out), out
-        out = c1.run("show ipv6 interface brief")
-        assert R1_IP6.upper() in out.upper(), out  # IOS prints v6 upper-case
+        harness.configure_linux(c1, eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
+        harness.configure_linux(c2, eth_ip="10.1.1.2", eth_if=GUEST_ETH_IF, eth_ipv6=R2_IP6)
+        out = c1.run(f"ip -o addr show dev {GUEST_ETH_IF}")
+        assert "10.1.1.1/24" in out, out
+        assert f"{R1_IP6}/64" in out, out
         print(".. both routers configured, pinging through the anchor TAPs")
-        baseline = harness.wait_ping(c1, "10.1.1.2")
+        baseline = harness.wait_linux_ping(c1, "10.1.1.2")
         assert baseline["success"] == 100, baseline["raw"]
-        baseline6 = harness.wait_ping(c1, R2_IP6)
+        baseline6 = harness.wait_linux_ping(c1, R2_IP6)
         assert baseline6["success"] == 100, baseline6["raw"]
 
         # L2-anchor spec §E.2: with the guests shut the anchors (QEMU's own
@@ -181,8 +171,8 @@ def test_qemu_kernel_datapath():
             harness.assert_idle_silence(a1, a2, bridge)
             for console in (c1, c2):
                 _eth_shutdown(console, shut=False)
-            assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-            assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+            assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
+            assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
         else:
             print(".. uBridge without link l2only: skipping the §E.2 assertion")
 
@@ -193,36 +183,36 @@ def test_qemu_kernel_datapath():
             harness.qdiscs(a1),
             harness.qdiscs(a2),
         )
-        delayed = harness.wait_ping(c1, "10.1.1.2")
+        delayed = harness.wait_linux_ping(c1, "10.1.1.2")
         assert delayed["success"] == 100, delayed["raw"]
         assert delayed["avg"] >= 150, (baseline, delayed)
-        delayed6 = harness.wait_ping(c1, R2_IP6)
+        delayed6 = harness.wait_linux_ping(c1, R2_IP6)
         assert delayed6["success"] == 100, delayed6["raw"]
         assert delayed6["avg"] >= 150, (baseline6, delayed6)
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
         assert "netem" not in harness.qdiscs(a1), harness.qdiscs(a1)
-        fast = harness.wait_ping(c1, "10.1.1.2")
+        fast = harness.wait_linux_ping(c1, "10.1.1.2")
         assert fast["success"] == 100 and fast["avg"] < harness.FAST_RTT_MS, fast
-        fast6 = harness.wait_ping(c1, R2_IP6)
+        fast6 = harness.wait_linux_ping(c1, R2_IP6)
         assert fast6["success"] == 100 and fast6["avg"] < harness.FAST_RTT_MS, fast6
 
         # suspend: anchor admin-down — the e1000 loses carrier, the bridge
         # port is disabled and nothing crosses; resume restores
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"suspend": True})
         assert not harness.tap_up(a1)
-        dead = harness.ping(c1, "10.1.1.2", repeat=3)
+        dead = harness.linux_ping(c1, "10.1.1.2", repeat=3)
         assert dead["success"] == 0, dead["raw"]
-        dead6 = harness.ping(c1, R2_IP6, repeat=3)
+        dead6 = harness.linux_ping(c1, R2_IP6, repeat=3)
         assert dead6["success"] == 0, dead6["raw"]
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"suspend": False})
         assert harness.tap_up(a1)
-        assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
+        assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
 
         # capture: on the anchor, a real pcap — both families inside the window
         capture = compute.call("POST", f"/projects/{pid}/links/{lid}/capture/start", {"data_link_type": "DLT_EN10MB"})
-        harness.ping(c1, "10.1.1.2")
-        harness.ping(c1, R2_IP6)
+        harness.linux_ping(c1, "10.1.1.2")
+        harness.linux_ping(c1, R2_IP6)
         time.sleep(1)
         compute.call("POST", f"/projects/{pid}/links/{lid}/capture/stop")
         path = capture["capture_file_path"]
@@ -241,8 +231,8 @@ def test_qemu_kernel_datapath():
         lid = link["link_id"]
         bridge = harness.link_bridge_name(lid)
         assert link["kernel_datapath"] is True, link
-        assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
+        assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
 
         # node stop: QEMU exits and uBridge deletes every anchor of the
         # node together with the orphan bridges (a stopped node must not
@@ -260,12 +250,12 @@ def test_qemu_kernel_datapath():
         assert harness.bridge_members(bridge) in (None, [a2]), harness.bridge_members(bridge)
         compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
         c1.close()
-        c1 = _boot(server, pid, n1_id)
+        c1 = _boot(server, pid, n1_id, banner=_boot_banner(image))
         assert harness.tap_exists(a1)
         assert harness.bridge_members(bridge) == sorted([a1, a2]), harness.bridge_members(bridge)
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
-        assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        harness.configure_linux(c1, eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
+        assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
+        assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
 
         c1.close()
         c2.close()
@@ -301,25 +291,25 @@ def test_qemu_relay_control():
         pytest.skip(
             f"this compute's uBridge cannot create the QEMU adapter TAPs (ubridge_tap={caps.get('ubridge_tap')})"
         )
-    image = _pick_image(server)
+    image = harness.ensure_qemu_image(server)
 
     project = compute.create_project("qemu-relay-e2e")
     pid = project["project_id"]
     a1 = None
     try:
-        n1 = compute.create_qemu_node(pid, "E2E-R1", image)
-        n2 = compute.create_qemu_node(pid, "E2E-R2", image)
+        n1 = compute.create_qemu_node(pid, "E2E-R1", image, ram=256, hda_disk_interface="ide")
+        n2 = compute.create_qemu_node(pid, "E2E-R2", image, ram=256, hda_disk_interface="ide")
         n1_id, n2_id = n1["node_id"], n2["node_id"]
         a1 = harness.qemu_anchor_name(n1_id, *ETH)
 
         link = compute.create_link(pid, (n1_id, *ETH), (n2_id, *ETH))
         assert link["kernel_datapath"] is False, link
 
-        print(".. starting IOSv routers and waiting for IOS boots (relay)")
+        print(".. starting FRR routers and waiting for the Linux boots (relay)")
         compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
         compute.call("POST", f"/projects/{pid}/nodes/{n2_id}/start")
-        c1 = _boot(server, pid, n1_id)
-        c2 = _boot(server, pid, n2_id)
+        c1 = _boot(server, pid, n1_id, banner=_boot_banner(image))
+        c2 = _boot(server, pid, n2_id, banner=_boot_banner(image))
 
         # no kernel wiring: nobody enslaved the anchors, the per-link
         # bridge does not exist — but the anchor is up and carrying as the
@@ -331,11 +321,11 @@ def test_qemu_relay_control():
             # the L2 hardening is a creation-time property, not a datapath
             # one: relay anchors are pure L2 too
             harness.assert_pure_l2(a1)
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
-        harness.configure_ios(c2, "R2", eth_ip="10.1.1.2", eth_if=GUEST_ETH_IF, eth_ipv6=R2_IP6)
-        relay_ping = harness.wait_ping(c1, "10.1.1.2")
+        harness.configure_linux(c1, eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
+        harness.configure_linux(c2, eth_ip="10.1.1.2", eth_if=GUEST_ETH_IF, eth_ipv6=R2_IP6)
+        relay_ping = harness.wait_linux_ping(c1, "10.1.1.2")
         assert relay_ping["success"] == 100, relay_ping["raw"]
-        relay_ping6 = harness.wait_ping(c1, R2_IP6)
+        relay_ping6 = harness.wait_linux_ping(c1, R2_IP6)
         assert relay_ping6["success"] == 100, relay_ping6["raw"]
 
         c1.close()

@@ -16,7 +16,7 @@
 
 """
 Live end-to-end tests for the standard Docker node's kernel datapath (pytest
-marker ``e2e``): two real Alpine containers, addressed from the host the way
+marker ``e2e``): two real Ubuntu containers, addressed from the host the way
 a GNS3 user does (the node's persistent ``/etc/network/interfaces``, applied
 by the container's init.sh) and driven through the Docker daemon socket the
 server itself uses. The scenarios cover:
@@ -79,7 +79,7 @@ R2_IP6 = "fd00:1:1::2"
 # exact ICMPv6 echo match for markers: a bare "icmp6" would also match the
 # guests' own DAD/MLD/NS/NA control frames and break the exact-count asserts
 _ICMP6_ECHO_BPF = "icmp6 and (ip6[40] == 128 or ip6[40] == 129)"
-# busybox ping frame lengths (56 data bytes): 14 Ethernet + 20/40 IP + 8 ICMP + 56
+# ping frame lengths (56 data bytes, the iputils/busybox default): 14 Ethernet + 20/40 IP + 8 ICMP + 56
 PING_FRAME_LEN = 98
 PING_FRAME_LEN6 = 118
 
@@ -110,7 +110,7 @@ def _create_topology(server, pid, image, name):
 
 def _start_addresses(compute, pid, daemon, nodes, addresses):
     """Start the containers and wait for init.sh to have applied their v4
-    addresses (busybox ifup runs a moment after container start); the v6
+    addresses (ifup runs a moment after container start); the v6
     addresses are brought up by the harness after each start (see
     ``harness.docker_bring_up_ipv6`` — an interface-side disable_ipv6 the
     Docker daemon sets makes the interfaces-file route impossible)."""
@@ -159,7 +159,7 @@ def _silence_guest(daemon, container_id):
 
 def _unsilence_guest(daemon, container_id, address6):
     """Reverse of ``_silence_guest``. disable_ipv6=1 removed the v6
-    addresses and busybox ifup does not re-run, so the guest's global
+    addresses and ifup does not re-run, so the guest's global
     address must be brought up again by hand (the v4 address stayed
     configured throughout)."""
     code, output = daemon.exec(container_id, ["ip", "link", "set", "eth0", "up"])
@@ -834,7 +834,7 @@ def test_docker_relay_control():
                 assert event["node_id"] == n1_id, event
                 assert event["link_id"] == link["link_id"], event
                 assert event["tag"] == 4242, event
-                assert event["len"] == PING_FRAME_LEN, event  # busybox ping frame
+                assert event["len"] == PING_FRAME_LEN, event  # the ping frame length
             for event in icmp6:
                 assert event["node_id"] == n1_id, event
                 assert event["link_id"] == link["link_id"], event

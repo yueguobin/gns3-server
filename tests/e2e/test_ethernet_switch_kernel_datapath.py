@@ -66,14 +66,6 @@ R1_IP6 = "fd00:1:1::1"
 R2_IP6 = "fd00:1:1::2"
 
 
-def _pick_image(server):
-    images = server.compute.dynamips_images()
-    image = next((name for name in images if name.startswith("c7200")), None)
-    if not image:
-        pytest.skip(f"no c7200 image available on this server (images: {images[:5]})")
-    return image
-
-
 def _switch_bridge_name(switch_id):
     # see EthernetSwitch._ensure_bridge
     return "gns3" + switch_id.replace("-", "")[:6]
@@ -121,7 +113,7 @@ def test_ethernet_switch_kernel_fast_path():
     compute = server.compute
     if compute.capabilities().get("ubridge_tap") is not True:
         pytest.skip("this compute's uBridge cannot create persistent TAPs (ubridge_tap != True)")
-    image = _pick_image(server)
+    image = harness.ensure_dynamips_image(server)
     idlepc = harness.dynamips_idlepc(server, image)
 
     project = compute.create_project("esw-e2e")
@@ -373,7 +365,7 @@ def test_ethernet_switch_relay_control():
     pings."""
     server = harness.live_server(kernel=False)
     compute = server.compute
-    image = _pick_image(server)
+    image = harness.ensure_dynamips_image(server)
     idlepc = harness.dynamips_idlepc(server, image)
 
     project = compute.create_project("esw-e2e-relay")

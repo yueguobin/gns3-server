@@ -37,13 +37,21 @@ Environment knobs:
 * ``GNS3_E2E_URL`` — target server, e.g. ``http://127.0.0.1:3080/v3``;
   when unset, an isolated instance is started for each test.
 * ``GNS3_E2E_USER`` / ``GNS3_E2E_PASSWORD`` — credentials for the target.
-* ``GNS3_E2E_IMAGES`` — images directory the isolated instance uses
-  (default ``~/GNS3/images``); also where the dynamips test finds its image.
+* ``GNS3_E2E_CACHE`` — the e2e's own cache directory (default
+  ``~/.cache/gns3-e2e``): the isolated instances serve their images from
+  there, filled on demand — public appliance images are downloaded into it,
+  Cisco-licensed ones copied in when a registry-pinned build is found in
+  the source images dir.
+* ``GNS3_E2E_IMAGES`` — the source images directory for those
+  Cisco-licensed builds (default ``~/GNS3/images``; read-only to the e2e).
 * ``GNS3_E2E_IDLEPC`` — use this idle-PC value for the dynamips routers
   instead of detecting one (see ``dynamips_idlepc``; without an idle-PC each
   router burns a full CPU core for the whole scenario).
+* ``GNS3_E2E_QEMU_IMAGE`` — the qcow2 the QEMU scenarios run (default the
+  registry's FRR appliance image, fetched and md5-verified on a cache miss;
+  see ``ensure_qemu_image``).
 * ``GNS3_E2E_DOCKER_IMAGE`` — the image the Docker scenarios run (default
-  ``alpine:3``, pinned by digest and pulled on a cache miss; see
+  ``gns3/ubuntu:resolute``, pinned by digest and pulled on a cache miss; see
   ``ensure_docker_image``).
 * ``GNS3_E2E_DOCKER_SOCKET`` — the Docker daemon socket the Docker guest
   driver talks to (default ``/var/run/docker.sock`` — the same daemon the
@@ -53,6 +61,7 @@ Environment knobs:
 """
 
 import contextlib
+import hashlib
 import http.client
 import json
 import os
@@ -88,6 +97,16 @@ PROMPT_RE = re.compile(r"[A-Za-z0-9\-_.()/]+[>#]\s*$")
 # seeds exactly these.
 DEFAULT_USER = "admin"
 DEFAULT_PASSWORD = "admin"
+
+# The e2e's own cache — the isolated instances' images directory lives here
+# (next to the idle-PC cache), deliberately NOT in the user's images dir: a
+# test run must neither read whatever ambient images a host happens to have
+# nor write into it. Public appliance images are downloaded into it on a
+# miss; Cisco-licensed ones (which cannot be fetched) are copied in when a
+# registry-pinned build is found in the source images dir. GNS3_E2E_CACHE
+# moves the whole cache.
+CACHE_DIR = os.environ.get("GNS3_E2E_CACHE", os.path.expanduser("~/.cache/gns3-e2e"))
+CACHE_IMAGES = os.path.join(CACHE_DIR, "images")
 
 
 def keep_on_failure():
@@ -204,15 +223,17 @@ class Compute:
             },
         )
 
-    def create_qemu_node(self, project_id, name, image, adapters=2, adapter_type="e1000", ram=512):
+    def create_qemu_node(
+        self, project_id, name, image, adapters=2, adapter_type="e1000", ram=512, hda_disk_interface="virtio"
+    ):
         """A QEMU VM node: the real qemu-system binary on this host running
         the image (a linked clone keeps the image pristine), the guest on the
         server's telnet console. The kernel scenario picks the image through
-        ``qemu_images`` (an L3 IOSv image — the IOS console driver drives it)
-        and addresses its first adapter. The disk interface must be named:
-        a raw node defaults to ``none``, which attaches no frontend device to
-        the drive backend — the VM comes up diskless (the IOSv appliance
-        boots virtio)."""
+        ``qemu_images`` (the registry's FRR appliance qcow2 — the shell
+        console driver drives it) and addresses its first adapter. The disk
+        interface must be named: a raw node defaults to ``none``, which
+        attaches no frontend device to the drive backend — the VM comes up
+        diskless (the FRR appliance boots ide)."""
         return self.call(
             "POST",
             f"/projects/{project_id}/nodes",
@@ -225,7 +246,7 @@ class Compute:
                     # it the platform) must be named explicitly
                     "qemu_path": "qemu-system-x86_64",
                     "hda_disk_image": image,
-                    "hda_disk_interface": "virtio",
+                    "hda_disk_interface": hda_disk_interface,
                     "adapter_type": adapter_type,
                     "adapters": adapters,
                     "ram": ram,
@@ -386,9 +407,10 @@ def _spawn_isolated(tmpdir, kernel):
         pytest.skip("ubridge is not in PATH (needed to start an isolated instance)")
     if not dynamips:
         pytest.skip("dynamips is not in PATH (needed to start an isolated instance)")
-    images = os.environ.get("GNS3_E2E_IMAGES", os.path.expanduser("~/GNS3/images"))
-    if not os.path.isdir(images):
-        pytest.skip(f"images directory not found: {images} (set GNS3_E2E_IMAGES)")
+    # the instance serves images from the e2e cache, never the user's own
+    # images dir (the Cisco scenarios fill it on demand from there)
+    images = CACHE_IMAGES
+    os.makedirs(images, exist_ok=True)
 
     os.makedirs(os.path.join(tmpdir, "projects"), exist_ok=True)
     port = _free_port()
@@ -567,7 +589,7 @@ class WebSocketCollector:
 
 # Detected values, keyed by image identity; the detection needs a throwaway
 # boot, so it is worth caching across runs.
-IDLEPC_CACHE_PATH = os.path.join(os.path.expanduser("~/.cache/gns3-e2e"), "idlepc.json")
+IDLEPC_CACHE_PATH = os.path.join(CACHE_DIR, "idlepc.json")
 
 
 def dynamips_idlepc(server, image, platform="c7200", ram=512):
@@ -626,8 +648,13 @@ def dynamips_idlepc(server, image, platform="c7200", ram=512):
     cache[key] = idlepc
     try:
         os.makedirs(os.path.dirname(IDLEPC_CACHE_PATH), exist_ok=True)
-        with open(IDLEPC_CACHE_PATH, "w") as f:
+        # write-then-rename: parallel tests share this file, and a reader
+        # must never see a half-written JSON (a lost update is fine — the
+        # loser's detection simply re-runs next time)
+        partial = IDLEPC_CACHE_PATH + ".part"
+        with open(partial, "w") as f:
             json.dump(cache, f, indent=2, sort_keys=True)
+        os.replace(partial, IDLEPC_CACHE_PATH)
     except OSError as e:
         print(f".. could not write the idle-PC cache {IDLEPC_CACHE_PATH}: {e}")
     print(f".. idle-PC {idlepc} for {image} (cached for later runs)")
@@ -769,6 +796,192 @@ def configure_ios(
     console.run("end")
 
 
+# ---------------------------------------------------------------------------
+# Linux shell console (the FRR qcow2 guest)
+# ---------------------------------------------------------------------------
+
+# The sentinel prompt the shell driver installs on the guest after login:
+# the guest's own prompt shape (hostname, shell, or the vtysh CLI) is not
+# knowable across images, but "the driver set the prompt itself" always is.
+# The lookbehind keeps the echoed `export PS1=…GNS3E2E#` line from matching.
+SHELL_PROMPT = "GNS3E2E#"
+SHELL_PROMPT_RE = re.compile(r"(?<!=)GNS3E2E#\s*$")
+
+# The FRR appliance's documented console credentials (its usage notes ship
+# with the image: root/root).
+GUEST_USER = "root"
+GUEST_PASSWORD = "root"
+
+# The guest's line editor (busybox ash) queries the cursor position with
+# every prompt (ESC [6n) and processes no further input until the terminal
+# answers (ESC [<row>;<col>R) — a driver that never answers never sees a
+# quiet prompt, exactly the lesson the SR Linux console taught. The answer
+# claims column 1: the editor only wants to know where its line starts.
+CPR_QUERY = "\x1b[6n"
+CPR_REPLY = b"\x1b[1;1R"
+
+
+class ShellConsole:
+    """A deliberately dumb Linux shell console driver — the shell twin of
+    the IOS one: same send-and-settle flow, but it settles on the sentinel
+    prompt it installed itself after login (see SHELL_PROMPT).
+
+    ``run`` sends one line and returns everything received until that
+    sentinel is back and the stream has been quiet. No state to track —
+    every line is a fresh shell command.
+    """
+
+    def __init__(self, host, port, username=GUEST_USER, password=GUEST_PASSWORD):
+        self.sock = socket.create_connection((host, port), timeout=10)
+        self.sock.settimeout(0.3)
+        self.buf = ""
+        self._cpr_answered = 0
+        self._username = username
+        self._password = password
+
+    def _reset(self):
+        """Clear the exchange buffer (and with it the CPR bookkeeping that
+        counts against it)."""
+        self.buf = ""
+        self._cpr_answered = 0
+
+    def _read(self):
+        """Drain whatever arrived; True when at least one byte was read."""
+        got = False
+        while True:
+            try:
+                data = self.sock.recv(65536)
+            except TimeoutError:
+                return got
+            if not data:
+                return got
+            self.buf += data.decode(errors="replace")
+            got = True
+
+    def _answer_cpr(self):
+        """Answer every cursor-position query the guest's line editor has
+        sent and is blocking on (see CPR_REPLY) — once each."""
+        queries = self.buf.count(CPR_QUERY)
+        for _ in range(queries - self._cpr_answered):
+            self.sock.sendall(CPR_REPLY)
+        self._cpr_answered = queries
+
+    def run(self, line, timeout=30, quiet=0.8):
+        """Send one line; return the full exchange once the sentinel prompt
+        is back and nothing new arrived for *quiet* seconds."""
+        return self._send_and_settle(line + "\r", timeout=timeout, quiet=quiet)
+
+    def run_script(self, block, timeout=60, quiet=1.0):
+        """Stage a multi-line block through the console as one burst (a
+        heredoc body produces no prompt per line, so per-line ``run`` calls
+        would each sit out their timeout inside it) and settle once. The
+        block's newlines become carriage returns — what the console's tty
+        expects of an entered line."""
+        return self._send_and_settle(block.replace("\n", "\r") + "\r", timeout=timeout, quiet=quiet)
+
+    def _send_and_settle(self, payload, timeout, quiet):
+        self._reset()
+        self.sock.sendall(payload.encode())
+        deadline = time.time() + timeout
+        last_growth = time.time()
+        while time.time() < deadline:
+            if self._read():
+                last_growth = time.time()
+            self._answer_cpr()
+            if SHELL_PROMPT_RE.search(self.buf) and time.time() - last_growth > quiet:
+                break
+            time.sleep(0.05)
+        out = self.buf
+        self._reset()
+        return out
+
+    def boot_wait(self, timeout=300, banner=None):
+        """Wait out the boot, log in, and install the sentinel prompt.
+
+        Handles the shapes a minimal appliance guest can take, in whatever
+        order they appear: a ``login:`` prompt (the credentials come from
+        the constructor), a vtysh the image starts on the console (the
+        FRRouting banner — the FRR appliance auto-logins straight into it),
+        and a shell reached without either. Whenever the stream has gone
+        quiet without the sentinel, the driver answers whichever of those
+        is on the tail of the stream — or (re)installs the sentinel prompt,
+        which makes an early miss harmless: text typed into a boot banner
+        or a failed login simply re-prompts, and the loop answers that
+        instead.
+
+        ``banner`` pins the boot-success criterion to the guest's fixed
+        transcript (the pinned-image scenarios pass the banner the image
+        prints): the prompt only counts as ready when the banner was seen,
+        so a wrong image sitting in the cache fails in seconds with "not
+        the pinned guest" instead of a timeout.
+        """
+        sent_username = sent_password = left_vtysh = False
+        deadline = time.time() + timeout
+        self._reset()
+        last_growth = time.time()
+        while time.time() < deadline:
+            if self._read():
+                last_growth = time.time()
+            self._answer_cpr()
+            if SHELL_PROMPT_RE.search(self.buf) and time.time() - last_growth > 1.2:
+                if banner is not None and not banner.search(self.buf):
+                    raise AssertionError(
+                        f"the console reached a prompt without the pinned boot banner {banner.pattern!r} — "
+                        f"not the pinned guest image? tail: {self.buf[-300:]!r}"
+                    )
+                self._reset()
+                return
+            if time.time() - last_growth > 1.5:
+                tail = self.buf[-120:]
+                if not sent_username and re.search(r"login:\s*$", tail):
+                    self.sock.sendall((self._username + "\r").encode())
+                    sent_username = True
+                elif sent_username and not sent_password and re.search(r"assword:\s*$", tail):
+                    self.sock.sendall((self._password + "\r").encode())
+                    sent_password = True
+                elif not left_vtysh and "this is FRRouting" in self.buf:
+                    # the console opened in the vtysh CLI (with or without a
+                    # login in front of it) — leave it for the shell
+                    self.sock.sendall(b"exit\r")
+                    left_vtysh = True
+                else:
+                    self.sock.sendall(f"export PS1={SHELL_PROMPT}\r".encode())
+                last_growth = time.time()
+            time.sleep(0.1)
+        raise AssertionError(f"Linux console did not reach the sentinel prompt; tail: {self.buf[-300:]!r}")
+
+    def close(self):
+        self.sock.close()
+
+
+def shell_console(server, project_id, node_id):
+    """The telnet console of a node running a plain Linux guest (the FRR
+    qcow2): the server-side telnet endpoint around QEMU's own serial
+    console."""
+    node = server.compute.node(project_id, node_id)
+    host = node["console_host"] if node["console_host"] not in ("0.0.0.0", "::") else "127.0.0.1"
+    return ShellConsole(host, node["console"])
+
+
+GUEST_BASELINE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "guest-baseline.sh")
+
+
+def configure_linux(console, eth_ip=None, eth_ipv6=None, eth_if="eth0"):
+    """Baseline config on a freshly booted Linux guest: stage the shared
+    guest-baseline script (``tests/e2e/configs/``) through the console and
+    run it with the interface and the addresses as arguments — one
+    reviewed, idempotent artifact instead of ad-hoc commands, so a re-run
+    after a node restart is safe. The guest stays a pure host — no routing
+    daemon runs, so no RAs or hellos go out and the link stays quiet
+    (directly connected pings need no forwarding)."""
+
+    with open(GUEST_BASELINE_SCRIPT) as f:
+        script = f.read().rstrip("\n")
+    v4 = f"{eth_ip}/24" if eth_ip else ""
+    v6 = f"{eth_ipv6}/64" if eth_ipv6 else ""
+    console.run_script(f"sh -s -- {eth_if} {v4} {v6} <<'GNS3E2E'\n{script}\nGNS3E2E")
+
+
 # "No impairment applied" RTT bound for the fast-path asserts of the
 # kernel-datapath scenarios: an unimpaired link measures ~20-45 ms on the
 # IOS-based nodes (4 ms-quantized RTT; host scheduling jitter has pushed
@@ -797,6 +1010,53 @@ def wait_ping(console, target, attempts=4, repeat=3, timeout=1):
     result = None
     for _ in range(attempts):
         result = ping(console, target, repeat=repeat, timeout=timeout)
+        if result["success"] == 100:
+            return result
+        time.sleep(1.5)
+    return result
+
+
+_PING_LOSS_RE = re.compile(r"(\d+)% packet loss")
+_PING_RTT_RE = re.compile(r"rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms")
+_PING_REPLY_RE = re.compile(r"\bicmp_seq=\d+")
+
+
+def _ping_parse(output, count):
+    """(loss percent, avg rtt or None) from iputils ping output — the
+    Ubuntu containers and the FRR qcow2 guest all run iputils `ping`.
+
+    The summary line can be lost if the exec/console stream truncates: with
+    replies visible but no summary, derive the loss from the replies
+    actually seen instead of reporting a phantom 100 %.
+    """
+    loss = _PING_LOSS_RE.search(output)
+    if loss is not None:
+        loss_pct = int(loss.group(1))
+    else:
+        replies = len(_PING_REPLY_RE.findall(output))
+        loss_pct = round(100 * max(0, count - replies) / count) if replies else 100
+    rtt = _PING_RTT_RE.search(output)
+    return loss_pct, (float(rtt.group(1)) if rtt else None)
+
+
+def linux_ping(console, target, repeat=3, timeout=1):
+    """Run a Linux guest's ping (iputils — the FRR qcow2 guest); returns
+    {success, avg, raw} (success in percent). A v6 literal needs no special
+    form — the same command shape serves both families."""
+
+    out = console.run(f"ping -c {repeat} -W {timeout} {target}", timeout=repeat * timeout + 20)
+    loss, avg = _ping_parse(out, repeat)
+    return {"success": 100 - loss, "avg": avg, "raw": out}
+
+
+def wait_linux_ping(console, target, attempts=4, repeat=3, timeout=1):
+    """The Linux twin of wait_ping: ping until it fully succeeds (the first
+    exchange of a fresh adjacency is ARP/ND); returns the last result either
+    way."""
+
+    result = None
+    for _ in range(attempts):
+        result = linux_ping(console, target, repeat=repeat, timeout=timeout)
         if result["success"] == 100:
             return result
         time.sleep(1.5)
@@ -843,14 +1103,20 @@ def wait_vpcs_ping(console, target, attempts=4, count=5, timeout=1):
 
 DOCKER_SOCKET = os.environ.get("GNS3_E2E_DOCKER_SOCKET", "/var/run/docker.sock")
 
-# The image the Docker scenarios run. Both the registry digest (what to pull
-# on a cache miss; a rolling tag resolved once and then pinned forever) and
-# the repo-digest it must resolve to locally are pinned, so every developer
-# tests the same bytes. The Docker daemon is the cache: a hit costs no
-# network, a miss pulls through the server's own route (the WebUI's path),
-# and no cache + no registry skips the scenario.
-DOCKER_IMAGE = "alpine:3"
-DOCKER_IMAGE_DIGEST = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+# The images the Docker scenarios run — the registry's own appliances, so
+# the e2e exercises exactly what users pull: the Ubuntu guest appliance for
+# the host-behavior scenarios and the FRR router image (the frr-docker and
+# frr-docker-lite appliances; ``FRR_PROFILE`` selects the daemon set) for
+# the routing-protocol scenarios to come. Both the registry digest (what to
+# pull on a cache miss; a rolling tag resolved once and then pinned forever)
+# and the repo-digest it must resolve to locally are pinned, so every
+# developer tests the same bytes. The Docker daemon is the cache: a hit
+# costs no network, a miss pulls through the server's own route (the WebUI's
+# path), and no cache + no registry skips the scenario.
+DOCKER_IMAGE = "gns3/ubuntu:resolute"
+DOCKER_IMAGE_DIGEST = "sha256:b721ec166664a6fa7738a8175cfac1405f25e7464720c854cd98011153576a82"
+FRR_DOCKER_IMAGE = "gns3/frr"
+FRR_DOCKER_IMAGE_DIGEST = "sha256:919e76c92ce74cf82658c6f93a7fa8f0ccbd4a562e2f6b3f83780f67e1ec3b67"
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
@@ -995,13 +1261,14 @@ class DockerDaemon:
             conn.close()
 
 
-def ensure_docker_image(server):
+def ensure_docker_image(server, image=DOCKER_IMAGE, digest=DOCKER_IMAGE_DIGEST):
     """The Docker image the scenarios run, ensured present locally.
 
-    The pinned reference (``DOCKER_IMAGE``, digest ``DOCKER_IMAGE_DIGEST``)
-    is pulled through the server's own pull route on a cache miss and
-    verified against the pinned repo digest afterwards. A cached image that
-    resolves to another digest is used with a warning if the pull fails
+    Defaults to the Ubuntu guest appliance (``image``/``digest`` re-point a
+    scenario at another pinned build, e.g. the FRR router image). The pinned
+    reference is pulled through the server's own pull route on a cache miss
+    and verified against the pinned repo digest afterwards. A cached image
+    that resolves to another digest is used with a warning if the pull fails
     (offline developer), but with no cached image and no registry the
     scenario skips. ``GNS3_E2E_DOCKER_IMAGE`` overrides the reference
     entirely (the operator then owns its content)."""
@@ -1015,34 +1282,276 @@ def ensure_docker_image(server):
         print(f".. using GNS3_E2E_DOCKER_IMAGE={override} ({info['Id'][:19]}…)")
         return override
 
-    reference = f"{DOCKER_IMAGE}@{DOCKER_IMAGE_DIGEST}"
-    info = daemon.image_inspect(DOCKER_IMAGE)
-    if info is not None and any(DOCKER_IMAGE_DIGEST in d for d in (info.get("RepoDigests") or [])):
-        print(f".. Docker image {DOCKER_IMAGE} is cached at the pinned digest ({info['Id'][:19]}…)")
-        return DOCKER_IMAGE
+    reference = f"{image}@{digest}"
+    info = daemon.image_inspect(image)
+    if info is not None and any(digest in d for d in (info.get("RepoDigests") or [])):
+        print(f".. Docker image {image} is cached at the pinned digest ({info['Id'][:19]}…)")
+        return image
     if info is None:
-        print(f".. Docker image {DOCKER_IMAGE} is not cached — pulling the pinned digest")
+        print(f".. Docker image {image} is not cached — pulling the pinned digest")
     else:
-        print(
-            f".. cached {DOCKER_IMAGE} is {info.get('RepoDigests') or info['Id'][:19]}…, not the pinned digest — pulling"
-        )
+        print(f".. cached {image} is {info.get('RepoDigests') or info['Id'][:19]}…, not the pinned digest — pulling")
     try:
         server.compute.call("POST", "/computes/local/docker/images/pull", {"image": reference}, timeout=600)
     except AssertionError as e:
         if info is None:
-            pytest.skip(f"Docker image {DOCKER_IMAGE} is not cached and could not be pulled: {e}")
-        print(f".. pull failed ({e}); using the cached {DOCKER_IMAGE} — not the pinned build")
-        return DOCKER_IMAGE
+            pytest.skip(f"Docker image {image} is not cached and could not be pulled: {e}")
+        print(f".. pull failed ({e}); using the cached {image} — not the pinned build")
+        return image
     print(f".. pulled {reference}")
-    return DOCKER_IMAGE
+    return image
+
+
+# ---------------------------------------------------------------------------
+# Test images: registry-pinned builds and the e2e cache
+# ---------------------------------------------------------------------------
+
+# The pinned builds each emulator's scenarios prefer, straight from the
+# gns3-registry appliance tables (cisco-7200.gns3a, cisco-iou-l3.gns3a,
+# frr.gns3a): filename, md5, size — newest first. The md5 is the identity
+# of record: Cisco's download channel has shipped new bytes under an old
+# pinned filename (the 17.18.2 build as x86_64_crb_linux-adventerprisek9-
+# ms.iol), so a source file matches a pin by checksum under any name, and
+# the cache stores it under the pin's canonical filename.
+DYNAMIPS_IMAGE_PINS = (
+    ("c7200-adventerprisek9-mz.153-3.XB12.image", "3d234a3793331c972776354531f87221", 131471340),
+    ("c7200-advipservicesk9-mz.152-4.S7.image", "840a757e71bd73daaf9c77e5b02c6333", 93595460),
+    ("c7200-advipservicesk9-mz.152-4.S6.image", "8d0bbd5473b58ef5bbc7e926f56e174a", 93586040),
+    ("c7200-advipservicesk9-mz.152-4.S5.image", "cbbbea66a253f1dac0fcf81274dc778d", 87756936),
+    ("c7200-adventerprisek9-mz.152-4.M11.image", "9a2005ad09ce1ec6fe7cf9af1e9b099e", 128487680),
+    ("c7200-adventerprisek9-mz.124-24.T5.image", "6b89d0d804e1f2bb5b8bda66b5692047", 102345240),
+    ("c7200-a3jk9s-mz.124-25g.image", "9c7cc9b3f3b3571411a7f62faaa2c036", 71528984),
+    ("c7200-itpk9-mz.124-15.SW.image", "3334a0facdbd26164e83d3c201fff5b5", 46423952),
+)
+IOU_IMAGE_PINS = (
+    ("x86_64_crb_linux-adventerprisek9-ms.17.18.2.iol", "34bf876c5b3c60f3ef4eb28eb8a176d7", 293729288),
+    ("x86_64_crb_linux-adventerprisek9-ms.17.16.1a.iol", "39bdf959c3b99a3c81d66451f1cf0404", 293062920),
+    ("x86_64_crb_linux-adventerprisek9-ms.iol", "5d584f6cfbeaadc87d55f613da1049ed", 292001512),
+    ("x86_64_crb_linux-adventerprisek9-ms", "4a2fce8de21d1831fbceffd155e41ae7", 288947184),
+)
+# The FRR appliance's image is public — a cache miss can simply fetch it,
+# which is what makes the QEMU scenarios self-bootstrapping (the IOSv build
+# they used to need is Cisco-licensed and could not be fetched).
+QEMU_IMAGE = "frr-8.2.2.qcow2"
+QEMU_IMAGE_MD5 = "45cda6b991a1b9e8205a3a0ecc953640"
+QEMU_IMAGE_BYTES = 56609280
+QEMU_IMAGE_URL = "https://downloads.sourceforge.net/project/gns-3/Qemu%20Appliances/frr-8.2.2.qcow2"
+QEMU_IMAGE_PINS = ((QEMU_IMAGE, QEMU_IMAGE_MD5, QEMU_IMAGE_BYTES),)
+# A trickling SourceForge mirror must abort, not hang (see
+# _download_qemu_image): 54 MB in 5 s needs ~110 KB/s — anything slower is
+# a mirror to walk away from.
+QEMU_DOWNLOAD_TIME_CAP = 300
+
+
+def source_images_dir():
+    """The directory Cisco-licensed images are looked up in on a cache miss
+    (GNS3_E2E_IMAGES, default ``~/GNS3/images``) — read-only to the e2e."""
+    return os.environ.get("GNS3_E2E_IMAGES", os.path.expanduser("~/GNS3/images"))
+
+
+def _md5sum(path):
+    md5 = hashlib.md5(usedforsecurity=False)  # integrity matching against the appliances' checksums
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            md5.update(chunk)
+    return md5.hexdigest()
+
+
+def _source_files(subfolder):
+    """``{filename: path}`` across the source images dir's root and
+    *subfolder* (Cisco layouts keep emulator images in per-type subfolders,
+    but a file in the root is equally visible to the server's recursive
+    listing)."""
+
+    files = {}
+    source = source_images_dir()
+    for folder in (source, os.path.join(source, subfolder)):
+        if os.path.isdir(folder):
+            for name in sorted(os.listdir(folder)):
+                path = os.path.join(folder, name)
+                if os.path.isfile(path) and not name.startswith("."):
+                    files.setdefault(name, path)
+    return files
+
+
+def _find_pinned_source(pins, subfolder):
+    """The first registry-pinned build present in the source images dir, as
+    ``(canonical filename, source path)`` — matched by filename first, then
+    by checksum under any name (see the pins tables' note); None when no
+    pin matches. The size prefilter keeps the checksum pass from hashing
+    the whole directory."""
+
+    files = _source_files(subfolder)
+    for name, md5sum, _size in pins:
+        path = files.get(name)
+        if path and _md5sum(path) == md5sum:
+            return name, path
+    for name, md5sum, size in pins:
+        for path in files.values():
+            if os.path.getsize(path) == size and _md5sum(path) == md5sum:
+                return name, path
+    return None
+
+
+def _download_qemu_image(directory):
+    """Fetch the pinned FRR qcow2 into the cache's *directory*; the canonical
+    filename on success. Being offline is a skip (like an unpullable Docker
+    image); a size or checksum mismatch is a hard failure — the pinned URL
+    itself went bad, which no silent fallback should paper over.
+
+    A total-time cap aborts a trickling mirror: the socket timeout is
+    measured between bytes, so a mirror dripping 50 KB/s never trips it and
+    would otherwise hang the scenario for the better part of an hour."""
+
+    os.makedirs(directory, exist_ok=True)
+    partial = os.path.join(directory, QEMU_IMAGE + ".part")
+    print(f".. downloading {QEMU_IMAGE} ({QEMU_IMAGE_BYTES >> 20} MB, one-time — the appliance's public build)")
+    md5 = hashlib.md5(usedforsecurity=False)  # integrity pin, matching the appliance's checksum
+    done = 0
+    deadline = time.monotonic() + QEMU_DOWNLOAD_TIME_CAP
+    try:
+        # S310: the pinned appliance URL, not untrusted input
+        with urllib.request.urlopen(QEMU_IMAGE_URL, timeout=60) as resp, open(partial, "wb") as f:  # noqa: S310
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                if time.monotonic() > deadline:
+                    raise OSError(
+                        f"the mirror is too slow — {done} of {QEMU_IMAGE_BYTES} bytes in {QEMU_DOWNLOAD_TIME_CAP}s; "
+                        f"retry (SourceForge picks a mirror per connection), or drop the file into {directory}"
+                    )
+                f.write(chunk)
+                md5.update(chunk)
+                done += len(chunk)
+    except OSError as e:
+        with contextlib.suppress(OSError):
+            os.remove(partial)
+        pytest.skip(f"downloading {QEMU_IMAGE} failed: {e}")
+    if done != QEMU_IMAGE_BYTES or md5.hexdigest() != QEMU_IMAGE_MD5:
+        with contextlib.suppress(OSError):
+            os.remove(partial)
+        raise AssertionError(
+            f"downloaded {QEMU_IMAGE} is {done} bytes md5 {md5.hexdigest()} — "
+            f"expected {QEMU_IMAGE_BYTES} bytes md5 {QEMU_IMAGE_MD5}: the pinned URL went bad"
+        )
+    os.replace(partial, os.path.join(directory, QEMU_IMAGE))
+    print(f".. downloaded {QEMU_IMAGE} (size and md5 verified)")
+    return QEMU_IMAGE
+
+
+def _ensure_image(server, what, pins, subfolder, list_images, fuzzy=None, fetch=None):
+    """The image the *what* scenarios run, as the filename the server lists.
+
+    An isolated instance serves from the e2e cache (``CACHE_IMAGES``, the
+    per-type subfolder the server's default layout expects): a hit costs
+    nothing; a miss is filled by stealing the first registry-pinned build
+    found in the source images dir (copied under its canonical pin name),
+    or by ``fetch`` when one is given (the FRR qcow2's downloader); as a
+    last resort a fuzzy-matching unpinned build is copied with a warning —
+    an unverified combination. Against an external server
+    (``GNS3_E2E_URL``) nothing is copied anywhere: pins match by filename
+    against that server's own listing (the API does not expose checksums),
+    then fuzzy, else the scenario skips."""
+
+    if server.isolated:
+        directory = os.path.join(CACHE_IMAGES, subfolder)
+        for name, _md5sum, _size in pins:
+            if os.path.isfile(os.path.join(directory, name)):
+                print(f".. {what} image {name} is already in the e2e cache")
+                return name
+        os.makedirs(directory, exist_ok=True)
+        found = _find_pinned_source(pins, subfolder)
+        if found:
+            name, path = found
+            # copy-then-rename: a parallel test must never list (or boot) a
+            # half-written image — the cache is the one shared mutable thing
+            # in an otherwise per-test world
+            partial = os.path.join(directory, name + ".part")
+            shutil.copyfile(path, partial)
+            os.replace(partial, os.path.join(directory, name))
+            print(f".. copied {name} (a registry-pinned build) from {path} into the e2e cache")
+        elif fetch:
+            name = fetch(directory)
+        elif fuzzy:
+            hit = next((path for fname, path in _source_files(subfolder).items() if fuzzy(fname)), None)
+            if not hit:
+                pytest.skip(f"no {what} image in {source_images_dir()} (set GNS3_E2E_IMAGES)")
+            name = os.path.basename(hit)
+            shutil.copyfile(hit, os.path.join(directory, name))
+            print(
+                f".. WARNING: no registry-pinned {what} image found — using unpinned {name}, an unverified combination"
+            )
+        else:
+            pytest.skip(f"no registry-pinned {what} image in {source_images_dir()} (set GNS3_E2E_IMAGES)")
+        assert name in list_images(), f"the running server does not list the just-cached {name}"
+        return name
+
+    listing = list_images()
+    for name, _md5sum, _size in pins:
+        if name in listing:
+            print(f".. using {name} from the external server's images")
+            return name
+    if fuzzy:
+        hit = next((name for name in listing if fuzzy(name)), None)
+        if hit:
+            print(f".. WARNING: no registry-pinned {what} image on the external server — using unpinned {hit}")
+            return hit
+    pytest.skip(f"no registry-pinned {what} image on the external server (looked for {[p[0] for p in pins]})")
+
+
+def ensure_dynamips_image(server):
+    """The c7200 IOS image the dynamips-family scenarios run (dynamips,
+    ethernet switch, cascade) — the registry's Cisco 7200 appliance
+    builds."""
+    return _ensure_image(
+        server,
+        "c7200",
+        DYNAMIPS_IMAGE_PINS,
+        "IOS",
+        server.compute.dynamips_images,
+        fuzzy=lambda name: name.startswith("c7200"),
+    )
+
+
+def ensure_iou_image(server):
+    """The L3 IOU image the IOU scenario runs — the registry's Cisco IOU L3
+    appliance builds. L3 only: the ``l2`` exclusion is deliberate (L2 IOU
+    images have their own issues; see the scenario)."""
+    return _ensure_image(
+        server,
+        "IOU L3",
+        IOU_IMAGE_PINS,
+        "IOU",
+        server.compute.iou_images,
+        fuzzy=lambda name: "adventerprisek9" in name and "l2" not in name.lower(),
+    )
+
+
+def ensure_qemu_image(server):
+    """The qcow2 the QEMU scenarios run — the registry's FRR appliance
+    image: public, versioned and pinned, so the scenarios bootstrap
+    themselves on any host. ``GNS3_E2E_QEMU_IMAGE`` overrides the reference
+    entirely (must already be listed; the operator then owns its
+    content)."""
+
+    override = os.environ.get("GNS3_E2E_QEMU_IMAGE")
+    if override:
+        if override not in server.compute.qemu_images():
+            pytest.skip(f"GNS3_E2E_QEMU_IMAGE={override} is not in the server's QEMU images")
+        print(f".. using GNS3_E2E_QEMU_IMAGE={override}")
+        return override
+    return _ensure_image(
+        server, "QEMU", QEMU_IMAGE_PINS, "QEMU", server.compute.qemu_images, fetch=_download_qemu_image
+    )
 
 
 def configure_docker_interfaces(node, address, netmask="255.255.255.0", adapter=0):
     """Give the container's eth{adapter} a static address the way a GNS3
     user does: write the persistent ``/etc/network/interfaces`` the server
-    bind-mounts into the container and init.sh applies with busybox ifup at
-    boot (CIDR is not understood — separate address/netmask lines). Call
-    before starting the node.
+    bind-mounts into the container and init.sh applies with ifup at boot
+    (separate address/netmask lines — the portable stanza every ifup
+    flavor understands). Call before starting the node.
 
     IPv4 only: an inet6 stanza would never apply — see
     ``docker_bring_up_ipv6``."""
@@ -1062,7 +1571,7 @@ def docker_bring_up_ipv6(daemon, container_id, address6, adapter=0):
 
     IPv6 cannot ride the interfaces file here: on bridge networks without
     IPv6 the Docker daemon leaves the container interface with
-    ``disable_ipv6=1``, which makes busybox ifup's ``ip -6 addr add`` fail
+    ``disable_ipv6=1``, which makes ifup's ``ip -6 addr add`` fail
     with EPERM before init.sh's ``ifup -a`` ever finishes the stanza — the
     interface must be switched on by hand first. DAD transmissions are
     silenced before the address is added: the kernel still holds the
@@ -1084,7 +1593,7 @@ def docker_bring_up_ipv6(daemon, container_id, address6, adapter=0):
 
 def docker_wait_address(daemon, container_id, address, timeout=30, adapter=0):
     """Wait until the container's eth{adapter} carries *address* (either
-    family) — init.sh applies the interfaces file (busybox ifup) a moment
+    family) — init.sh applies the interfaces file (ifup) a moment
     after container start. A v6 address also has to leave the tentative
     state (a tentative address answers no neighbour solicitation, so pings
     to it cannot resolve)."""
@@ -1100,36 +1609,13 @@ def docker_wait_address(daemon, container_id, address, timeout=30, adapter=0):
         raise AssertionError(f"container {container_id[:12]} did not configure {address} within {timeout}s")
 
 
-_BUSYBOX_PING_LOSS_RE = re.compile(r"(\d+)% packet loss")
-_BUSYBOX_PING_RTT_RE = re.compile(r"round-trip min/avg/max = [\d.]+/([\d.]+)/[\d.]+ ms")
-_BUSYBOX_PING_REPLY_RE = re.compile(r"\bseq=\d+")
-
-
-def _busybox_ping_parse(output, count):
-    """(loss percent, avg rtt or None) from busybox ping output.
-
-    The summary line can be lost when the exec stream truncates (observed
-    after busybox's 4294967 ms RTT timer-wrap artifact truncates the
-    tail): with replies visible but no summary, derive the loss from the
-    replies actually seen instead of reporting a phantom 100 %.
-    """
-    loss = _BUSYBOX_PING_LOSS_RE.search(output)
-    if loss is not None:
-        loss_pct = int(loss.group(1))
-    else:
-        replies = len(_BUSYBOX_PING_REPLY_RE.findall(output))
-        loss_pct = round(100 * max(0, count - replies) / count) if replies else 100
-    rtt = _BUSYBOX_PING_RTT_RE.search(output)
-    return loss_pct, (float(rtt.group(1)) if rtt else None)
-
-
 def docker_ping(daemon, container_id, target, count=3, timeout=1, interval=0.2, size=None):
-    """Run a real busybox ping inside a container; returns
+    """Run a real iputils ping inside a container; returns
     ``{loss, avg, raw, exit}`` (loss in percent, avg in ms). The default
     0.2 s interval packs more samples into loss measurements; loss-based
     checks pass a higher count.
 
-    The ping is wrapped in busybox `timeout` with a generous cap so a
+    The ping is wrapped in `timeout` with a generous cap so a
     misbehaving guest can never hold the exec stream open past it — the
     harness then reports a normal failed ping instead of a socket timeout.
     """
@@ -1141,7 +1627,7 @@ def docker_ping(daemon, container_id, target, count=3, timeout=1, interval=0.2, 
         cmd += ["-s", str(size)]
     cmd.append(target)
     code, output = daemon.exec(container_id, cmd, timeout=cap + 10)
-    loss_pct, avg_rtt = _busybox_ping_parse(output, count)
+    loss_pct, avg_rtt = _ping_parse(output, count)
     return {
         "loss": loss_pct,
         "avg": avg_rtt,

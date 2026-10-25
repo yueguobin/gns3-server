@@ -66,14 +66,6 @@ R1_IP6 = "fd00:1:1::1"
 R2_IP6 = "fd00:1:1::2"
 
 
-def _pick_image(server):
-    images = server.compute.dynamips_images()
-    image = next((name for name in images if name.startswith("c7200")), None)
-    if not image:
-        pytest.skip(f"no c7200 image available on this server (images: {images[:5]})")
-    return image
-
-
 def _boot(server, project_id, node_id, timeout=360):
     console = harness.ios_console(server, project_id, node_id)
     console.boot_wait(timeout=timeout)
@@ -92,7 +84,7 @@ def test_dynamips_kernel_datapath():
     compute = server.compute
     if compute.capabilities().get("ubridge_tap") is not True:
         pytest.skip("this compute's uBridge cannot create persistent TAPs (ubridge_tap != True)")
-    image = _pick_image(server)
+    image = harness.ensure_dynamips_image(server)
     idlepc = harness.dynamips_idlepc(server, image)
 
     project = compute.create_project("dyn-e2e")
@@ -292,7 +284,7 @@ def test_dynamips_relay_control():
     whether links are attached to them."""
     server = harness.live_server(kernel=False)
     compute = server.compute
-    image = _pick_image(server)
+    image = harness.ensure_dynamips_image(server)
     idlepc = harness.dynamips_idlepc(server, image)
 
     project = compute.create_project("dyn-e2e-relay")

@@ -72,22 +72,6 @@ R2_IP6 = "fd00:1:1::2"
 # asserts
 ICMP6_ECHO_BPF = "icmp6 and (ip6[40] == 128 or ip6[40] == 129)"
 
-# L3 images only: an L2 switching image does not take an address on its
-# switchports. The first is the image the kernel datapath was validated
-# with, the second the matching 17.15 build.
-IMAGE_PREFERENCE = ("x86_64_crb_linux-adventerprisek9-ms.iol", "l3-adventerprisek9-ms-17.15.01.bin")
-
-
-def _pick_image(server):
-    images = server.compute.iou_images()
-    for name in IMAGE_PREFERENCE:
-        if name in images:
-            return name
-    l3 = next((name for name in images if "adventerprisek9" in name and "l2" not in name.lower()), None)
-    if not l3:
-        pytest.skip(f"no L3 IOU image available on this server (images: {images[:5]})")
-    return l3
-
 
 def _boot(server, project_id, node_id, timeout=BOOT_TIMEOUT):
     console = harness.ios_console(server, project_id, node_id)
@@ -118,7 +102,7 @@ def test_iou_kernel_datapath():
             f"this compute's uBridge cannot serve the IOU anchor lifecycle "
             f"(ubridge_iol_tap={caps.get('ubridge_iol_tap')}, ubridge_tap={caps.get('ubridge_tap')})"
         )
-    image = _pick_image(server)
+    image = harness.ensure_iou_image(server)
 
     project = compute.create_project("iou-e2e")
     pid = project["project_id"]
@@ -379,7 +363,7 @@ def test_iou_relay_control():
 
     server = harness.live_server(kernel=False)
     compute = server.compute
-    image = _pick_image(server)
+    image = harness.ensure_iou_image(server)
 
     project = compute.create_project("iou-relay-e2e")
     pid = project["project_id"]
