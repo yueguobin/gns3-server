@@ -803,9 +803,12 @@ def configure_ios(
 # The sentinel prompt the shell driver installs on the guest after login:
 # the guest's own prompt shape (hostname, shell, or the vtysh CLI) is not
 # knowable across images, but "the driver set the prompt itself" always is.
-# The lookbehind keeps the echoed `export PS1=…GNS3E2E#` line from matching.
+# The lookbehind keeps the echoed `export PS1=…GNS3E2E#` line from matching;
+# the tail tolerates the CSI sequences the line editor prints after the
+# prompt (busybox ash asks the cursor position with every prompt — the
+# driver answers separately, but the query itself stays in the stream).
 SHELL_PROMPT = "GNS3E2E#"
-SHELL_PROMPT_RE = re.compile(r"(?<!=)GNS3E2E#\s*$")
+SHELL_PROMPT_RE = re.compile(r"(?<!=)GNS3E2E#(?:\s|\x1b\[[0-9;?]*[a-zA-Z])*$")
 
 # The FRR appliance's documented console credentials (its usage notes ship
 # with the image: root/root).
@@ -813,10 +816,11 @@ GUEST_USER = "root"
 GUEST_PASSWORD = "root"
 
 # The guest's line editor (busybox ash) queries the cursor position with
-# every prompt (ESC [6n) and processes no further input until the terminal
-# answers (ESC [<row>;<col>R) — a driver that never answers never sees a
-# quiet prompt, exactly the lesson the SR Linux console taught. The answer
-# claims column 1: the editor only wants to know where its line starts.
+# every prompt (ESC [6n) — non-blocking, but the query bytes land in the
+# console stream right after the prompt (the sentinel regex tolerates the
+# residue) and the terminal contract says answer (ESC [<row>;<col>R), the
+# lesson the SR Linux console taught. The answer claims column 1: the
+# editor only wants to know where its line starts.
 CPR_QUERY = "\x1b[6n"
 CPR_REPLY = b"\x1b[1;1R"
 
