@@ -1,0 +1,23 @@
+# The two-router dumbbell of the QEMU kernel-datapath scenarios: two FRR
+# appliance routers (a real Linux behind the local qemu binary) crossed by
+# one link, dual-stack.
+#
+# This is a lab spec in the e2e's containerlab-shaped dialect — NOT a file
+# containerlab can deploy (see tests/e2e/lab.py and tests/e2e/README.md):
+# the kind vocabulary is the e2e's node families, and the addresses are
+# metadata the materializer applies through the family's config channel.
+#
+# Addresses live on the link's endpoints, the clab way: one side of a link
+# owns its address, and the materializer derives both the guest baseline
+# config and the scenarios' ping targets from these two lines.
+name: qemu-dumbbell
+topology:
+  defaults:
+    kind: frr-qemu
+  nodes:
+    r1: {}
+    r2: {}
+  links:
+    - endpoints:
+        - {node: r1, interface: eth0, ipv4: 10.1.1.1/24, ipv6: "fd00:1:1::1/64"}
+        - {node: r2, interface: eth0, ipv4: 10.1.1.2/24, ipv6: "fd00:1:1::2/64"}

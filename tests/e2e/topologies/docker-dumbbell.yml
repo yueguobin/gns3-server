@@ -1,0 +1,17 @@
+# The two-container dumbbell of the Docker kernel-datapath scenarios: two
+# gns3/ubuntu containers crossed by one link, dual-stack. Same dialect as
+# qemu-dumbbell.yml (see that file's header and tests/e2e/lab.py) — only
+# the kind differs: the ubuntu-docker family is driven through the Docker
+# daemon socket, its v4 addresses ride the node's persistent interfaces
+# file and its v6 globals are brought up by hand after every start.
+name: docker-dumbbell
+topology:
+  defaults:
+    kind: ubuntu-docker
+  nodes:
+    c1: {}
+    c2: {}
+  links:
+    - endpoints:
+        - {node: c1, interface: eth0, ipv4: 10.1.1.1/24, ipv6: "fd00:1:1::1/64"}
+        - {node: c2, interface: eth0, ipv4: 10.1.1.2/24, ipv6: "fd00:1:1::2/64"}

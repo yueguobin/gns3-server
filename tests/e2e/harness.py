@@ -321,6 +321,8 @@ host = 127.0.0.1
 port = {port}
 console_start_port_range = {console_start}
 console_end_port_range = {console_end}
+udp_start_port_range = {udp_start}
+udp_end_port_range = {udp_end}
 ubridge_path = {ubridge}
 enable_kernel_datapath = {kernel}
 report_errors = False
@@ -425,6 +427,14 @@ def _spawn_isolated(tmpdir, kernel):
     # a random even offset keeps instances out of each other's way.
     console_start = random.randrange(20000, 44000, 200)  # noqa: S311 — spreading port windows, not a secret
     console_end = console_start + 199
+    # The same lottery for the relay links' UDP ports: allocation scans the
+    # default range from its start and hands the port to uBridge only after
+    # the probe socket closed, so parallel instances probing the same
+    # default range can hand the same number to two uBridges. A separate
+    # band (TCP consoles and UDP tunnels cannot collide anyway) with the
+    # same window scheme.
+    udp_start = random.randrange(45000, 64000, 200)  # noqa: S311 — spreading port windows, not a secret
+    udp_end = udp_start + 199
     # GNS3_E2E_VPCS points at a vpcs build with -n (tap mode without host
     # auto-configuration) — what the kernel-datapath scenario needs. The
     # local fork build (where this feature is developed) is the default when
@@ -438,6 +448,8 @@ def _spawn_isolated(tmpdir, kernel):
         port=port,
         console_start=console_start,
         console_end=console_end,
+        udp_start=udp_start,
+        udp_end=udp_end,
         ubridge=ubridge,
         dynamips=dynamips,
         images=images,
@@ -1064,6 +1076,13 @@ def shell_console(server, project_id, node_id):
 GUEST_BASELINE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "guest-baseline.sh")
 
 
+def _cidr(address, default_prefix):
+    """*address* with an explicit prefix length — a bare address gets
+    *default_prefix* (the /24 and /64 the dumbbell scenarios always used)."""
+
+    return address if "/" in address else f"{address}/{default_prefix}"
+
+
 def configure_linux(console, eth_ip=None, eth_ipv6=None, eth_if="eth0"):
     """Baseline config on a freshly booted Linux guest: stage the shared
     guest-baseline script (``tests/e2e/configs/``) through the console and
@@ -1071,12 +1090,15 @@ def configure_linux(console, eth_ip=None, eth_ipv6=None, eth_if="eth0"):
     reviewed, idempotent artifact instead of ad-hoc commands, so a re-run
     after a node restart is safe. The guest stays a pure host — no routing
     daemon runs, so no RAs or hellos go out and the link stays quiet
-    (directly connected pings need no forwarding)."""
+    (directly connected pings need no forwarding).
+
+    Addresses may carry their prefix length (``10.1.1.1/24``); a bare one
+    keeps the historic /24 (v4) and /64 (v6) defaults."""
 
     with open(GUEST_BASELINE_SCRIPT) as f:
         script = f.read().rstrip("\n")
-    v4 = f"{eth_ip}/24" if eth_ip else ""
-    v6 = f"{eth_ipv6}/64" if eth_ipv6 else ""
+    v4 = _cidr(eth_ip, 24) if eth_ip else ""
+    v6 = _cidr(eth_ipv6, 64) if eth_ipv6 else ""
     console.run_script(f"sh -s -- {eth_if} {v4} {v6} <<'GNS3E2E'\n{script}\nGNS3E2E")
 
 

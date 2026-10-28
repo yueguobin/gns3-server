@@ -8,9 +8,15 @@
 Live end-to-end test for the QEMU node's kernel datapath (pytest marker
 ``e2e``): two real FRR routers (the gns3-registry FRR appliance's qcow2 run
 by the local qemu binary, a real Linux behind the server's telnet console),
-driven through the controller REST API. QEMU is the node type whose guest
-leg *is* the anchor: uBridge creates one persistent TAP per adapter before
-launch and hands it to this user, and QEMU opens it by ifname as its netdev
+driven through the controller REST API. The topology is the shared dumbbell
+spec (``topologies/qemu-dumbbell.yml``) materialized by ``tests/e2e/lab.py``
+— the frr-qemu kind owns the image pin, the boot criterion and the address
+baseline, so this file is only the scenario: the API steps under test and
+their assertions.
+
+QEMU is the node type whose guest leg *is* the anchor: uBridge creates one
+persistent TAP per adapter before launching and hands it to this user, and
+QEMU opens it by ifname as its netdev
 (``-netdev tap,ifname=...,script=no,downscript=no,vnet_hdr=off``) — no userspace hop, no
 port bridge, the anchor is the NIC's host side.
 
@@ -44,43 +50,17 @@ Every checkpoint runs dual-stack: the FRR guests carry a ULA v6 address
 next to their v4 one and each checkpoint pings both families.
 """
 
-import re
 import time
 
 import pytest
 
-from tests.e2e import harness
+from tests.e2e import harness, lab
 
 pytestmark = pytest.mark.e2e
 
 # One NIC per adapter, port number always 0: adapter 0 is eth0.
 ETH = (0, 0)
-# A full Linux boot from an emulated disk (the boot wait is event-driven;
-# this is only the failure cap).
-BOOT_TIMEOUT = 300
 GUEST_ETH_IF = "eth0"
-
-# The pinned FRR appliance guest's boot transcript is fixed — the console
-# auto-logins straight into vtysh, whose banner is the boot-success marker
-# (and an identity tripwire: a wrong image in the cache fails in seconds,
-# not a BOOT_TIMEOUT). An image override skips the pin.
-FRR_BANNER_RE = re.compile(r"Hello, this is FRRouting")
-
-# the dual-stack half: a ULA mirroring 10.1.1.x
-R1_IP6 = "fd00:1:1::1"
-R2_IP6 = "fd00:1:1::2"
-
-
-def _boot(server, project_id, node_id, timeout=BOOT_TIMEOUT, banner=None):
-    console = harness.shell_console(server, project_id, node_id)
-    console.boot_wait(timeout=timeout, banner=banner)
-    return console
-
-
-def _boot_banner(image):
-    """The pinned-boot criterion for *image* — pinned marker for the pinned
-    image, none for an override."""
-    return FRR_BANNER_RE if image == harness.QEMU_IMAGE else None
 
 
 def _eth_shutdown(console, shut):
@@ -92,44 +72,32 @@ def _eth_shutdown(console, shut):
 
 def test_qemu_kernel_datapath():
     server = harness.live_server(kernel=True)
-    compute = server.compute
-    caps = compute.capabilities()
-    if caps.get("ubridge_tap") is not True:
-        pytest.skip(
-            f"this compute's uBridge cannot create the QEMU adapter TAPs (ubridge_tap={caps.get('ubridge_tap')})"
-        )
-    image = harness.ensure_qemu_image(server)
 
-    project = compute.create_project("qemu-e2e")
-    pid = project["project_id"]
+    # the lab spec creates the nodes and the link while both are stopped:
+    # the kernel NIO is bound with no anchors in existence yet and wired by
+    # node start (the deferred-wiring path)
+    labi = lab.deploy("qemu-dumbbell", server, project_name="qemu-e2e")
+    compute = server.compute
+    pid = labi.project_id
     a1 = a2 = None
     try:
-        n1 = compute.create_qemu_node(pid, "E2E-R1", image, ram=256, hda_disk_interface="ide")
-        n2 = compute.create_qemu_node(pid, "E2E-R2", image, ram=256, hda_disk_interface="ide")
-        n1_id, n2_id = n1["node_id"], n2["node_id"]
+        n1_id, n2_id = labi["r1"].node_id, labi["r2"].node_id
         a1 = harness.qemu_anchor_name(n1_id, *ETH)
         a2 = harness.qemu_anchor_name(n2_id, *ETH)
+        r1_v6 = labi["r1"].address(family=6)
+        r2_v4 = labi["r2"].address()
+        r2_v6 = labi["r2"].address(family=6)
 
-        # The link is created while both nodes are stopped: the kernel NIO
-        # is bound with no anchors in existence yet and wired by node start
-        # (the deferred-wiring path).
-        link = compute.create_link(pid, (n1_id, *ETH), (n2_id, *ETH))
+        link = labi.link("r1", "r2")
         lid = link["link_id"]
         bridge = harness.link_bridge_name(lid)
         assert link["kernel_datapath"] is True, link
         assert not harness.tap_exists(a1), "anchors must not exist before start"
 
-        print(f".. starting FRR routers on {image} (a real Linux boot)")
-        compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
-        compute.call("POST", f"/projects/{pid}/nodes/{n2_id}/start")
-        c1 = _boot(server, pid, n1_id, banner=_boot_banner(image))
-        c2 = _boot(server, pid, n2_id, banner=_boot_banner(image))
-
-        # NetworkManager can release an NM-managed TAP from its bridge after
-        # (re-)enslavement (docs/bugs/networkmanager-tap-release.md); take the
-        # anchors out of its reach for the rest of the run (the restart below
-        # re-attaches them under fresh devices).
-        harness.unmanage_from_networkmanager(a1, a2, harness.qemu_anchor_name(n1_id, 1))
+        print(f".. starting FRR routers on {labi['r1'].image} (a real Linux boot)")
+        labi.start()
+        labi.boot()
+        c1, c2 = labi["r1"].channel, labi["r2"].channel
 
         # Kernel objects: one persistent TAP per adapter (both adapters of
         # router 1, the addressed one of router 2), and the per-link bridge
@@ -152,15 +120,15 @@ def test_qemu_kernel_datapath():
         harness.assert_forwarding(a1)
         harness.assert_forwarding(a2)
 
-        harness.configure_linux(c1, eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
-        harness.configure_linux(c2, eth_ip="10.1.1.2", eth_if=GUEST_ETH_IF, eth_ipv6=R2_IP6)
+        # addresses from the spec, baseline reachability from the library
+        labi.configure()
         out = c1.run(f"ip -o addr show dev {GUEST_ETH_IF}")
         assert "10.1.1.1/24" in out, out
-        assert f"{R1_IP6}/64" in out, out
+        assert f"{r1_v6}/64" in out, out
         print(".. both routers configured, pinging through the anchor TAPs")
-        baseline = harness.wait_linux_ping(c1, "10.1.1.2")
+        baseline = labi["r1"].wait_ping(r2_v4)
         assert baseline["success"] == 100, baseline["raw"]
-        baseline6 = harness.wait_linux_ping(c1, R2_IP6)
+        baseline6 = labi["r1"].wait_ping(r2_v6)
         assert baseline6["success"] == 100, baseline6["raw"]
 
         # L2-anchor spec §E.2: with the guests shut the anchors (QEMU's own
@@ -175,10 +143,10 @@ def test_qemu_kernel_datapath():
             # addresses (keep_addr_on_down defaults to 0) while IPv4 keeps
             # them — re-apply the idempotent baseline before the v6
             # checkpoint, the same way the node-restart path below does
-            harness.configure_linux(c1, eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
-            harness.configure_linux(c2, eth_ip="10.1.1.2", eth_if=GUEST_ETH_IF, eth_ipv6=R2_IP6)
-            assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-            assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
+            labi["r1"].reconfigure()
+            labi["r2"].reconfigure()
+            assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
         else:
             print(".. uBridge without link l2only: skipping the §E.2 assertion")
 
@@ -189,36 +157,36 @@ def test_qemu_kernel_datapath():
             harness.qdiscs(a1),
             harness.qdiscs(a2),
         )
-        delayed = harness.wait_linux_ping(c1, "10.1.1.2")
+        delayed = labi["r1"].wait_ping(r2_v4)
         assert delayed["success"] == 100, delayed["raw"]
         assert delayed["avg"] >= 150, (baseline, delayed)
-        delayed6 = harness.wait_linux_ping(c1, R2_IP6)
+        delayed6 = labi["r1"].wait_ping(r2_v6)
         assert delayed6["success"] == 100, delayed6["raw"]
         assert delayed6["avg"] >= 150, (baseline6, delayed6)
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
         assert "netem" not in harness.qdiscs(a1), harness.qdiscs(a1)
-        fast = harness.wait_linux_ping(c1, "10.1.1.2")
+        fast = labi["r1"].wait_ping(r2_v4)
         assert fast["success"] == 100 and fast["avg"] < harness.FAST_RTT_MS, fast
-        fast6 = harness.wait_linux_ping(c1, R2_IP6)
+        fast6 = labi["r1"].wait_ping(r2_v6)
         assert fast6["success"] == 100 and fast6["avg"] < harness.FAST_RTT_MS, fast6
 
         # suspend: anchor admin-down — the e1000 loses carrier, the bridge
         # port is disabled and nothing crosses; resume restores
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"suspend": True})
         assert not harness.tap_up(a1)
-        dead = harness.linux_ping(c1, "10.1.1.2", repeat=3)
+        dead = labi["r1"].ping(r2_v4, repeat=3)
         assert dead["success"] == 0, dead["raw"]
-        dead6 = harness.linux_ping(c1, R2_IP6, repeat=3)
+        dead6 = labi["r1"].ping(r2_v6, repeat=3)
         assert dead6["success"] == 0, dead6["raw"]
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"suspend": False})
         assert harness.tap_up(a1)
-        assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
 
         # capture: on the anchor, a real pcap — both families inside the window
         capture = compute.call("POST", f"/projects/{pid}/links/{lid}/capture/start", {"data_link_type": "DLT_EN10MB"})
-        harness.linux_ping(c1, "10.1.1.2")
-        harness.linux_ping(c1, R2_IP6)
+        labi["r1"].ping(r2_v4)
+        labi["r1"].ping(r2_v6)
         time.sleep(1)
         compute.call("POST", f"/projects/{pid}/links/{lid}/capture/stop")
         path = capture["capture_file_path"]
@@ -237,8 +205,8 @@ def test_qemu_kernel_datapath():
         lid = link["link_id"]
         bridge = harness.link_bridge_name(lid)
         assert link["kernel_datapath"] is True, link
-        assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
 
         # node stop: QEMU exits and uBridge deletes every anchor of the
         # node together with the orphan bridges (a stopped node must not
@@ -255,16 +223,14 @@ def test_qemu_kernel_datapath():
         # (both endpoints delete it, last one wins)
         assert harness.bridge_members(bridge) in (None, [a2]), harness.bridge_members(bridge)
         compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
-        c1.close()
-        c1 = _boot(server, pid, n1_id, banner=_boot_banner(image))
+        c1 = labi["r1"].boot_wait()
         assert harness.tap_exists(a1)
         assert harness.bridge_members(bridge) == sorted([a1, a2]), harness.bridge_members(bridge)
-        harness.configure_linux(c1, eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
-        assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        labi["r1"].reconfigure()
+        assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
 
-        c1.close()
-        c2.close()
+        labi.close_channels()
     except BaseException:
         harness.release(server, pid, failed=True)
         raise
@@ -291,31 +257,22 @@ def test_qemu_relay_control():
     """
 
     server = harness.live_server(kernel=False)
-    compute = server.compute
-    caps = compute.capabilities()
-    if caps.get("ubridge_tap") is not True:
-        pytest.skip(
-            f"this compute's uBridge cannot create the QEMU adapter TAPs (ubridge_tap={caps.get('ubridge_tap')})"
-        )
-    image = harness.ensure_qemu_image(server)
 
-    project = compute.create_project("qemu-relay-e2e")
-    pid = project["project_id"]
+    labi = lab.deploy("qemu-dumbbell", server, project_name="qemu-relay-e2e")
+    pid = labi.project_id
     a1 = None
     try:
-        n1 = compute.create_qemu_node(pid, "E2E-R1", image, ram=256, hda_disk_interface="ide")
-        n2 = compute.create_qemu_node(pid, "E2E-R2", image, ram=256, hda_disk_interface="ide")
-        n1_id, n2_id = n1["node_id"], n2["node_id"]
+        n1_id = labi["r1"].node_id
         a1 = harness.qemu_anchor_name(n1_id, *ETH)
+        r2_v4 = labi["r2"].address()
+        r2_v6 = labi["r2"].address(family=6)
 
-        link = compute.create_link(pid, (n1_id, *ETH), (n2_id, *ETH))
+        link = labi.link("r1", "r2")
         assert link["kernel_datapath"] is False, link
 
         print(".. starting FRR routers and waiting for the Linux boots (relay)")
-        compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
-        compute.call("POST", f"/projects/{pid}/nodes/{n2_id}/start")
-        c1 = _boot(server, pid, n1_id, banner=_boot_banner(image))
-        c2 = _boot(server, pid, n2_id, banner=_boot_banner(image))
+        labi.start()
+        labi.boot()
 
         # no kernel wiring: nobody enslaved the anchors, the per-link
         # bridge does not exist — but the anchor is up and carrying as the
@@ -327,15 +284,13 @@ def test_qemu_relay_control():
             # the L2 hardening is a creation-time property, not a datapath
             # one: relay anchors are pure L2 too
             harness.assert_pure_l2(a1)
-        harness.configure_linux(c1, eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
-        harness.configure_linux(c2, eth_ip="10.1.1.2", eth_if=GUEST_ETH_IF, eth_ipv6=R2_IP6)
-        relay_ping = harness.wait_linux_ping(c1, "10.1.1.2")
+        labi.configure()
+        relay_ping = labi["r1"].wait_ping(r2_v4)
         assert relay_ping["success"] == 100, relay_ping["raw"]
-        relay_ping6 = harness.wait_linux_ping(c1, R2_IP6)
+        relay_ping6 = labi["r1"].wait_ping(r2_v6)
         assert relay_ping6["success"] == 100, relay_ping6["raw"]
 
-        c1.close()
-        c2.close()
+        labi.close_channels()
     except BaseException:
         harness.release(server, pid, failed=True)
         raise
