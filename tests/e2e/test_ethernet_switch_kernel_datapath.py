@@ -1,24 +1,19 @@
 #
 # Copyright (C) 2026 GNS3 Technologies Inc.
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+# This program is free software and is redistributed under the same terms as gns3-server.
+# See the LICENSE file for licensing information.
 #
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
 Live end-to-end test for the Ethernet switch kernel fast path (pytest
 marker ``e2e``): a real switch (a Linux kernel bridge) between two real
 c7200 routers, driven through the controller REST API and the IOS consoles.
-Real ICMP crossing the switch proves the datapath:
+The topology is the shared dumbbell spec (``topologies/esw-dumbbell.yml``)
+materialized by ``tests/e2e/lab.py`` — the ethernet-switch kind owns the
+switch node, the ios-dynamips kind the routers (image pin, idle-PC, boot
+criterion, address baseline), so this file is only the scenario. Real ICMP
+crossing the switch proves the datapath:
 
 * links created while the routers are stopped report ``kernel_datapath``
   and defer the join; once the routers boot, the controller's re-push
@@ -53,49 +48,17 @@ import time
 
 import pytest
 
-from tests.e2e import harness
+from tests.e2e import harness, lab
 
 pytestmark = pytest.mark.e2e
 
-# c7200 slot 0 is the fixed IO slot; the Ethernet PA goes in slot 1.
-SLOTS = {"slot1": "PA-2FE-TX"}
+# f1/0 of the spec's links — (slot 1, port 0) of the Ethernet PA.
 ETH = (1, 0)
-
-# the dual-stack half: a ULA mirroring 10.1.1.x
-R1_IP6 = "fd00:1:1::1"
-R2_IP6 = "fd00:1:1::2"
 
 
 def _switch_bridge_name(switch_id):
     # see EthernetSwitch._ensure_bridge
     return "gns3" + switch_id.replace("-", "")[:6]
-
-
-def _create_topology(compute, pid, image, name, idlepc=None):
-    switch = compute.call(
-        "POST",
-        f"/projects/{pid}/nodes",
-        {
-            "compute_id": "local",
-            "name": f"{name}-SW",
-            "node_type": "ethernet_switch",
-            "properties": {
-                "ports_mapping": [
-                    {"name": "Ethernet0", "port_number": 0, "type": "access", "vlan": 1},
-                    {"name": "Ethernet1", "port_number": 1, "type": "access", "vlan": 1},
-                ]
-            },
-        },
-    )
-    r1 = compute.create_dynamips_router(pid, f"{name}-R1", image, SLOTS, idlepc=idlepc)
-    r2 = compute.create_dynamips_router(pid, f"{name}-R2", image, SLOTS, idlepc=idlepc)
-    return switch, r1, r2
-
-
-def _boot(server, project_id, node_id, timeout=360):
-    console = harness.ios_console(server, project_id, node_id)
-    console.boot_wait(timeout=timeout)
-    return console
 
 
 def _eth_shutdown(console, shut):
@@ -111,49 +74,41 @@ def _eth_shutdown(console, shut):
 def test_ethernet_switch_kernel_fast_path():
     server = harness.live_server(kernel=True)
     compute = server.compute
-    if compute.capabilities().get("ubridge_tap") is not True:
-        pytest.skip("this compute's uBridge cannot create persistent TAPs (ubridge_tap != True)")
-    image = harness.ensure_dynamips_image(server)
-    idlepc = harness.dynamips_idlepc(server, image)
 
-    project = compute.create_project("esw-e2e")
-    pid = project["project_id"]
+    labi = lab.deploy("esw-dumbbell", server, project_name="esw-e2e")
+    pid = labi.project_id
     sw_bridge = None
     try:
-        switch, r1, r2 = _create_topology(compute, pid, image, "E2E", idlepc)
-        switch_id = switch["node_id"]
-        r1_id, r2_id = r1["node_id"], r2["node_id"]
+        switch_id = labi["sw"].node_id
+        r1_id, r2_id = labi["r1"].node_id, labi["r2"].node_id
         sw_bridge = _switch_bridge_name(switch_id)
         a1 = harness.anchor_name(r1_id, *ETH)
         a2 = harness.anchor_name(r2_id, *ETH)
+        r2_v4 = labi["r2"].address()
+        r2_v6 = labi["r2"].address(family=6)
 
+        # The spec wired link1 peer-first and link2 switch-first, in that
+        # order: the endpoint order decides which side's NIO update runs
+        # last at link creation, and only the switch-first order used to
+        # expose the passive end's tc-reset wipe (its empty-filter
+        # reconcile ran after the switch's apply). Both orders must work.
+        link1 = labi.link("r1", "sw")
+        link2 = labi.link("sw", "r2")
+        assert link1["kernel_datapath"] is True, link1
+        assert link2["kernel_datapath"] is True, link2
         # The switch bridge exists from the moment the switch node does; a
         # link against a stopped router must not fail — the join defers.
         assert harness.bridge_members(sw_bridge) == []
-        # link1 is created peer-first, link2 switch-first: the endpoint order
-        # decides which side's NIO update runs last, and only the switch-first
-        # order used to expose the passive end's tc-reset wipe (its empty-filter
-        # reconcile ran after the switch's apply). Both orders must work.
-        link1 = compute.create_link(pid, (r1_id, *ETH), (switch_id, 0, 0))
-        link2 = compute.create_link(pid, (switch_id, 0, 1), (r2_id, *ETH))
-        assert link1["kernel_datapath"] is True, link1
-        assert link2["kernel_datapath"] is True, link2
-        assert harness.bridge_members(sw_bridge) == []
 
+        # the switch is always-on (nothing to start); the routers' start is
+        # what re-pushes the deferred joins. labi.boot() covers the switch
+        # too — its kind has no guest, so its boot is a no-op — and runs
+        # the routers' post-boot host-side quirks.
         print(".. starting routers and waiting for IOS boots")
-        compute.call("POST", f"/projects/{pid}/nodes/{r1_id}/start")
-        compute.call("POST", f"/projects/{pid}/nodes/{r2_id}/start")
-        c1 = _boot(server, pid, r1_id)
-        c2 = _boot(server, pid, r2_id)
-
-        # Keep NetworkManager's hands off the anchors: on NM hosts its
-        # netdev state machine can release a freshly re-enslaved tap from
-        # the bridge ~60 ms after the join (silently — the port stays up,
-        # the server keeps believing it is attached), which the link
-        # delete/recreate below triggers nondeterministically. The first
-        # join at node start is unaffected; this covers everything after
-        # it.
-        harness.unmanage_from_networkmanager(a1, a2)
+        labi["r1"].start()
+        labi["r2"].start()
+        labi.boot()
+        c1, c2 = labi["r1"].channel, labi["r2"].channel
 
         # Deferred joins completed by the node-start re-push: the anchors
         # ARE the switch ports now.
@@ -161,12 +116,11 @@ def test_ethernet_switch_kernel_fast_path():
             harness.bridge_members(sw_bridge)
         )
 
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_ipv6=R1_IP6)
-        harness.configure_ios(c2, "R2", eth_ip="10.1.1.2", eth_ipv6=R2_IP6)
+        labi.configure()
         print(".. both routers configured, pinging through the switch")
-        baseline = harness.wait_ping(c1, "10.1.1.2")
+        baseline = labi["r1"].wait_ping(r2_v4)
         assert baseline["success"] == 100, baseline["raw"]
-        baseline6 = harness.wait_ping(c1, R2_IP6)
+        baseline6 = labi["r1"].wait_ping(r2_v6)
         assert baseline6["success"] == 100, baseline6["raw"]
 
         # L2-anchor spec §E.2: with both routers shut, the absorbed anchors
@@ -178,8 +132,8 @@ def test_ethernet_switch_kernel_fast_path():
             harness.assert_idle_silence(a1, a2, sw_bridge)
             for console in (c1, c2):
                 _eth_shutdown(console, shut=False)
-            assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-            assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
         else:
             print(".. uBridge without link l2only: skipping the §E.2 assertion")
 
@@ -210,9 +164,9 @@ def test_ethernet_switch_kernel_fast_path():
             },
         )
         assert harness.bridge_members(sw_bridge) == sorted([a1, a2]), harness.bridge_members(sw_bridge)
-        isolated = harness.ping(c1, "10.1.1.2", repeat=3)
+        isolated = labi["r1"].ping(r2_v4, repeat=3)
         assert isolated["success"] == 0, isolated["raw"]
-        isolated6 = harness.ping(c1, R2_IP6, repeat=3)
+        isolated6 = labi["r1"].ping(r2_v6, repeat=3)
         assert isolated6["success"] == 0, isolated6["raw"]
         assert harness.bridge_members(sw_bridge) == sorted([a1, a2]), harness.bridge_members(sw_bridge)
         compute.call(
@@ -227,9 +181,9 @@ def test_ethernet_switch_kernel_fast_path():
                 }
             },
         )
-        rejoined = harness.wait_ping(c1, "10.1.1.2")
+        rejoined = labi["r1"].wait_ping(r2_v4)
         assert rejoined["success"] == 100, rejoined["raw"]
-        rejoined6 = harness.wait_ping(c1, R2_IP6)
+        rejoined6 = labi["r1"].wait_ping(r2_v6)
         assert rejoined6["success"] == 100, rejoined6["raw"]
 
         # Single-owned impairment: the filter lands on the absorbed anchor
@@ -237,7 +191,7 @@ def test_ethernet_switch_kernel_fast_path():
         compute.call("PUT", f"/projects/{pid}/links/{link1['link_id']}", {"filters": {"delay": [100]}})
         assert "netem" in harness.qdiscs(a1), harness.qdiscs(a1)
         assert "netem" not in harness.qdiscs(a2), harness.qdiscs(a2)
-        delayed = harness.wait_ping(c1, "10.1.1.2")
+        delayed = labi["r1"].wait_ping(r2_v4)
         assert delayed["success"] == 100, delayed["raw"]
         assert 60 <= delayed["avg"] <= 250, (baseline, delayed)
         # the v6 twin reads the capture's own timestamps: the guest's
@@ -247,7 +201,7 @@ def test_ethernet_switch_kernel_fast_path():
         capture = compute.call(
             "POST", f"/projects/{pid}/links/{link1['link_id']}/capture/start", {"data_link_type": "DLT_EN10MB"}
         )
-        harness.ping(c1, R2_IP6)
+        labi["r1"].ping(r2_v6)
         time.sleep(1)
         compute.call("POST", f"/projects/{pid}/links/{link1['link_id']}/capture/stop")
         wire6 = harness.pcap_icmp_rtt(capture["capture_file_path"], "86dd")
@@ -255,9 +209,9 @@ def test_ethernet_switch_kernel_fast_path():
         assert wire6 is not None and wire6 >= 60, wire6
         compute.call("PUT", f"/projects/{pid}/links/{link1['link_id']}", {"filters": {}})
         assert "netem" not in harness.qdiscs(a1)
-        fast = harness.wait_ping(c1, "10.1.1.2")
+        fast = labi["r1"].wait_ping(r2_v4)
         assert fast["success"] == 100 and fast["avg"] < harness.FAST_RTT_MS, fast
-        fast6 = harness.wait_ping(c1, R2_IP6)
+        fast6 = labi["r1"].wait_ping(r2_v6)
         assert fast6["success"] == 100 and fast6["avg"] < harness.FAST_RTT_MS, fast6
 
         # The same single-owned impairment on link2 — created switch-first,
@@ -268,7 +222,7 @@ def test_ethernet_switch_kernel_fast_path():
         compute.call("PUT", f"/projects/{pid}/links/{link2['link_id']}", {"filters": {"delay": [100]}})
         assert "netem" in harness.qdiscs(a2), harness.qdiscs(a2)
         assert "netem" not in harness.qdiscs(a1), harness.qdiscs(a1)
-        delayed2 = harness.wait_ping(c1, "10.1.1.2")
+        delayed2 = labi["r1"].wait_ping(r2_v4)
         assert delayed2["success"] == 100, delayed2["raw"]
         assert 60 <= delayed2["avg"] <= 250, (baseline, delayed2)
         # the capture must sit on the pinging node's anchor (link1's, i.e.
@@ -280,7 +234,7 @@ def test_ethernet_switch_kernel_fast_path():
         capture = compute.call(
             "POST", f"/projects/{pid}/links/{link1['link_id']}/capture/start", {"data_link_type": "DLT_EN10MB"}
         )
-        harness.ping(c1, R2_IP6)
+        labi["r1"].ping(r2_v6)
         time.sleep(1)
         compute.call("POST", f"/projects/{pid}/links/{link1['link_id']}/capture/stop")
         wire2_6 = harness.pcap_icmp_rtt(capture["capture_file_path"], "86dd")
@@ -288,22 +242,22 @@ def test_ethernet_switch_kernel_fast_path():
         assert wire2_6 is not None and wire2_6 >= 60, wire2_6
         compute.call("PUT", f"/projects/{pid}/links/{link2['link_id']}", {"filters": {}})
         assert "netem" not in harness.qdiscs(a2)
-        fast2 = harness.wait_ping(c1, "10.1.1.2")
+        fast2 = labi["r1"].wait_ping(r2_v4)
         assert fast2["success"] == 100 and fast2["avg"] < harness.FAST_RTT_MS, fast2
-        fast2_6 = harness.wait_ping(c1, R2_IP6)
+        fast2_6 = labi["r1"].wait_ping(r2_v6)
         assert fast2_6["success"] == 100 and fast2_6["avg"] < harness.FAST_RTT_MS, fast2_6
 
         # suspend: the anchor admin-downs, the link is dead; resume restores
         compute.call("PUT", f"/projects/{pid}/links/{link1['link_id']}", {"suspend": True})
         assert not harness.tap_up(a1)
-        dead = harness.ping(c1, "10.1.1.2", repeat=3)
+        dead = labi["r1"].ping(r2_v4, repeat=3)
         assert dead["success"] == 0, dead["raw"]
-        dead6 = harness.ping(c1, R2_IP6, repeat=3)
+        dead6 = labi["r1"].ping(r2_v6, repeat=3)
         assert dead6["success"] == 0, dead6["raw"]
         compute.call("PUT", f"/projects/{pid}/links/{link1['link_id']}", {"suspend": False})
         assert harness.tap_up(a1)
-        assert harness.wait_ping(c1, "10.1.1.2")["success"] == 100
-        assert harness.wait_ping(c1, R2_IP6)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v4)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v6)["success"] == 100
 
         # capture (the controller hosts it on the switch — always-on local
         # builtin): a pcap of ICMP records written off the absorbed anchor,
@@ -311,8 +265,8 @@ def test_ethernet_switch_kernel_fast_path():
         capture = compute.call(
             "POST", f"/projects/{pid}/links/{link1['link_id']}/capture/start", {"data_link_type": "DLT_EN10MB"}
         )
-        harness.ping(c1, "10.1.1.2")
-        harness.ping(c1, R2_IP6)
+        labi["r1"].ping(r2_v4)
+        labi["r1"].ping(r2_v6)
         time.sleep(1)
         compute.call("POST", f"/projects/{pid}/links/{link1['link_id']}/capture/stop")
         count, ethertypes = harness.pcap_records(capture["capture_file_path"])
@@ -328,8 +282,8 @@ def test_ethernet_switch_kernel_fast_path():
         link2 = compute.create_link(pid, (r2_id, *ETH), (switch_id, 0, 1))
         assert link2["kernel_datapath"] is True, link2
         assert harness.wait_until(lambda: harness.bridge_members(sw_bridge) == sorted([a1, a2]), timeout=10)
-        assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
 
         # router stop/start keeps the wiring: a Dynamips stop only halts the
         # emulated router — the hypervisor, the anchor and its bridge
@@ -340,15 +294,13 @@ def test_ethernet_switch_kernel_fast_path():
         assert harness.tap_exists(a1)
         assert harness.bridge_members(sw_bridge) == sorted([a1, a2])
         compute.call("POST", f"/projects/{pid}/nodes/{r1_id}/start")
-        c1.close()
-        c1 = _boot(server, pid, r1_id)
+        c1 = labi["r1"].boot_wait()
         assert harness.wait_until(lambda: harness.bridge_members(sw_bridge) == sorted([a1, a2]), timeout=15)
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_ipv6=R1_IP6)
-        assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        labi["r1"].reconfigure()
+        assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
 
-        c1.close()
-        c2.close()
+        labi.close_channels()
     except BaseException:
         harness.release(server, pid, failed=True)
         raise
@@ -364,29 +316,27 @@ def test_ethernet_switch_relay_control():
     members are its own relay TAPs, never the routers' anchors — and still
     pings."""
     server = harness.live_server(kernel=False)
-    compute = server.compute
-    image = harness.ensure_dynamips_image(server)
-    idlepc = harness.dynamips_idlepc(server, image)
 
-    project = compute.create_project("esw-e2e-relay")
-    pid = project["project_id"]
+    labi = lab.deploy("esw-dumbbell", server, project_name="esw-e2e-relay", gate_caps=False)
+    pid = labi.project_id
     sw_bridge = None
     try:
-        switch, r1, r2 = _create_topology(compute, pid, image, "E2E", idlepc)
-        sw_bridge = _switch_bridge_name(switch["node_id"])
-        r1_id, r2_id = r1["node_id"], r2["node_id"]
+        switch_id = labi["sw"].node_id
+        r1_id, r2_id = labi["r1"].node_id, labi["r2"].node_id
+        sw_bridge = _switch_bridge_name(switch_id)
         a1 = harness.anchor_name(r1_id, *ETH)
+        r2_v4 = labi["r2"].address()
+        r2_v6 = labi["r2"].address(family=6)
 
-        link1 = compute.create_link(pid, (r1_id, *ETH), (switch["node_id"], 0, 0))
-        link2 = compute.create_link(pid, (r2_id, *ETH), (switch["node_id"], 0, 1))
+        link1 = labi.link("r1", "sw")
+        link2 = labi.link("sw", "r2")
         assert link1["kernel_datapath"] is False, link1
         assert link2["kernel_datapath"] is False, link2
 
         print(".. starting routers and waiting for IOS boots (relay)")
-        compute.call("POST", f"/projects/{pid}/nodes/{r1_id}/start")
-        compute.call("POST", f"/projects/{pid}/nodes/{r2_id}/start")
-        c1 = _boot(server, pid, r1_id)
-        c2 = _boot(server, pid, r2_id)
+        labi["r1"].start()
+        labi["r2"].start()
+        labi.boot()
 
         members = harness.bridge_members(sw_bridge)
         assert members == sorted([f"{sw_bridge}-0", f"{sw_bridge}-1"]), members
@@ -398,15 +348,13 @@ def test_ethernet_switch_relay_control():
                 harness.assert_pure_l2(member)
             harness.assert_pure_l2(sw_bridge)
 
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_ipv6=R1_IP6)
-        harness.configure_ios(c2, "R2", eth_ip="10.1.1.2", eth_ipv6=R2_IP6)
-        relay_ping = harness.wait_ping(c1, "10.1.1.2")
+        labi.configure()
+        relay_ping = labi["r1"].wait_ping(r2_v4)
         assert relay_ping["success"] == 100, relay_ping["raw"]
-        relay_ping6 = harness.wait_ping(c1, R2_IP6)
+        relay_ping6 = labi["r1"].wait_ping(r2_v6)
         assert relay_ping6["success"] == 100, relay_ping6["raw"]
 
-        c1.close()
-        c2.close()
+        labi.close_channels()
     except BaseException:
         harness.release(server, pid, failed=True)
         raise

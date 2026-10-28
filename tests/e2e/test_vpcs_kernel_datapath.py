@@ -1,5 +1,6 @@
 #
 # Copyright (C) 2026 GNS3 Technologies Inc.
+#
 # This program is free software and is redistributed under the same terms as gns3-server.
 # See the LICENSE file for licensing information.
 #
@@ -7,11 +8,15 @@
 """
 Live end-to-end test for the VPCS node's kernel datapath (pytest marker
 ``e2e``): two real VPCS nodes (the local vpcs binary, its own TCP console
-driven like a user would), linked through the controller REST API. VPCS is
-the node type whose guest leg attaches to a *pre-created* anchor: uBridge
-creates the persistent TAP and hands it to this user, and the vpcs process
-opens it by name (``-e -d``) while ``-n`` keeps its hands off the host side
-of the anchor — the same server-creates/guest-attaches shape as QEMU.
+driven like a user would), linked through the controller REST API. The
+topology is the shared dumbbell spec (``topologies/vpcs-dumbbell.yml``)
+materialized by ``tests/e2e/lab.py`` — the vpcs kind owns the boot
+criterion (the anchor born, the console answering) and the v4 address
+baseline, so this file is only the scenario. VPCS is the node type whose
+guest leg attaches to a *pre-created* anchor: uBridge creates the
+persistent TAP and hands it to this user, and the vpcs process opens it by
+name (``-e -d``) while ``-n`` keeps its hands off the host side of the
+anchor — the same server-creates/guest-attaches shape as QEMU.
 
 * two VPCS nodes on one compute report ``kernel_datapath`` when the
   compute's uBridge can create persistent TAPs (``ubridge_tap``) and the
@@ -44,65 +49,40 @@ import time
 
 import pytest
 
-from tests.e2e import harness
+from tests.e2e import harness, lab
 
 pytestmark = pytest.mark.e2e
 
-# VPCS has one adapter with one port; the kernel scenario addresses it.
+# eth0 of the spec's link — VPCS has one adapter with one port.
 ETH = (0, 0)
-
-PC1_IP = "10.1.1.1"
-PC2_IP = "10.1.1.2"
-
-
-def _configure(console, ip):
-    console.run("set pcname E2E-PC")
-    out = console.run(f"ip {ip}/24")
-    assert ip in out, out
 
 
 def test_vpcs_kernel_datapath():
     server = harness.live_server(kernel=True)
-    compute = server.compute
-    caps = compute.capabilities()
-    if caps.get("ubridge_tap") is not True:
-        pytest.skip(f"this compute's uBridge cannot create persistent TAPs (ubridge_tap={caps.get('ubridge_tap')})")
-    if caps.get("vpcs_tap") is not True:
-        pytest.skip(
-            f"this compute's vpcs binary cannot anchor a kernel link (vpcs_tap={caps.get('vpcs_tap')}); "
-            "point GNS3_E2E_VPCS (or the server's VPCS.vpcs_path) at a vpcs build with -n"
-        )
 
-    project = compute.create_project("vpcs-e2e")
-    pid = project["project_id"]
+    labi = lab.deploy("vpcs-dumbbell", server, project_name="vpcs-e2e")
+    compute = server.compute
+    pid = labi.project_id
     a1 = a2 = None
     try:
-        n1 = compute.create_vpcs_node(pid, "E2E-PC1")
-        n2 = compute.create_vpcs_node(pid, "E2E-PC2")
-        n1_id, n2_id = n1["node_id"], n2["node_id"]
+        n1_id, n2_id = labi["pc1"].node_id, labi["pc2"].node_id
         a1 = harness.vpcs_anchor_name(n1_id, *ETH)
         a2 = harness.vpcs_anchor_name(n2_id, *ETH)
+        pc1_ip = labi["pc1"].address()
+        pc2_ip = labi["pc2"].address()
 
-        # The link is created while both nodes are stopped: the kernel NIO
+        # The link was created while both nodes were stopped: the kernel NIO
         # is bound with no anchors in existence yet and wired by node start
         # (the deferred-wiring path, same as every anchor-backed node).
-        link = compute.create_link(pid, (n1_id, *ETH), (n2_id, *ETH))
+        link = labi.link("pc1", "pc2")
         lid = link["link_id"]
         bridge = harness.link_bridge_name(lid)
         assert link["kernel_datapath"] is True, link
         assert not harness.tap_exists(a1), "anchors must not exist before start"
 
-        compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
-        compute.call("POST", f"/projects/{pid}/nodes/{n2_id}/start")
-        assert harness.wait_until(lambda: harness.tap_exists(a1) and harness.tap_exists(a2), timeout=15), (a1, a2)
-        c1 = harness.vpcs_console(server, pid, n1_id)
-        c2 = harness.vpcs_console(server, pid, n2_id)
-
-        # NetworkManager can release an NM-managed TAP from its bridge after
-        # (re-)enslavement (docs/bugs/networkmanager-tap-release.md); take
-        # the anchors out of its reach for the rest of the run (the restart
-        # below re-attaches them under a fresh device).
-        harness.unmanage_from_networkmanager(a1, a2)
+        labi.start()
+        labi.boot()
+        c1, c2 = labi["pc1"].channel, labi["pc2"].channel
 
         # Kernel objects: one persistent TAP per node, and the per-link
         # bridge has exactly the two anchors as members.
@@ -120,11 +100,10 @@ def test_vpcs_kernel_datapath():
         harness.assert_forwarding(a1)
         harness.assert_forwarding(a2)
 
-        _configure(c1, PC1_IP)
-        _configure(c2, PC2_IP)
-        baseline = harness.wait_vpcs_ping(c1, PC2_IP)
+        labi.configure()
+        baseline = labi["pc1"].wait_ping(pc2_ip)
         assert baseline["success"] == 100, baseline["raw"]
-        reverse = harness.wait_vpcs_ping(c2, PC1_IP)
+        reverse = labi["pc2"].wait_ping(pc1_ip)
         assert reverse["success"] == 100, reverse["raw"]
 
         # L2-anchor spec §E.2: a VPCS speaks only when spoken to (no
@@ -142,27 +121,27 @@ def test_vpcs_kernel_datapath():
             harness.qdiscs(a1),
             harness.qdiscs(a2),
         )
-        delayed = harness.wait_vpcs_ping(c1, PC2_IP)
+        delayed = labi["pc1"].wait_ping(pc2_ip)
         assert delayed["success"] == 100, delayed["raw"]
         assert delayed["avg"] >= 150, (baseline, delayed)
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
         assert "netem" not in harness.qdiscs(a1), harness.qdiscs(a1)
-        fast = harness.wait_vpcs_ping(c1, PC2_IP)
+        fast = labi["pc1"].wait_ping(pc2_ip)
         assert fast["success"] == 100 and fast["avg"] < harness.FAST_RTT_MS, fast
 
         # suspend: anchor admin-down — the tun fd writes go nowhere and
         # nothing crosses; resume restores
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"suspend": True})
         assert not harness.tap_up(a1)
-        dead = harness.vpcs_ping(c1, PC2_IP, count=2, timeout=0.5)
+        dead = labi["pc1"].ping(pc2_ip, count=2, timeout=0.5)
         assert dead["success"] == 0, dead["raw"]
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"suspend": False})
         assert harness.tap_up(a1)
-        assert harness.wait_vpcs_ping(c1, PC2_IP, attempts=5)["success"] == 100
+        assert labi["pc1"].wait_ping(pc2_ip, attempts=5)["success"] == 100
 
         # capture: on the anchor, a real pcap
         capture = compute.call("POST", f"/projects/{pid}/links/{lid}/capture/start", {"data_link_type": "DLT_EN10MB"})
-        harness.vpcs_ping(c1, PC2_IP, count=3)
+        labi["pc1"].ping(pc2_ip, count=3)
         time.sleep(1)
         compute.call("POST", f"/projects/{pid}/links/{lid}/capture/stop")
         count, ethertypes = harness.pcap_records(capture["capture_file_path"])
@@ -179,7 +158,7 @@ def test_vpcs_kernel_datapath():
         lid = link["link_id"]
         bridge = harness.link_bridge_name(lid)
         assert link["kernel_datapath"] is True, link
-        assert harness.wait_vpcs_ping(c1, PC2_IP, attempts=5)["success"] == 100
+        assert labi["pc1"].wait_ping(pc2_ip, attempts=5)["success"] == 100
 
         # node stop: vpcs is terminated first and only then the anchor is
         # deleted (the process holds the TAP open — a held device refuses
@@ -192,13 +171,11 @@ def test_vpcs_kernel_datapath():
         compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
         assert harness.wait_until(lambda: harness.tap_exists(a1), timeout=15), a1
         assert harness.bridge_members(bridge) == sorted([a1, a2]), harness.bridge_members(bridge)
-        c1.close()
-        c1 = harness.vpcs_console(server, pid, n1_id)
-        _configure(c1, PC1_IP)
-        assert harness.wait_vpcs_ping(c1, PC2_IP, attempts=5)["success"] == 100
+        c1 = labi["pc1"].boot_wait()
+        labi["pc1"].reconfigure()
+        assert labi["pc1"].wait_ping(pc2_ip, attempts=5)["success"] == 100
 
-        c1.close()
-        c2.close()
+        labi.close_channels()
     except BaseException:
         harness.release(server, pid, failed=True)
         raise
@@ -220,40 +197,34 @@ def test_vpcs_relay_control():
     """
 
     server = harness.live_server(kernel=False)
+
+    labi = lab.deploy("vpcs-dumbbell", server, project_name="vpcs-relay-e2e", gate_caps=False)
     compute = server.compute
-
-    project = compute.create_project("vpcs-relay-e2e")
-    pid = project["project_id"]
+    pid = labi.project_id
     try:
-        n1 = compute.create_vpcs_node(pid, "E2E-PC1")
-        n2 = compute.create_vpcs_node(pid, "E2E-PC2")
-        n1_id, n2_id = n1["node_id"], n2["node_id"]
+        pc2_ip = labi["pc2"].address()
 
-        link = compute.create_link(pid, (n1_id, *ETH), (n2_id, *ETH))
+        link = labi.link("pc1", "pc2")
         lid = link["link_id"]
         assert link["kernel_datapath"] is False, link
 
-        compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
-        compute.call("POST", f"/projects/{pid}/nodes/{n2_id}/start")
-        c1 = harness.vpcs_console(server, pid, n1_id)
-        c2 = harness.vpcs_console(server, pid, n2_id)
-        _configure(c1, PC1_IP)
-        _configure(c2, PC2_IP)
+        labi.start()
+        labi.boot()
+        labi.configure()
 
         # no kernel wiring: the per-link bridge does not exist
         assert harness.bridge_members(harness.link_bridge_name(lid)) is None
-        relay_ping = harness.wait_vpcs_ping(c1, PC2_IP)
+        relay_ping = labi["pc1"].wait_ping(pc2_ip)
         assert relay_ping["success"] == 100, relay_ping["raw"]
 
         # the relay filters keep working: one uBridge bridge filters both
         # directions, delay 100 => RTT >= 150 ms
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {"delay": [100]}})
-        delayed = harness.wait_vpcs_ping(c1, PC2_IP)
+        delayed = labi["pc1"].wait_ping(pc2_ip)
         assert delayed["success"] == 100, delayed["raw"]
         assert delayed["avg"] >= 150, delayed
 
-        c1.close()
-        c2.close()
+        labi.close_channels()
     except BaseException:
         harness.release(server, pid, failed=True)
         raise

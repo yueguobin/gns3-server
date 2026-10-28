@@ -1,0 +1,31 @@
+# The Ethernet-switch dumbbell: two c7200 routers (the ios-dynamips kind)
+# absorbed by one builtin Ethernet switch (a Linux kernel bridge). Same
+# dialect as qemu-dumbbell.yml (see that file's header and tests/e2e/lab.py)
+# — but mixed kinds, so no defaults: each node names its own.
+#
+# The two links' endpoint orders differ ON PURPOSE: the order decides which
+# side's NIO update runs last at link creation, and only the switch-first
+# order used to expose the passive end's tc-reset wipe of the shared anchor
+# (see the scenario) — both orders must keep working, so both are wired.
+#
+# The switch's ports carry no addresses: they are pure bridge ports, and
+# the baseline reachability of this topology is cross-link (r1 to r2
+# through the switch), which the scenario asserts itself.
+name: esw-dumbbell
+topology:
+  nodes:
+    r1:
+      kind: ios-dynamips
+    r2:
+      kind: ios-dynamips
+    sw:
+      kind: ethernet-switch
+      gns3:
+        adapters: 2
+  links:
+    - endpoints:
+        - {node: r1, interface: f1/0, ipv4: 10.1.1.1/24, ipv6: "fd00:1:1::1/64"}
+        - {node: sw, interface: Ethernet0}
+    - endpoints:
+        - {node: sw, interface: Ethernet1}
+        - {node: r2, interface: f1/0, ipv4: 10.1.1.2/24, ipv6: "fd00:1:1::2/64"}

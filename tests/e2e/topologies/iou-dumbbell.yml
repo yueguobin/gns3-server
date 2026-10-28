@@ -1,0 +1,18 @@
+# The two-router dumbbell of the IOU kernel-datapath scenarios: two real
+# IOU L3 routers crossed by one Ethernet link, dual-stack. Same dialect as
+# qemu-dumbbell.yml (see that file's header and tests/e2e/lab.py).
+#
+# The interface names are the guest's own (Ethernet0/0 = bay 0, unit 0);
+# serial bays never anchor and stay out of specs for the same reason as the
+# dynamips family's serial PA.
+name: iou-dumbbell
+topology:
+  defaults:
+    kind: iou
+  nodes:
+    r1: {}
+    r2: {}
+  links:
+    - endpoints:
+        - {node: r1, interface: Ethernet0/0, ipv4: 10.1.1.1/24, ipv6: "fd00:1:1::1/64"}
+        - {node: r2, interface: Ethernet0/0, ipv4: 10.1.1.2/24, ipv6: "fd00:1:1::2/64"}

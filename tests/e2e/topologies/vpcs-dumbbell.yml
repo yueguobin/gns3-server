@@ -1,0 +1,17 @@
+# The two-node dumbbell of the VPCS kernel-datapath scenarios: two vpcs
+# processes crossed by one link. Same dialect as qemu-dumbbell.yml (see
+# that file's header and tests/e2e/lab.py).
+#
+# IPv4 only: the family's v6 command shape is untested, so the kind refuses
+# a v6 address rather than silently misconfiguring the guest.
+name: vpcs-dumbbell
+topology:
+  defaults:
+    kind: vpcs
+  nodes:
+    pc1: {}
+    pc2: {}
+  links:
+    - endpoints:
+        - {node: pc1, interface: eth0, ipv4: 10.1.1.1/24}
+        - {node: pc2, interface: eth0, ipv4: 10.1.1.2/24}

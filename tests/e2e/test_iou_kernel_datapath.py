@@ -9,10 +9,13 @@
 Live end-to-end test for the IOU node's kernel datapath (pytest marker
 ``e2e``): two real IOU routers (a real IOU image executed by the local
 compute, the real IOS CLI behind the server's telnet console), driven
-through the controller REST API. IOU has no host interface of its own: the
-guest leg is the IOL fabric unix socket, and the kernel datapath buys the
-*link segment* — one persistent anchor TAP per Ethernet bay/unit, a per-link
-Linux bridge, kernel filters, suspend and capture.
+through the controller REST API. The topology is the shared dumbbell spec
+(``topologies/iou-dumbbell.yml``) materialized by ``tests/e2e/lab.py`` —
+the iou kind owns the image pin, the boot criterion and the address
+baseline, so this file is only the scenario. IOU has no host interface of
+its own: the guest leg is the IOL fabric unix socket, and the kernel
+datapath buys the *link segment* — one persistent anchor TAP per Ethernet
+bay/unit, a per-link Linux bridge, kernel filters, suspend and capture.
 
 * two IOU nodes on one compute report ``kernel_datapath`` when the compute's
   uBridge can terminate an IOL port on a persistent TAP
@@ -51,32 +54,21 @@ import time
 
 import pytest
 
-from tests.e2e import harness
+from tests.e2e import harness, lab
 
 pytestmark = pytest.mark.e2e
 
-# Ethernet0/0 is (bay 0, unit 0) — one adapter = four units. The adapter
-# index runs over Ethernet and serial bays together, so with two Ethernet
-# adapters the serial bays are 2 and 3: Serial2/0 is (2, 0).
+# Ethernet0/0 (the spec's link interface) is (bay 0, unit 0) — one adapter
+# = four units. The adapter index runs over Ethernet and serial bays
+# together, so with two Ethernet adapters the serial bays are 2 and 3:
+# Serial2/0 is (2, 0).
 ETH = (0, 0)
 SERIAL = (2, 0)
-BOOT_TIMEOUT = 360
-
-# the dual-stack half of the Ethernet leg: a ULA mirroring 10.1.1.x. The
-# serial leg stays v4-only (HDLC, not an Ethernet wire).
-R1_IP6 = "fd00:1:1::1"
-R2_IP6 = "fd00:1:1::2"
 
 # exact ICMPv6 echo match for the relay marker: a bare "icmp6" would also
 # match IOS's own control frames (DAD/MLD/NS/NA) and break the exact-count
 # asserts
 ICMP6_ECHO_BPF = "icmp6 and (ip6[40] == 128 or ip6[40] == 129)"
-
-
-def _boot(server, project_id, node_id, timeout=BOOT_TIMEOUT):
-    console = harness.ios_console(server, project_id, node_id)
-    console.boot_wait(timeout=timeout)
-    return console
 
 
 def _matches(marker_ws, marker_name):
@@ -96,43 +88,32 @@ def _eth_shutdown(console, shut):
 def test_iou_kernel_datapath():
     server = harness.live_server(kernel=True)
     compute = server.compute
-    caps = compute.capabilities()
-    if caps.get("ubridge_iol_tap") is not True or caps.get("ubridge_tap") is not True:
-        pytest.skip(
-            f"this compute's uBridge cannot serve the IOU anchor lifecycle "
-            f"(ubridge_iol_tap={caps.get('ubridge_iol_tap')}, ubridge_tap={caps.get('ubridge_tap')})"
-        )
-    image = harness.ensure_iou_image(server)
+    caps = compute.capabilities()  # the classifier gates below read the tc capabilities
 
-    project = compute.create_project("iou-e2e")
-    pid = project["project_id"]
+    labi = lab.deploy("iou-dumbbell", server, project_name="iou-e2e")
+    pid = labi.project_id
     a1 = a2 = None
     try:
-        n1 = compute.create_iou_node(pid, "E2E-R1", image)
-        n2 = compute.create_iou_node(pid, "E2E-R2", image)
-        n1_id, n2_id = n1["node_id"], n2["node_id"]
+        n1_id, n2_id = labi["r1"].node_id, labi["r2"].node_id
         a1 = harness.iou_anchor_name(n1_id, *ETH)
         a2 = harness.iou_anchor_name(n2_id, *ETH)
+        r1_v6 = labi["r1"].address(family=6)
+        r2_v4 = labi["r2"].address()
+        r2_v6 = labi["r2"].address(family=6)
 
-        # The link is created while both nodes are stopped: the kernel NIO
+        # The link was created while both nodes were stopped: the kernel NIO
         # is bound with no anchors in existence yet and wired by node start
         # (the deferred-wiring path).
-        link = compute.create_link(pid, (n1_id, *ETH), (n2_id, *ETH))
+        link = labi.link("r1", "r2")
         lid = link["link_id"]
         bridge = harness.link_bridge_name(lid)
         assert link["kernel_datapath"] is True, link
         assert not harness.tap_exists(a1), "anchors must not exist before start"
 
-        print(f".. starting routers on {image} and waiting for IOS boots")
-        compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
-        compute.call("POST", f"/projects/{pid}/nodes/{n2_id}/start")
-        c1 = _boot(server, pid, n1_id)
-        c2 = _boot(server, pid, n2_id)
-
-        # NetworkManager can release an NM-managed TAP from its bridge after
-        # (re-)enslavement (docs/bugs/networkmanager-tap-release.md); take the
-        # anchors out of its reach for the rest of the run.
-        harness.unmanage_from_networkmanager(a1, a2)
+        print(".. starting routers and waiting for IOS boots")
+        labi.start()
+        labi.boot()
+        c1, c2 = labi["r1"].channel, labi["r2"].channel
 
         # Kernel objects: the anchors are one persistent TAP per Ethernet
         # bay/unit, born with the node (all eight — the IOU port model),
@@ -156,16 +137,15 @@ def test_iou_kernel_datapath():
         harness.assert_forwarding(a1)
         harness.assert_forwarding(a2)
 
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_if="Ethernet0/0", eth_ipv6=R1_IP6)
-        harness.configure_ios(c2, "R2", eth_ip="10.1.1.2", eth_if="Ethernet0/0", eth_ipv6=R2_IP6)
+        labi.configure()
         out = c1.run("show ip int brief")
         assert re.search(r"Ethernet0/0\s+10\.1\.1\.1\s+\S+\s+\S+\s+up\s+up", out), out
         out = c1.run("show ipv6 interface brief")
-        assert R1_IP6.upper() in out.upper(), out  # IOS prints v6 upper-case
+        assert r1_v6.upper() in out.upper(), out  # IOS prints v6 upper-case
         print(".. both routers configured, pinging through the [IOL fabric <-> TAP] port bridge")
-        baseline = harness.wait_ping(c1, "10.1.1.2")
+        baseline = labi["r1"].wait_ping(r2_v4)
         assert baseline["success"] == 100, baseline["raw"]
-        baseline6 = harness.wait_ping(c1, R2_IP6)
+        baseline6 = labi["r1"].wait_ping(r2_v6)
         assert baseline6["success"] == 100, baseline6["raw"]
 
         # L2-anchor spec §E.2: with the guests shut the anchors and the
@@ -177,8 +157,8 @@ def test_iou_kernel_datapath():
             harness.assert_idle_silence(a1, a2, bridge)
             for console in (c1, c2):
                 _eth_shutdown(console, shut=False)
-            assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-            assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
         else:
             print(".. uBridge without link l2only: skipping the §E.2 assertion")
 
@@ -189,17 +169,17 @@ def test_iou_kernel_datapath():
             harness.qdiscs(a1),
             harness.qdiscs(a2),
         )
-        delayed = harness.wait_ping(c1, "10.1.1.2")
+        delayed = labi["r1"].wait_ping(r2_v4)
         assert delayed["success"] == 100, delayed["raw"]
         assert delayed["avg"] >= 150, (baseline, delayed)
-        delayed6 = harness.wait_ping(c1, R2_IP6)
+        delayed6 = labi["r1"].wait_ping(r2_v6)
         assert delayed6["success"] == 100, delayed6["raw"]
         assert delayed6["avg"] >= 150, (baseline6, delayed6)
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
         assert "netem" not in harness.qdiscs(a1), harness.qdiscs(a1)
-        fast = harness.wait_ping(c1, "10.1.1.2")
+        fast = labi["r1"].wait_ping(r2_v4)
         assert fast["success"] == 100 and fast["avg"] < harness.FAST_RTT_MS, fast
-        fast6 = harness.wait_ping(c1, R2_IP6)
+        fast6 = labi["r1"].wait_ping(r2_v6)
         assert fast6["success"] == 100 and fast6["avg"] < harness.FAST_RTT_MS, fast6
 
         # Classifier spot check on a TAP anchor (the Docker suite runs the
@@ -213,20 +193,20 @@ def test_iou_kernel_datapath():
                 harness.qdiscs(a1),
                 harness.qdiscs(a2),
             )
-            blocked = harness.ping(c1, "10.1.1.2", repeat=4)
+            blocked = labi["r1"].ping(r2_v4, repeat=4)
             assert blocked["success"] == 0, blocked["raw"]
-            v6_alive = harness.wait_ping(c1, R2_IP6)
+            v6_alive = labi["r1"].wait_ping(r2_v6)
             assert v6_alive["success"] == 100, v6_alive["raw"]
             print(".. bpf 'icmp6' drops v6 ICMP only on the TAP anchor")
             compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {"bpf": ["icmp6"]}})
-            v4_alive = harness.wait_ping(c1, "10.1.1.2")
+            v4_alive = labi["r1"].wait_ping(r2_v4)
             assert v4_alive["success"] == 100, v4_alive["raw"]
-            blocked6 = harness.ping(c1, R2_IP6, repeat=4)
+            blocked6 = labi["r1"].ping(r2_v6, repeat=4)
             assert blocked6["success"] == 0, blocked6["raw"]
             compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
             assert "clsact" not in harness.qdiscs(a1), harness.qdiscs(a1)
-            assert harness.wait_ping(c1, "10.1.1.2")["success"] == 100
-            assert harness.wait_ping(c1, R2_IP6)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v4)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v6)["success"] == 100
         else:
             print(".. uBridge reports no cbpf: skipping the bpf check")
 
@@ -234,18 +214,18 @@ def test_iou_kernel_datapath():
         if "nth" in modes:
             print(".. frequency_drop 3 (eBPF nth) on the TAP anchor")
             compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {"frequency_drop": [3]}})
-            nth = harness.ping(c1, "10.1.1.2", repeat=9)
+            nth = labi["r1"].ping(r2_v4, repeat=9)
             loss = 100 - nth["success"]
             print(f"..   {loss} % round-trip loss")
             # the kernel counts per direction: 1 - (2/3)^2 = 55.6 % round trip
             assert 20 <= loss <= 90, nth["raw"]
-            nth6 = harness.ping(c1, R2_IP6, repeat=9)
+            nth6 = labi["r1"].ping(r2_v6, repeat=9)
             loss6 = 100 - nth6["success"]
             print(f"..   {loss6} % round-trip loss (v6)")
             assert 20 <= loss6 <= 90, nth6["raw"]
             compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
-            assert harness.wait_ping(c1, "10.1.1.2")["success"] == 100
-            assert harness.wait_ping(c1, R2_IP6)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v4)["success"] == 100
+            assert labi["r1"].wait_ping(r2_v6)["success"] == 100
         else:
             print(".. uBridge reports no eBPF nth: skipping the frequency_drop check")
 
@@ -253,20 +233,20 @@ def test_iou_kernel_datapath():
         # nothing comes back); resume restores
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"suspend": True})
         assert not harness.tap_up(a1)
-        dead = harness.ping(c1, "10.1.1.2", repeat=3)
+        dead = labi["r1"].ping(r2_v4, repeat=3)
         assert dead["success"] == 0, dead["raw"]
-        dead6 = harness.ping(c1, R2_IP6, repeat=3)
+        dead6 = labi["r1"].ping(r2_v6, repeat=3)
         assert dead6["success"] == 0, dead6["raw"]
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"suspend": False})
         assert harness.tap_up(a1)
-        assert harness.wait_ping(c1, "10.1.1.2")["success"] == 100
-        assert harness.wait_ping(c1, R2_IP6)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v4)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v6)["success"] == 100
 
         # capture: AF_PACKET on the anchor writes a real pcap — both
         # families inside the window
         capture = compute.call("POST", f"/projects/{pid}/links/{lid}/capture/start", {"data_link_type": "DLT_EN10MB"})
-        harness.ping(c1, "10.1.1.2")
-        harness.ping(c1, R2_IP6)
+        labi["r1"].ping(r2_v4)
+        labi["r1"].ping(r2_v6)
         time.sleep(1)
         compute.call("POST", f"/projects/{pid}/links/{lid}/capture/stop")
         path = capture["capture_file_path"]
@@ -282,7 +262,7 @@ def test_iou_kernel_datapath():
         assert serial["kernel_datapath"] is False, serial
         harness.configure_ios(c1, "R1", serial_ip="10.2.2.1", serial_if="Serial2/0", clock=True)
         harness.configure_ios(c2, "R2", serial_ip="10.2.2.2", serial_if="Serial2/0")
-        relay_ping = harness.wait_ping(c1, "10.2.2.2")
+        relay_ping = labi["r1"].wait_ping("10.2.2.2")
         assert relay_ping["success"] == 100, relay_ping["raw"]
         compute.call("DELETE", f"/projects/{pid}/links/{serial['link_id']}")
 
@@ -297,8 +277,8 @@ def test_iou_kernel_datapath():
         lid = link["link_id"]
         bridge = harness.link_bridge_name(lid)
         assert link["kernel_datapath"] is True, link
-        assert harness.wait_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
-        assert harness.wait_ping(c1, R2_IP6, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v4, attempts=5)["success"] == 100
+        assert labi["r1"].wait_ping(r2_v6, attempts=5)["success"] == 100
 
         # node stop: uBridge holds the anchor fds, so the IOL bridge goes
         # first and the taps with it (a stopped node must not litter the
@@ -314,26 +294,24 @@ def test_iou_kernel_datapath():
         # (both endpoints delete it, last one wins)
         assert harness.bridge_members(bridge) in (None, [a2]), harness.bridge_members(bridge)
         compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
-        c1.close()
-        c1 = _boot(server, pid, n1_id)
+        c1 = labi["r1"].boot_wait()
         assert harness.tap_exists(a1)
         assert harness.bridge_members(bridge) == sorted([a1, a2]), harness.bridge_members(bridge)
         assert harness.wait_until(lambda: "netem" in harness.qdiscs(a1), timeout=15), harness.qdiscs(a1)
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_if="Ethernet0/0", eth_ipv6=R1_IP6)
-        survivor = harness.wait_ping(c1, "10.1.1.2", attempts=5)
+        labi["r1"].reconfigure()
+        survivor = labi["r1"].wait_ping(r2_v4, attempts=5)
         assert survivor["success"] == 100, survivor["raw"]
         assert survivor["avg"] >= 150, (baseline, survivor)
-        survivor6 = harness.wait_ping(c1, R2_IP6, attempts=5)
+        survivor6 = labi["r1"].wait_ping(r2_v6, attempts=5)
         assert survivor6["success"] == 100, survivor6["raw"]
         assert survivor6["avg"] >= 150, (baseline6, survivor6)
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
-        cleared = harness.ping(c1, "10.1.1.2", repeat=3)
+        cleared = labi["r1"].ping(r2_v4, repeat=3)
         assert cleared["success"] == 100 and cleared["avg"] < harness.FAST_RTT_MS, (baseline, cleared)
-        cleared6 = harness.ping(c1, R2_IP6, repeat=3)
+        cleared6 = labi["r1"].ping(r2_v6, repeat=3)
         assert cleared6["success"] == 100 and cleared6["avg"] < harness.FAST_RTT_MS, (baseline6, cleared6)
 
-        c1.close()
-        c2.close()
+        labi.close_channels()
     except BaseException:
         harness.release(server, pid, failed=True)
         raise
@@ -362,26 +340,23 @@ def test_iou_relay_control():
     """
 
     server = harness.live_server(kernel=False)
-    compute = server.compute
-    image = harness.ensure_iou_image(server)
 
-    project = compute.create_project("iou-relay-e2e")
-    pid = project["project_id"]
+    labi = lab.deploy("iou-dumbbell", server, project_name="iou-relay-e2e", gate_caps=False)
+    compute = server.compute
+    pid = labi.project_id
     a1 = None
     try:
-        n1 = compute.create_iou_node(pid, "E2E-R1", image)
-        n2 = compute.create_iou_node(pid, "E2E-R2", image)
-        n1_id, n2_id = n1["node_id"], n2["node_id"]
+        n1_id, n2_id = labi["r1"].node_id, labi["r2"].node_id
         a1 = harness.iou_anchor_name(n1_id, *ETH)
+        r2_v4 = labi["r2"].address()
+        r2_v6 = labi["r2"].address(family=6)
 
-        link = compute.create_link(pid, (n1_id, *ETH), (n2_id, *ETH))
+        link = labi.link("r1", "r2")
         assert link["kernel_datapath"] is False, link
 
         print(".. starting routers and waiting for IOS boots (relay)")
-        compute.call("POST", f"/projects/{pid}/nodes/{n1_id}/start")
-        compute.call("POST", f"/projects/{pid}/nodes/{n2_id}/start")
-        c1 = _boot(server, pid, n1_id)
-        c2 = _boot(server, pid, n2_id)
+        labi.start()
+        labi.boot()
 
         # no kernel wiring: the anchor (if born) is nobody's bridge port
         assert harness.bridge_members(harness.link_bridge_name(link["link_id"])) is None
@@ -391,11 +366,10 @@ def test_iou_relay_control():
                 # the L2 hardening is a creation-time property, not a
                 # datapath one: relay anchors are pure L2 too
                 harness.assert_pure_l2(a1)
-        harness.configure_ios(c1, "R1", eth_ip="10.1.1.1", eth_if="Ethernet0/0", eth_ipv6=R1_IP6)
-        harness.configure_ios(c2, "R2", eth_ip="10.1.1.2", eth_if="Ethernet0/0", eth_ipv6=R2_IP6)
-        relay_ping = harness.wait_ping(c1, "10.1.1.2")
+        labi.configure()
+        relay_ping = labi["r1"].wait_ping(r2_v4)
         assert relay_ping["success"] == 100, relay_ping["raw"]
-        relay_ping6 = harness.wait_ping(c1, R2_IP6)
+        relay_ping6 = labi["r1"].wait_ping(r2_v6)
         assert relay_ping6["success"] == 100, relay_ping6["raw"]
 
         # The relay link's filters really shape the wire on the IOU engine
@@ -407,16 +381,16 @@ def test_iou_relay_control():
 
         print(".. iol_bridge relay filter: delay 100 ms (per-direction delay lines, RTT +~200 ms)")
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {"delay": [100]}})
-        delayed = harness.ping(c1, "10.1.1.2", repeat=5)
+        delayed = labi["r1"].ping(r2_v4, repeat=5)
         assert delayed["success"] == 100, delayed["raw"]
         assert delayed["avg"] >= 150, (relay_ping, delayed)
-        delayed6 = harness.ping(c1, R2_IP6, repeat=5)
+        delayed6 = labi["r1"].ping(r2_v6, repeat=5)
         assert delayed6["success"] == 100, delayed6["raw"]
         assert delayed6["avg"] >= 150, (relay_ping6, delayed6)
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
-        fast = harness.ping(c1, "10.1.1.2", repeat=3)
+        fast = labi["r1"].ping(r2_v4, repeat=3)
         assert fast["success"] == 100 and fast["avg"] < harness.FAST_RTT_MS, (relay_ping, fast)
-        fast6 = harness.ping(c1, R2_IP6, repeat=3)
+        fast6 = labi["r1"].ping(r2_v6, repeat=3)
         assert fast6["success"] == 100 and fast6["avg"] < harness.FAST_RTT_MS, (relay_ping6, fast6)
 
         # frequency_drop shares one counter between the port's two
@@ -424,16 +398,16 @@ def test_iou_relay_control():
         # (same semantics as the plain relay's bridge filters).
         print(".. iol_bridge relay filter: frequency_drop 2 (shared counter, one direction dies)")
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {"frequency_drop": [2]}})
-        dropped = harness.ping(c1, "10.1.1.2", repeat=6)
+        dropped = labi["r1"].ping(r2_v4, repeat=6)
         print(f"..   success {dropped['success']} %")
         assert dropped["success"] <= 50, dropped["raw"]
-        dropped6 = harness.ping(c1, R2_IP6, repeat=6)
+        dropped6 = labi["r1"].ping(r2_v6, repeat=6)
         print(f"..   success {dropped6['success']} % (v6)")
         assert dropped6["success"] <= 50, dropped6["raw"]
         compute.call("PUT", f"/projects/{pid}/links/{lid}", {"filters": {}})
-        recovered = harness.wait_ping(c1, "10.1.1.2")
+        recovered = labi["r1"].wait_ping(r2_v4)
         assert recovered["success"] == 100, recovered["raw"]
-        recovered6 = harness.wait_ping(c1, R2_IP6)
+        recovered6 = labi["r1"].wait_ping(r2_v6)
         assert recovered6["success"] == 100, recovered6["raw"]
 
         # capture on the relay: iol_bridge start_capture on the port's IOL
@@ -441,8 +415,8 @@ def test_iou_relay_control():
         # kernel datapath's capture start_kernel on the anchor)
         print(".. iol_bridge relay capture: start_capture writes the ICMP exchange")
         capture = compute.call("POST", f"/projects/{pid}/links/{lid}/capture/start", {"data_link_type": "DLT_EN10MB"})
-        harness.ping(c1, "10.1.1.2", repeat=5)
-        harness.ping(c1, R2_IP6, repeat=5)
+        labi["r1"].ping(r2_v4, repeat=5)
+        labi["r1"].ping(r2_v6, repeat=5)
         time.sleep(1)
         compute.call("POST", f"/projects/{pid}/links/{lid}/capture/stop")
         path = capture["capture_file_path"]
@@ -468,9 +442,9 @@ def test_iou_relay_control():
                 {"name": "m-icmp6", "bpf": ICMP6_ECHO_BPF, "tag": 4243, "capture_node_id": n1_id},
             )
             assert m6["capture_node_id"] == n1_id and m6["enabled"] is True, m6
-            result = harness.ping(c1, "10.1.1.2", repeat=5)
+            result = labi["r1"].ping(r2_v4, repeat=5)
             assert result["success"] == 100, result["raw"]
-            result6 = harness.ping(c1, R2_IP6, repeat=5)
+            result6 = labi["r1"].ping(r2_v6, repeat=5)
             assert result6["success"] == 100, result6["raw"]
             harness.wait_until(
                 lambda: len(_matches(marker_ws, "m-icmp")) >= 10 and len(_matches(marker_ws, "m-icmp6")) >= 10,
@@ -511,8 +485,7 @@ def test_iou_relay_control():
         finally:
             marker_ws.close()
 
-        c1.close()
-        c2.close()
+        labi.close_channels()
     except BaseException:
         harness.release(server, pid, failed=True)
         raise

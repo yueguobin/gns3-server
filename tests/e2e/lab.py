@@ -230,11 +230,14 @@ class Kind:
 
     def ensure_image(self, server):
         """The family's image, bootstrapped on demand (download, steal-copy,
-        pull...). Returns the reference the server knows it by."""
+        pull...). Returns the reference the server knows it by — or None for
+        the image-less families (the switch, VPCS)."""
         raise NotImplementedError
 
-    def create(self, compute, project_id, name, spec, image):
-        """Create the node through the API; returns the node dict."""
+    def create(self, server, project_id, name, spec, image):
+        """Create the node through the API; returns the node dict. *server*
+        (not just its compute): families resolve per-image extras through it
+        (dynamips' idle-PC)."""
         raise NotImplementedError
 
     def pre_start(self, server, node, spec, interfaces):
@@ -243,26 +246,29 @@ class Kind:
 
     def adapter_port(self, interface):
         """The (adapter_number, port_number) an endpoint interface name
-        addresses on this family — the numbering differs per emulator."""
+        addresses on this family — the naming and numbering differ per
+        emulator (eth0, f1/0, Ethernet0/0, ...)."""
         raise NotImplementedError
 
     def boot(self, server, project_id, node, image, interfaces):
         """Open the guest channel and wait for the guest to be up; returns
         the channel (a console driver on the serial families, a daemon exec
-        channel on the container ones). The criterion is the family's own
-        (a banner, a prompt shape, an applied address), not a timer — and it
-        must hold before any host-side state is asserted, so the datapath is
-        settled when ``boot`` returns."""
+        channel on the container ones — or None for a family with no guest
+        to drive). The criterion is the family's own (a banner, a prompt
+        shape, an applied address), not a timer — and it must hold before
+        any host-side state is asserted, so the datapath is settled when
+        ``boot`` returns."""
         raise NotImplementedError
 
-    def post_boot(self, server, node, spec):
+    def post_boot(self, server, node, spec, interfaces):
         """Host-side quirks right after boot (e.g. keeping NetworkManager
         away from the family's anchor devices). Default: nothing."""
 
-    def configure(self, channel, interfaces):
+    def configure(self, channel, interfaces, name):
         """Apply the endpoint addresses — idempotent, so a scenario can
         re-run it after a restart or an admin-down. *interfaces* maps the
-        interface name to ``(ipv4, ipv6)`` (either may be None)."""
+        interface name to ``(ipv4, ipv6)`` (either may be None); *name* is
+        the node's spec name (the IOS families make it the guest hostname)."""
         raise NotImplementedError
 
     def ping(self, channel, target, **kwargs):
@@ -279,8 +285,8 @@ class Kind:
 
 def _eth_adapter(interface, family):
     """The adapter number an endpoint interface name addresses (the port is
-    always 0 — one NIC per adapter on the families wired so far; the IOU
-    family will need its own mapping)."""
+    always 0 — one NIC per adapter on the ethN-named families; the IOS
+    families name interfaces the guest's way and parse their own)."""
 
     match = re.match(r"eth(\d+)$", interface)
     if not match:
@@ -307,8 +313,8 @@ class FrrQemuKind(Kind):
     def ensure_image(self, server):
         return harness.ensure_qemu_image(server)
 
-    def create(self, compute, project_id, name, spec, image):
-        return compute.create_qemu_node(
+    def create(self, server, project_id, name, spec, image):
+        return server.compute.create_qemu_node(
             project_id,
             name,
             image,
@@ -326,15 +332,16 @@ class FrrQemuKind(Kind):
         console.boot_wait(timeout=300, banner=banner)
         return console
 
-    def post_boot(self, server, node, spec):
+    def post_boot(self, server, node, spec, interfaces):
         # NetworkManager can release an NM-managed TAP from its bridge after
         # (re-)enslavement (docs/bugs/networkmanager-tap-release.md); take
-        # every anchor of the node out of its reach for the rest of the run.
+        # every anchor of the node out of its reach for the rest of the run
+        # (one TAP per adapter, wired or not).
         harness.unmanage_from_networkmanager(
             *(harness.qemu_anchor_name(node["node_id"], adapter) for adapter in range(spec.gns3.adapters or 2))
         )
 
-    def configure(self, console, interfaces):
+    def configure(self, console, interfaces, name):
         for interface, (v4, v6) in sorted(interfaces.items()):
             harness.configure_linux(
                 console,
@@ -382,8 +389,8 @@ class UbuntuDockerKind(Kind):
     def ensure_image(self, server):
         return harness.ensure_docker_image(server)
 
-    def create(self, compute, project_id, name, spec, image):
-        return compute.create_docker_node(project_id, name, image, adapters=spec.gns3.adapters or 1)
+    def create(self, server, project_id, name, spec, image):
+        return server.compute.create_docker_node(project_id, name, image, adapters=spec.gns3.adapters or 1)
 
     def pre_start(self, server, node, spec, interfaces):
         for interface, (v4, _v6) in sorted(interfaces.items()):
@@ -419,7 +426,7 @@ class UbuntuDockerKind(Kind):
             )
         return channel
 
-    def configure(self, channel, interfaces):
+    def configure(self, channel, interfaces, name):
         # the v4 wait is the reconfigure path (after a container restart
         # init.sh re-applies the file); on the first pass boot already
         # waited it and the check is a fast no-op
@@ -440,9 +447,207 @@ class UbuntuDockerKind(Kind):
         return result["loss"] == 0
 
 
+class IosKind(Kind):
+    """The IOS console families (dynamips routers, IOU): one driver, one
+    address baseline (``configure_ios`` — idempotent, so a restart's
+    reconfigure is safe), one IOS ping parser. Only the image pin, the node
+    creation and the interface naming differ per family."""
+
+    # the family's anchor-name helper (a harness function) — set by subclasses
+    _anchor_name = None
+    # an IOS boot is slow; the kind's wait covers the whole family
+    BOOT_TIMEOUT = 360
+
+    def boot(self, server, project_id, node, image, interfaces):
+        console = harness.ios_console(server, project_id, node["node_id"])
+        console.boot_wait(timeout=self.BOOT_TIMEOUT)
+        return console
+
+    def post_boot(self, server, node, spec, interfaces):
+        # the NM quirk (see FrrQemuKind.post_boot) — the wired interfaces'
+        # anchors only, the addresses the family's scenarios re-attach
+        harness.unmanage_from_networkmanager(
+            *(self._anchor_name(node["node_id"], *self.adapter_port(interface)) for interface in interfaces)
+        )
+
+    def configure(self, console, interfaces, name):
+        for interface, (v4, v6) in sorted(interfaces.items()):
+            harness.configure_ios(
+                console,
+                name.upper(),
+                eth_ip=str(v4.ip) if v4 else None,
+                eth_ipv6=f"{v6.ip}/{v6.network.prefixlen}" if v6 else None,
+                eth_if=interface,
+                eth_netmask=str(v4.network.netmask) if v4 else "255.255.255.0",
+            )
+
+    def ping(self, console, target, **kwargs):
+        return harness.ping(console, target, **kwargs)
+
+    def wait_ping(self, console, target, **kwargs):
+        return harness.wait_ping(console, target, **kwargs)
+
+    def ping_ok(self, result):
+        return result["success"] == 100
+
+
+class IosDynamipsKind(IosKind):
+    """The registry-pinned c7200 IOS image on the local dynamips: a real
+    router behind the server's telnet console. The serial PA rides along in
+    slot 2 even though a spec never wires it — the relay-leg scenarios wire
+    a serial link by hand (serial bays never anchor, that exclusion is part
+    of what they test), and the PA must be in the box for that."""
+
+    requires = {"ubridge_tap": True}
+    # slot 0 is the fixed IO slot; the Ethernet PA goes in slot 1 (two FE
+    # ports), the serial PA in slot 2 (four ports)
+    SLOTS = {"slot1": "PA-2FE-TX", "slot2": "PA-4T+"}
+    INTERFACE_RE = re.compile(r"f(\d+)/(\d+)$")
+    _anchor_name = staticmethod(harness.anchor_name)
+
+    def ensure_image(self, server):
+        return harness.ensure_dynamips_image(server)
+
+    def create(self, server, project_id, name, spec, image):
+        # without an idle-PC a router busy-waits a full CPU core for the
+        # whole scenario — detected once per image, cached (see harness)
+        idlepc = harness.dynamips_idlepc(server, image)
+        return server.compute.create_dynamips_router(project_id, name, image, self.SLOTS, idlepc=idlepc)
+
+    def adapter_port(self, interface):
+        match = self.INTERFACE_RE.match(interface)
+        if not match:
+            raise ValueError(f"ios-dynamips interfaces are f1/0, f1/1, ... — not {interface!r}")
+        return int(match.group(1)), int(match.group(2))
+
+
+class IouKind(IosKind):
+    """The registry-pinned L3 IOU image executed by the local compute: real
+    IOS on the server's telnet console, no host interface of its own — the
+    guest leg is the IOL fabric socket, and the anchors are one persistent
+    TAP per Ethernet bay/unit (the interface names are the guest's own:
+    Ethernet0/0 is bay 0, unit 0)."""
+
+    requires = {"ubridge_iol_tap": True, "ubridge_tap": True}
+    INTERFACE_RE = re.compile(r"[Ee]thernet(\d+)/(\d+)$")
+    _anchor_name = staticmethod(harness.iou_anchor_name)
+
+    def ensure_image(self, server):
+        return harness.ensure_iou_image(server)
+
+    def create(self, server, project_id, name, spec, image):
+        return server.compute.create_iou_node(project_id, name, image)
+
+    def adapter_port(self, interface):
+        match = self.INTERFACE_RE.match(interface)
+        if not match:
+            raise ValueError(f"iou interfaces are Ethernet0/0, Ethernet0/1, ... — not {interface!r}")
+        return int(match.group(1)), int(match.group(2))
+
+
+class EthernetSwitchKind(Kind):
+    """The builtin Ethernet switch (a Linux kernel bridge on this host): no
+    image, no guest, no console — there is nothing to boot, configure or
+    ping, and ``boot`` returns no channel. Its ports come from
+    ``gns3.adapters`` (access VLAN 1 each, named the switch's own way); the
+    VLAN-programming scenarios PUT their own ports_mapping on top."""
+
+    def ensure_image(self, server):
+        return None
+
+    def create(self, server, project_id, name, spec, image):
+        ports = spec.gns3.adapters or 2
+        return server.compute.call(
+            "POST",
+            f"/projects/{project_id}/nodes",
+            {
+                "compute_id": "local",
+                "name": name,
+                "node_type": "ethernet_switch",
+                "properties": {
+                    "ports_mapping": [
+                        {"name": f"Ethernet{number}", "port_number": number, "type": "access", "vlan": 1}
+                        for number in range(ports)
+                    ]
+                },
+            },
+        )
+
+    def adapter_port(self, interface):
+        match = re.fullmatch(r"[Ee]thernet(\d+)", interface)
+        if not match:
+            raise ValueError(f"ethernet-switch interfaces are Ethernet0, Ethernet1, ... — not {interface!r}")
+        return 0, int(match.group(1))
+
+    def boot(self, server, project_id, node, image, interfaces):
+        return None  # nothing to drive: the switch bridge exists from creation
+
+    def configure(self, channel, interfaces, name):
+        pass  # no guest — the wiring is the node's whole behavior
+
+
+class VpcsKind(Kind):
+    """The local vpcs binary behind the server's TCP console: the family
+    with no image at all (the binary comes from the server's own config).
+    Its addresses ride the guest's own ``ip`` command and are re-applied
+    after every start — the process forgets everything. IPv4 only: the v6
+    command shape is untested, so a spec's v6 is refused instead of silently
+    misconfigured."""
+
+    requires = {"ubridge_tap": True, "vpcs_tap": True}
+
+    def ensure_image(self, server):
+        return None
+
+    def create(self, server, project_id, name, spec, image):
+        return server.compute.create_vpcs_node(project_id, name)
+
+    def adapter_port(self, interface):
+        return _eth_adapter(interface, "vpcs"), 0
+
+    def boot(self, server, project_id, node, image, interfaces):
+        # the anchor is born with the node start; the console answers as
+        # soon as the vpcs daemon accepts the connection — the first
+        # command's prompt-wait is the boot criterion
+        for interface in interfaces:
+            anchor = harness.vpcs_anchor_name(node["node_id"], *self.adapter_port(interface))
+            assert harness.wait_until(lambda exists=anchor: harness.tap_exists(exists), timeout=15), anchor
+        return harness.vpcs_console(server, project_id, node["node_id"])
+
+    def post_boot(self, server, node, spec, interfaces):
+        # the NM quirk (see FrrQemuKind.post_boot); the restart paths
+        # re-attach the anchor under a fresh device
+        harness.unmanage_from_networkmanager(
+            *(harness.vpcs_anchor_name(node["node_id"], *self.adapter_port(interface)) for interface in interfaces)
+        )
+
+    def configure(self, console, interfaces, name):
+        console.run(f"set pcname {name.upper()}")
+        for interface, (v4, v6) in sorted(interfaces.items()):
+            if v6 is not None:
+                raise AssertionError("the vpcs family is IPv4-only in the e2e (the v6 command shape is untested)")
+            if v4 is None:
+                raise AssertionError(f"{name}:{interface} needs an ipv4 — the family cannot ping without one")
+            out = console.run(f"ip {v4.ip}/{v4.network.prefixlen}")
+            assert str(v4.ip) in out, out
+
+    def ping(self, console, target, **kwargs):
+        return harness.vpcs_ping(console, target, **kwargs)
+
+    def wait_ping(self, console, target, **kwargs):
+        return harness.wait_vpcs_ping(console, target, **kwargs)
+
+    def ping_ok(self, result):
+        return result["success"] == 100
+
+
 KINDS = {
     "frr-qemu": FrrQemuKind(),
     "ubuntu-docker": UbuntuDockerKind(),
+    "ios-dynamips": IosDynamipsKind(),
+    "iou": IouKind(),
+    "ethernet-switch": EthernetSwitchKind(),
+    "vpcs": VpcsKind(),
 }
 
 
@@ -473,9 +678,16 @@ class NodeHandle:
     def node_id(self):
         return self.node["node_id"]
 
-    def address(self, interface="eth0", family=4):
+    def address(self, interface=None, family=4):
         """The configured address of *interface* without the prefix length —
-        the form ping targets want."""
+        the form ping targets want. *interface* defaults to the node's first
+        wired one (the interface names are family-specific, `eth0` no more
+        than `f1/0`, so the default cannot be a literal); a multi-interface
+        node names the interface explicitly."""
+        if interface is None:
+            if not self.interfaces:
+                raise KeyError(f"node {self.name!r} has no wired interfaces at all")
+            interface = next(iter(self.interfaces))
         if interface not in self.interfaces:
             raise KeyError(f"node {self.name!r} has no wired interface {interface!r}")
         v4, v6 = self.interfaces[interface]
@@ -512,7 +724,7 @@ class NodeHandle:
         """Re-apply the address baseline (idempotent by design): after a
         node restart, or after any guest action that dropped the addresses
         (a Linux admin-down discards the IPv6 globals)."""
-        self.kind.configure(self.channel, self.interfaces)
+        self.kind.configure(self.channel, self.interfaces, self.name)
 
     def ping(self, target, **kwargs):
         return self.kind.ping(self.channel, target, **kwargs)
@@ -564,23 +776,29 @@ class LabInstance:
             if handle.channel is None:
                 handle.boot_wait()
         for handle in self.handles.values():
-            handle.kind.post_boot(self.server, handle.node, handle.spec)
+            handle.kind.post_boot(self.server, handle.node, handle.spec, handle.interfaces)
 
     def configure(self):
         """Apply the endpoint addresses on every node, then wait for each
         link's baseline reachability (both address families): the first
-        endpoint of a spec pings the second's addresses. After this returns,
-        a link with no impairment pings clean."""
+        addressed endpoint of a link pings the other addressed ones. After
+        this returns, a link with no impairment pings clean."""
         for handle in self.handles.values():
             handle.reconfigure()
         for link_spec in self._link_specs:
-            source = self.handles[link_spec.endpoints[0].node]
+            # only endpoints that carry an address take part (a link to a
+            # switch has none on its switch side — the baseline of such a
+            # topology is cross-link and stays the scenario's own assert)
+            addressed = [e for e in link_spec.endpoints if e.ipv4 is not None or e.ipv6 is not None]
+            if len(addressed) < 2:
+                continue
+            source = self.handles[addressed[0].node]
             # baseline waits tolerate the boot transient generously (~40 s):
             # under parallel load the relay's second uBridge can lag well
             # behind its container, and a v6 ND resolution has been observed
             # stalling ~20 s with the pipe provably healthy before and after
             # — the impairment asserts later in a scenario stay strict
-            for endpoint in link_spec.endpoints[1:]:
+            for endpoint in addressed[1:]:
                 if endpoint.ipv4 is not None:
                     baseline = source.wait_ping(str(endpoint.ipv4.ip), attempts=8)
                     assert source.kind.ping_ok(baseline), baseline
@@ -628,25 +846,31 @@ def _resolve_images(spec, server, resolved):
     return images
 
 
-def deploy(name, server, project_name=None):
+def deploy(name, server, project_name=None, gate_caps=True):
     """Materialize a lab spec (``load`` semantics for *name*) against
     *server*: resolve the kinds, gate on their required capabilities (skip
-    the scenario where they are missing), ensure the images, create the
-    project, the nodes and the links. Returns a ``LabInstance`` with nothing
-    started — call ``start``, ``boot`` and ``configure`` (with the
-    scenario's assertions in between where the construction itself is under
-    test, as the deferred kernel wiring is)."""
+    the scenario where they are missing — unless *gate_caps* is False, the
+    relay control twins' setting: they ride the relay whatever the compute's
+    uBridge can anchor, and enforce what they need through their own
+    asserts), ensure the images, create the project, the nodes and the
+    links. Returns a ``LabInstance`` with nothing started — call ``start``,
+    ``boot`` and ``configure`` (with the scenario's assertions in between
+    where the construction itself is under test, as the deferred kernel
+    wiring is)."""
 
     spec = load(name)
     compute = server.compute
     resolved = _resolve_kinds(spec, name)
 
     # gate on the capabilities the families need, before anything is created
-    caps = compute.capabilities()
-    for kind in {entry[1] for entry in resolved.values()}:
-        for capability, expected in kind.requires.items():
-            if caps.get(capability) is not expected:
-                pytest.skip(f"this compute cannot run kind {type(kind).__name__} ({capability}={caps.get(capability)})")
+    if gate_caps:
+        caps = compute.capabilities()
+        for kind in {entry[1] for entry in resolved.values()}:
+            for capability, expected in kind.requires.items():
+                if caps.get(capability) is not expected:
+                    pytest.skip(
+                        f"this compute cannot run kind {type(kind).__name__} ({capability}={caps.get(capability)})"
+                    )
 
     images = _resolve_images(spec, server, resolved)
     project = compute.create_project(project_name or spec.name)
@@ -661,7 +885,7 @@ def deploy(name, server, project_name=None):
                 interfaces[endpoint.node][endpoint.interface] = (endpoint.ipv4, endpoint.ipv6)
         handles = {}
         for node_name, (_kind_name, kind, node_spec) in resolved.items():
-            node = kind.create(compute, project["project_id"], node_name.upper(), node_spec, images[node_name])
+            node = kind.create(server, project["project_id"], node_name.upper(), node_spec, images[node_name])
             handles[node_name] = NodeHandle(
                 node_name,
                 node_spec,

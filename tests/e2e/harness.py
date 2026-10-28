@@ -795,13 +795,22 @@ def vpcs_console(server, project_id, node_id):
 
 
 def configure_ios(
-    console, hostname, eth_ip=None, eth_ipv6=None, serial_ip=None, clock=False, eth_if="f1/0", serial_if="s2/0"
+    console,
+    hostname,
+    eth_ip=None,
+    eth_ipv6=None,
+    serial_ip=None,
+    clock=False,
+    eth_if="f1/0",
+    serial_if="s2/0",
+    eth_netmask="255.255.255.0",
 ):
     """Baseline config on a freshly booted router: hostname, no console spam,
     optional interface addresses. ``eth_ipv6`` configures the same interface
-    dual-stack (a /64 prefix); ipv6 unicast-routing is deliberately left off —
-    the routers stay pure hosts, so no RAs go out and the link stays quiet
-    (directly connected pings need no forwarding)."""
+    dual-stack (a /64 prefix unless the address carries its own); ipv6
+    unicast-routing is deliberately left off — the routers stay pure hosts,
+    so no RAs go out and the link stays quiet (directly connected pings need
+    no forwarding). Idempotent: a scenario may re-run it after a restart."""
     console.run("enable")
     console.run("conf t")
     console.run(f"hostname {hostname}")
@@ -812,9 +821,10 @@ def configure_ios(
     if eth_ip or eth_ipv6:
         console.run(f"interface {eth_if}")
         if eth_ip:
-            console.run(f"ip address {eth_ip} 255.255.255.0")
+            console.run(f"ip address {eth_ip} {eth_netmask}")
         if eth_ipv6:
-            console.run(f"ipv6 address {eth_ipv6}/64")
+            v6, _, prefix = eth_ipv6.partition("/")
+            console.run(f"ipv6 address {v6}/{prefix or '64'}")
         console.run("no shutdown")
         console.run("exit")
     if serial_ip:

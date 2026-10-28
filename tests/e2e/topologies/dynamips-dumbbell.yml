@@ -1,0 +1,21 @@
+# The two-router dumbbell of the Dynamips kernel-datapath scenarios: two
+# c7200 routers on a real IOS image crossed by one Ethernet link,
+# dual-stack. Same dialect as qemu-dumbbell.yml (see that file's header and
+# tests/e2e/lab.py).
+#
+# The interface names are the guest's own (f1/0 = FastEthernet1/0 — the
+# Ethernet PA sits in slot 1). The kind also fits the serial PA (slot 2),
+# which no spec ever wires: the relay-leg scenarios wire a serial link by
+# hand, because serial bays never anchor and that exclusion is part of what
+# they test.
+name: dynamips-dumbbell
+topology:
+  defaults:
+    kind: ios-dynamips
+  nodes:
+    r1: {}
+    r2: {}
+  links:
+    - endpoints:
+        - {node: r1, interface: f1/0, ipv4: 10.1.1.1/24, ipv6: "fd00:1:1::1/64"}
+        - {node: r2, interface: f1/0, ipv4: 10.1.1.2/24, ipv6: "fd00:1:1::2/64"}
