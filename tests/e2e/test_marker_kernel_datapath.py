@@ -303,6 +303,10 @@ def test_marker_kernel_datapath():
                     "marker": "m-icmp",
                     "data_link_type": "DLT_EN10MB",
                     "count": 14,
+                    # the response model always carries the per-source
+                    # error (an unreachable compute reports it there) —
+                    # None on a healthy source
+                    "error": None,
                 }
             ], timeline["sources"]
             first = timeline["frames"][0]
@@ -343,6 +347,7 @@ def test_marker_kernel_datapath():
                     "marker": "m-icmp6",
                     "data_link_type": "DLT_EN10MB",
                     "count": 20,
+                    "error": None,
                 }
             ], timeline6["sources"]
             first6 = timeline6["frames"][0]

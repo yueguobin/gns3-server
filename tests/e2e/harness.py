@@ -65,6 +65,7 @@ import hashlib
 import http.client
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -318,6 +319,8 @@ default_admin_password = admin
 [Server]
 host = 127.0.0.1
 port = {port}
+console_start_port_range = {console_start}
+console_end_port_range = {console_end}
 ubridge_path = {ubridge}
 enable_kernel_datapath = {kernel}
 report_errors = False
@@ -414,6 +417,14 @@ def _spawn_isolated(tmpdir, kernel):
 
     os.makedirs(os.path.join(tmpdir, "projects"), exist_ok=True)
     port = _free_port()
+    # A random console-port window per instance: every instance would
+    # otherwise allocate its first console port at the default range's
+    # start (5000), and parallel instances race the same bind — the
+    # first node start of all-but-one then dies with 409 "address
+    # already in use" (observed with pytest -n 3). A 200-port window at
+    # a random even offset keeps instances out of each other's way.
+    console_start = random.randrange(20000, 44000, 200)  # noqa: S311 — spreading port windows, not a secret
+    console_end = console_start + 199
     # GNS3_E2E_VPCS points at a vpcs build with -n (tap mode without host
     # auto-configuration) — what the kernel-datapath scenario needs. The
     # local fork build (where this feature is developed) is the default when
@@ -424,7 +435,15 @@ def _spawn_isolated(tmpdir, kernel):
         fork_build = os.path.expanduser("~/myCode/GNS3/vpcs/src/vpcs")
         vpcs = fork_build if os.path.isfile(fork_build) else (shutil.which("vpcs") or "vpcs")
     config = ISOLATED_CONFIG.format(
-        port=port, ubridge=ubridge, dynamips=dynamips, images=images, tmp=tmpdir, kernel=kernel, vpcs=vpcs
+        port=port,
+        console_start=console_start,
+        console_end=console_end,
+        ubridge=ubridge,
+        dynamips=dynamips,
+        images=images,
+        tmp=tmpdir,
+        kernel=kernel,
+        vpcs=vpcs,
     )
     config_path = os.path.join(tmpdir, "gns3_server.conf")
     with open(config_path, "w") as f:
@@ -809,6 +828,11 @@ def configure_ios(
 # driver answers separately, but the query itself stays in the stream).
 SHELL_PROMPT = "GNS3E2E#"
 SHELL_PROMPT_RE = re.compile(r"(?<!=)GNS3E2E#(?:\s|\x1b\[[0-9;?]*[a-zA-Z])*$")
+# The vtysh prompt of the FRR appliance (its own hostname) — the CLI the
+# appliance's console auto-logins into. Unlike the busybox prompts it is
+# followed by no CPR query, and it is distinct from the root shell's
+# `frr:~# `: the driver answers it by leaving vtysh for the shell.
+VTYSH_PROMPT_RE = re.compile(r"frr#\s*$")
 
 # The FRR appliance's documented console credentials (its usage notes ship
 # with the image: root/root).
@@ -899,6 +923,68 @@ class ShellConsole:
         self._reset()
         return out
 
+    def _verify_pinned_guest(self, banner, timeout=20):
+        """The sentinel prompt is up but the pinned boot banner never
+        crossed this console: the driver connected only after the boot
+        finished, and qemu's telnet console has no scrollback to replay
+        the transcript from. The FRR appliance's vtysh prints its greeting
+        on every interactive start — re-enter it once and match the banner
+        there. Raises the not-the-pinned-guest AssertionError when the
+        guest cannot produce the banner; leaves the shell back at its
+        sentinel prompt otherwise."""
+        self._reset()
+        self.sock.sendall(b"vtysh\r")
+        deadline = time.time() + timeout
+        last_growth = time.time()
+        while time.time() < deadline:
+            if self._read():
+                last_growth = time.time()
+                continue
+            self._answer_cpr()
+            if banner.search(self.buf):
+                break
+            # a guest without a vtysh comes straight back to the sentinel
+            # (no such binary) — nothing more will arrive
+            if SHELL_PROMPT_RE.search(self.buf) and time.time() - last_growth > 1.0:
+                break
+            time.sleep(0.1)
+        settled = False
+        if banner.search(self.buf):
+            self.sock.sendall(b"exit\r")  # back to the shell and its sentinel
+            deadline = time.time() + 10
+            last_growth = time.time()
+            while time.time() < deadline:
+                if self._read():
+                    last_growth = time.time()
+                    continue
+                self._answer_cpr()
+                if SHELL_PROMPT_RE.search(self.buf) and time.time() - last_growth > 0.5:
+                    settled = True
+                    break
+                time.sleep(0.1)
+        if not settled:
+            transcript = self._dump_transcript("pinned-guest verification failed")
+            raise AssertionError(
+                f"the console reached a prompt without the pinned boot banner {banner.pattern!r} — "
+                f"not the pinned guest image? transcript: {transcript or 'not saved'}; tail: {self.buf[-300:]!r}"
+            )
+        self._reset()
+
+    def _dump_transcript(self, why):
+        """Save the whole console transcript under the e2e cache — the
+        short exception tails are rarely enough to diagnose a boot dance.
+        Returns the path, or None when even the dump failed."""
+        try:
+            directory = os.path.join(CACHE_DIR, "console-failures")
+            os.makedirs(directory, exist_ok=True)
+            path = os.path.join(directory, time.strftime("%Y%m%d-%H%M%S") + ".log")
+            with open(path, "w") as f:
+                f.write(f"# {why}\n# raw console transcript ({len(self.buf)} chars)\n")
+                f.write(self.buf)
+            return path
+        except OSError:
+            return None
+
     def boot_wait(self, timeout=300, banner=None):
         """Wait out the boot, log in, and install the sentinel prompt.
 
@@ -917,9 +1003,12 @@ class ShellConsole:
         transcript (the pinned-image scenarios pass the banner the image
         prints): the prompt only counts as ready when the banner was seen,
         so a wrong image sitting in the cache fails in seconds with "not
-        the pinned guest" instead of a timeout.
+        the pinned guest" instead of a timeout. A driver that connects only
+        after the boot finished cannot see the transcript (qemu telnet has
+        no scrollback) — the banner is then re-derived on demand from the
+        guest itself (``_verify_pinned_guest``).
         """
-        sent_username = sent_password = left_vtysh = False
+        sent_username = sent_password = False
         deadline = time.time() + timeout
         self._reset()
         last_growth = time.time()
@@ -929,10 +1018,9 @@ class ShellConsole:
             self._answer_cpr()
             if SHELL_PROMPT_RE.search(self.buf) and time.time() - last_growth > 1.2:
                 if banner is not None and not banner.search(self.buf):
-                    raise AssertionError(
-                        f"the console reached a prompt without the pinned boot banner {banner.pattern!r} — "
-                        f"not the pinned guest image? tail: {self.buf[-300:]!r}"
-                    )
+                    # the sentinel is up but the banner never crossed this
+                    # console — a late connection, not (yet) a wrong image
+                    self._verify_pinned_guest(banner)
                 self._reset()
                 return
             if time.time() - last_growth > 1.5:
@@ -943,16 +1031,22 @@ class ShellConsole:
                 elif sent_username and not sent_password and re.search(r"assword:\s*$", tail):
                     self.sock.sendall((self._password + "\r").encode())
                     sent_password = True
-                elif not left_vtysh and "this is FRRouting" in self.buf:
-                    # the console opened in the vtysh CLI (with or without a
-                    # login in front of it) — leave it for the shell
+                elif VTYSH_PROMPT_RE.search(tail):
+                    # the console sits in the vtysh CLI — the FRR appliance
+                    # auto-logins straight into it, and a driver that
+                    # connected only after the boot finds just this prompt
+                    # (qemu telnet replays nothing) — leave it for the
+                    # shell either way
                     self.sock.sendall(b"exit\r")
-                    left_vtysh = True
                 else:
                     self.sock.sendall(f"export PS1={SHELL_PROMPT}\r".encode())
                 last_growth = time.time()
             time.sleep(0.1)
-        raise AssertionError(f"Linux console did not reach the sentinel prompt; tail: {self.buf[-300:]!r}")
+        transcript = self._dump_transcript("boot_wait gave up waiting for the sentinel prompt")
+        raise AssertionError(
+            f"Linux console did not reach the sentinel prompt; "
+            f"transcript: {transcript or 'not saved'}; tail: {self.buf[-300:]!r}"
+        )
 
     def close(self):
         self.sock.close()
@@ -1021,13 +1115,18 @@ def wait_ping(console, target, attempts=4, repeat=3, timeout=1):
 
 
 _PING_LOSS_RE = re.compile(r"(\d+)% packet loss")
-_PING_RTT_RE = re.compile(r"rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms")
-_PING_REPLY_RE = re.compile(r"\bicmp_seq=\d+")
+# the summary line differs between the ping families: iputils prints
+# "rtt min/avg/max/mdev = a/b/c/d ms", busybox "round-trip min/avg/max =
+# a/b/c ms" — accept either, capture the average
+_PING_RTT_RE = re.compile(r"(?:rtt|round-trip) min/avg/max(?:/mdev)? = [\d.]+/([\d.]+)/")
+# iputils reply lines carry icmp_seq=, busybox just seq=
+_PING_REPLY_RE = re.compile(r"\b(?:icmp_)?seq=\d+")
 
 
 def _ping_parse(output, count):
-    """(loss percent, avg rtt or None) from iputils ping output — the
-    Ubuntu containers and the FRR qcow2 guest all run iputils `ping`.
+    """(loss percent, avg rtt or None) from a Linux guest's ping output —
+    iputils on the Ubuntu containers, busybox on the FRR qcow2 guest
+    (Alpine): the loss line is shared, the summary and reply lines are not.
 
     The summary line can be lost if the exec/console stream truncates: with
     replies visible but no summary, derive the loss from the replies
@@ -1044,9 +1143,10 @@ def _ping_parse(output, count):
 
 
 def linux_ping(console, target, repeat=3, timeout=1):
-    """Run a Linux guest's ping (iputils — the FRR qcow2 guest); returns
-    {success, avg, raw} (success in percent). A v6 literal needs no special
-    form — the same command shape serves both families."""
+    """Run a Linux guest's ping (iputils on the Ubuntu containers, busybox
+    on the FRR qcow2 guest); returns {success, avg, raw} (success in
+    percent). A v6 literal needs no special form — the same command shape
+    serves both families."""
 
     out = console.run(f"ping -c {repeat} -W {timeout} {target}", timeout=repeat * timeout + 20)
     loss, avg = _ping_parse(out, repeat)
@@ -1444,7 +1544,7 @@ def _download_qemu_image(directory):
     return QEMU_IMAGE
 
 
-def _ensure_image(server, what, pins, subfolder, list_images, fuzzy=None, fetch=None):
+def _ensure_image(server, what, pins, subfolder, list_images, fuzzy=None, fetch=None, executable=False):
     """The image the *what* scenarios run, as the filename the server lists.
 
     An isolated instance serves from the e2e cache (``CACHE_IMAGES``, the
@@ -1456,12 +1556,20 @@ def _ensure_image(server, what, pins, subfolder, list_images, fuzzy=None, fetch=
     an unverified combination. Against an external server
     (``GNS3_E2E_URL``) nothing is copied anywhere: pins match by filename
     against that server's own listing (the API does not expose checksums),
-    then fuzzy, else the scenario skips."""
+    then fuzzy, else the scenario skips.
+
+    ``executable`` marks images the emulator runs rather than reads (IOU:
+    the image IS the ELF binary) — they get the exec bit on every path,
+    including an already-cached copy (a browser-downloaded source file
+    carries none, and copyfile does not add it)."""
 
     if server.isolated:
         directory = os.path.join(CACHE_IMAGES, subfolder)
         for name, _md5sum, _size in pins:
             if os.path.isfile(os.path.join(directory, name)):
+                if executable:
+                    # the image is an ELF binary the emulator executes — it needs the exec bit
+                    os.chmod(os.path.join(directory, name), 0o755)  # noqa: S103
                 print(f".. {what} image {name} is already in the e2e cache")
                 return name
         os.makedirs(directory, exist_ok=True)
@@ -1488,6 +1596,8 @@ def _ensure_image(server, what, pins, subfolder, list_images, fuzzy=None, fetch=
             )
         else:
             pytest.skip(f"no registry-pinned {what} image in {source_images_dir()} (set GNS3_E2E_IMAGES)")
+        if executable:
+            os.chmod(os.path.join(directory, name), 0o755)  # noqa: S103 — an ELF binary the emulator executes
         assert name in list_images(), f"the running server does not list the just-cached {name}"
         return name
 
@@ -1529,6 +1639,7 @@ def ensure_iou_image(server):
         "IOU",
         server.compute.iou_images,
         fuzzy=lambda name: "adventerprisek9" in name and "l2" not in name.lower(),
+        executable=True,
     )
 
 

@@ -171,6 +171,12 @@ def test_qemu_kernel_datapath():
             harness.assert_idle_silence(a1, a2, bridge)
             for console in (c1, c2):
                 _eth_shutdown(console, shut=False)
+            # a Linux interface admin-down discards its IPv6 global
+            # addresses (keep_addr_on_down defaults to 0) while IPv4 keeps
+            # them — re-apply the idempotent baseline before the v6
+            # checkpoint, the same way the node-restart path below does
+            harness.configure_linux(c1, eth_ip="10.1.1.1", eth_if=GUEST_ETH_IF, eth_ipv6=R1_IP6)
+            harness.configure_linux(c2, eth_ip="10.1.1.2", eth_if=GUEST_ETH_IF, eth_ipv6=R2_IP6)
             assert harness.wait_linux_ping(c1, "10.1.1.2", attempts=5)["success"] == 100
             assert harness.wait_linux_ping(c1, R2_IP6, attempts=5)["success"] == 100
         else:

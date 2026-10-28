@@ -640,9 +640,20 @@ def test_docker_kernel_filter_matrix():
             # middle is gone — per-sequence evidence of a bounded outage
             code, output = daemon.exec(c1, ["ping", "-c", "25", "-i", "0.2", "-W", "1", R2_IP], timeout=30)
             replied = {int(m.group(1)) for m in re.finditer(r"seq=(\d+)", output)}
-            missing = set(range(25)) - replied
-            assert 0 in replied and 24 in replied, (sorted(replied), output)
-            assert missing and max(missing) - min(missing) >= 5, (sorted(replied), output)
+            missing = sorted(set(range(25)) - replied)
+            # one bounded outage with passes on both sides of it; the very
+            # first packets after the filter swap can drop transiently, so
+            # the pass ahead of the outage is any early answered seq, not
+            # seq 0 specifically
+            assert 24 in replied, (sorted(replied), output)
+            runs = []
+            for seq in missing:
+                if runs and seq == runs[-1][-1] + 1:
+                    runs[-1].append(seq)
+                else:
+                    runs.append([seq])
+            outage = max(runs, key=len, default=[])
+            assert len(outage) >= 5 and any(seq in replied for seq in range(outage[0])), (sorted(replied), output)
             # the outage window is one-shot from the moment the filter is
             # applied (documented semantics), so the v6 stream needs the
             # schedule re-armed — re-sending the same window is a no-op
@@ -650,9 +661,19 @@ def test_docker_kernel_filter_matrix():
             _put_filters(compute, pid, lid, {"window_drop": [1000, 2000, 100]})
             code, output = daemon.exec(c1, ["ping", "-c", "25", "-i", "0.2", "-W", "1", R2_IP6], timeout=30)
             replied6 = {int(m.group(1)) for m in re.finditer(r"seq=(\d+)", output)}
-            missing6 = set(range(25)) - replied6
-            assert 0 in replied6 and 24 in replied6, (sorted(replied6), output)
-            assert missing6 and max(missing6) - min(missing6) >= 5, (sorted(replied6), output)
+            missing6 = sorted(set(range(25)) - replied6)
+            assert 24 in replied6, (sorted(replied6), output)
+            runs6 = []
+            for seq in missing6:
+                if runs6 and seq == runs6[-1][-1] + 1:
+                    runs6[-1].append(seq)
+                else:
+                    runs6.append([seq])
+            outage6 = max(runs6, key=len, default=[])
+            assert len(outage6) >= 5 and any(seq in replied6 for seq in range(outage6[0])), (
+                sorted(replied6),
+                output,
+            )
             _clear_filters(compute, pid, lid, a1, a2)
             assert harness.docker_ping(daemon, c1, R2_IP, count=4)["loss"] == 0
             assert harness.docker_ping(daemon, c1, R2_IP6, count=4)["loss"] == 0
