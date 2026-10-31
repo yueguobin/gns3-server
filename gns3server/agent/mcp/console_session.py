@@ -73,9 +73,16 @@ SSH_PROXY_USERNAME = "gns3"
 
 def build_connect_kwargs(node_info: dict[str, Any]) -> dict[str, Any]:
     """Netmiko ConnectHandler kwargs for a node from its session info."""
+    host = node_info["console_host"]
+    if host in ("0.0.0.0", "::"):
+        # Wildcard bind: the console proxy listens on this host. Connecting
+        # to the wildcard address only works on Linux, so substitute the
+        # loopback address (same intent as the shared nornir inventory
+        # builder, which falls back to the controller host).
+        host = "127.0.0.1"
     device: dict[str, Any] = {
         "device_type": node_info["device_type"],
-        "host": node_info["console_host"],
+        "host": host,
         "port": node_info["console"],
         "global_delay_factor": 1.0,
     }
@@ -130,12 +137,20 @@ class ConsoleSession:
         self.last_activity = time.monotonic()
         self.closed = False
         self.close_reason: str | None = None
+        # Operations in flight (exec/send_raw/read_raw). The reaper and the
+        # LRU eviction must not close a session underneath a running command.
+        self._in_flight = 0
         self._reaper: asyncio.Task | None = asyncio.create_task(self._reap_when_idle())
 
     # ── lifecycle ─────────────────────────────────────────────────────────
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
+
+    @property
+    def busy(self) -> bool:
+        """An operation is currently running on this session."""
+        return self._in_flight > 0
 
     async def _reap_when_idle(self) -> None:
         """Close the session once it has seen no send/read for ttl seconds."""
@@ -144,6 +159,11 @@ class ConsoleSession:
                 await asyncio.sleep(self.ttl)
                 if self.closed:
                     return
+                if self.busy:
+                    # A command outlives the TTL: it will touch() when done,
+                    # so re-evaluate next cycle instead of pulling the
+                    # connection out from under it.
+                    continue
                 if time.monotonic() - self.last_activity >= self.ttl:
                     await self.close("idle timeout")
                     return
@@ -151,15 +171,19 @@ class ConsoleSession:
             pass
 
     async def close(self, reason: str = "closed") -> None:
-        if self.closed:
-            return
-        self.closed = True
-        self.close_reason = reason
-        # Do not cancel ourselves: when the reaper calls close(), cancelling
-        # the current task would abort the disconnect below.
-        if self._reaper is not None and not self._reaper.done() and asyncio.current_task() is not self._reaper:
-            self._reaper.cancel()
-        conn, self._conn = self._conn, None
+        # Take the session lock so the disconnect never lands underneath a
+        # running command (exec/read_raw hold it for their whole duration);
+        # a close racing an operation waits for it to finish instead.
+        async with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+            self.close_reason = reason
+            # Do not cancel ourselves: when the reaper calls close(), cancelling
+            # the current task would abort the disconnect below.
+            if self._reaper is not None and not self._reaper.done() and asyncio.current_task() is not self._reaper:
+                self._reaper.cancel()
+            conn, self._conn = self._conn, None
         if conn is not None:
             with _suppress_and_log(f"error disconnecting console session {self.key}"):
                 await asyncio.to_thread(conn.disconnect)
@@ -168,6 +192,13 @@ class ConsoleSession:
     # ── connection ────────────────────────────────────────────────────────
 
     async def _ensure_conn(self):
+        if self.closed:
+            # Never reopen: a session closed by the client, the reaper or an
+            # eviction must stay closed — reconnecting here would leak the
+            # new connection on an orphaned session nothing can reap.
+            raise ConsoleSessionError(
+                f"Console session for {self.key[2]} is closed ({self.close_reason}); open it again with console_exec"
+            )
         if self._conn is not None:
             return self._conn
 
@@ -223,53 +254,68 @@ class ConsoleSession:
         A command that does not finish within read_timeout is NOT an error:
         the driver returns the partial output with exit_code None and
         timed_out True (the command keeps running on the console)."""
-        self.touch()
-        async with self.lock:
-            conn = await self._ensure_conn()
-            try:
-                output = await asyncio.to_thread(conn.send_command, command, read_timeout=read_timeout)
-            except Exception as e:
-                raise ConsoleSessionError(f"Command execution failed: {e}") from e
+        self._in_flight += 1
+        try:
             self.touch()
-            # Only the linux-shell driver parses an exit code from its marker.
-            exit_code = getattr(conn, "last_exit_code", None)
-            timed_out = bool(getattr(conn, "last_timed_out", False))
-            return {"output": output or "", "exit_code": exit_code, "timed_out": timed_out}
+            async with self.lock:
+                conn = await self._ensure_conn()
+                try:
+                    output = await asyncio.to_thread(conn.send_command, command, read_timeout=read_timeout)
+                except Exception as e:
+                    raise ConsoleSessionError(f"Command execution failed: {e}") from e
+                self.touch()
+                # Only the linux-shell driver parses an exit code from its marker.
+                exit_code = getattr(conn, "last_exit_code", None)
+                timed_out = bool(getattr(conn, "last_timed_out", False))
+                return {"output": output or "", "exit_code": exit_code, "timed_out": timed_out}
+        finally:
+            self._in_flight -= 1
 
     async def send_raw(self, text: str) -> None:
         """Write raw text (including control keys such as \\x03) to the console."""
-        self.touch()
-        async with self.lock:
-            conn = await self._ensure_conn()
-            try:
-                await asyncio.to_thread(conn.write_channel, text)
-            except Exception as e:
-                raise ConsoleSessionError(f"Console write failed: {e}") from e
+        self._in_flight += 1
+        try:
+            self.touch()
+            async with self.lock:
+                conn = await self._ensure_conn()
+                try:
+                    await asyncio.to_thread(conn.write_channel, text)
+                except Exception as e:
+                    raise ConsoleSessionError(f"Console write failed: {e}") from e
+        finally:
+            self._in_flight -= 1
 
     async def read_raw(self, wait: float = 5.0, idle: float = 1.0, max_chars: int = 20000) -> str:
         """Drain console output: wait up to `wait` seconds for new data; once
-        data is flowing, return after a short `idle` gap. Never blocks long."""
-        self.touch()
-        async with self.lock:
-            conn = await self._ensure_conn()
-            collected: list[str] = []
-            total = 0
-            deadline = time.monotonic() + wait
-            last_data = 0.0
-            while time.monotonic() < deadline:
-                data = await asyncio.to_thread(conn.read_channel)
-                if data:
-                    collected.append(data)
-                    total += len(data)
-                    last_data = time.monotonic()
-                    if total >= max_chars:
-                        break
-                elif collected and time.monotonic() - last_data >= idle:
-                    break  # data came, then went quiet — good enough
-                await asyncio.sleep(0.05)
+        data is flowing, return after a short `idle` gap. Never blocks long.
+        wait=0 still performs one non-blocking drain pass."""
+        self._in_flight += 1
+        try:
             self.touch()
-            output = "".join(collected)
-            return output[:max_chars]
+            async with self.lock:
+                conn = await self._ensure_conn()
+                collected: list[str] = []
+                total = 0
+                deadline = time.monotonic() + wait
+                last_data = 0.0
+                while True:
+                    data = await asyncio.to_thread(conn.read_channel)
+                    if data:
+                        collected.append(data)
+                        total += len(data)
+                        last_data = time.monotonic()
+                        if total >= max_chars:
+                            break
+                    elif collected and time.monotonic() - last_data >= idle:
+                        break  # data came, then went quiet — good enough
+                    if time.monotonic() >= deadline:
+                        break
+                    await asyncio.sleep(0.05)
+                self.touch()
+                output = "".join(collected)
+                return output[:max_chars]
+        finally:
+            self._in_flight -= 1
 
 
 class ConsoleSessionManager:
@@ -307,13 +353,25 @@ class ConsoleSessionManager:
                     del self._sessions[key]
                     await session.close("console changed")
                 else:
+                    # Adopt the caller's ttl: the newest call expresses how
+                    # long this session should stay reaped-open.
+                    session.ttl = ttl
                     session.touch()
                     return session
-            # Evict stale entries, then LRU-evict if still at capacity.
+            # Evict stale entries, then LRU-evict if still at capacity. Busy
+            # sessions are never evicted — the caller's call is about to use
+            # one, and yanking a connection mid-command corrupts its result.
             for stale_key in [k for k, s in self._sessions.items() if not s.alive]:
                 del self._sessions[stale_key]
             while len(self._sessions) >= self.max_sessions:
-                oldest = min(self._sessions, key=lambda k: self._sessions[k].last_activity)
+                idle_keys = [k for k, s in self._sessions.items() if not s.busy]
+                if not idle_keys:
+                    log.warning(
+                        "All %d console sessions are busy; exceeding the session limit instead of evicting one",
+                        len(self._sessions),
+                    )
+                    break
+                oldest = min(idle_keys, key=lambda k: self._sessions[k].last_activity)
                 evicted = self._sessions.pop(oldest)
                 await evicted.close("evicted (session limit)")
             session = ConsoleSession(key, node_info, ttl=ttl)
@@ -321,15 +379,19 @@ class ConsoleSessionManager:
             return session
 
     async def get(self, username: str, project_id: str, node_id: str) -> ConsoleSession | None:
-        session = self._sessions.get((username, project_id, node_id))
+        async with self._lock:
+            session = self._sessions.get((username, project_id, node_id))
         if session is not None and session.alive:
             return session
         return None
 
     async def close(self, username: str, project_id: str, node_id: str) -> bool:
-        session = self._sessions.pop((username, project_id, node_id), None)
+        async with self._lock:
+            session = self._sessions.pop((username, project_id, node_id), None)
         if session is None:
             return False
+        # Close outside the manager lock: the disconnect may wait for an
+        # in-flight command on the session lock.
         await session.close("closed by client")
         return True
 
