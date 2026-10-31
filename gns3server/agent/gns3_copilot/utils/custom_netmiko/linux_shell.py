@@ -179,7 +179,13 @@ class LinuxShellBase(BaseConnection):
                     raise NetmikoAuthenticationException(
                         "Console asks for a username but the node has no default_username configured"
                     )
-                search_from += username_match.end()
+                # Advance past everything read so far, in RAW coordinates:
+                # match.end() indexes the ANSI-stripped window, so adding it
+                # to a raw offset under-counts whenever escapes precede the
+                # prompt — the same "login:" line would match again and the
+                # username would be sent twice, into the Password: prompt.
+                # Only genuinely new data is scanned from here on.
+                search_from = len(output)
                 self.write_channel(self.username + self.RETURN)
                 username_sent = True
                 password_attempts = 0
@@ -200,7 +206,7 @@ class LinuxShellBase(BaseConnection):
                     # above). Stop instead of retrying — repeated failures can
                     # lock the account.
                     raise NetmikoAuthenticationException("Login failed: credentials rejected by the console")
-                search_from += password_match.end()
+                search_from = len(output)
                 self.write_channel(self.password + self.RETURN)
                 password_attempts += 1
                 time.sleep(1.0 * delay_factor)
@@ -277,8 +283,22 @@ class LinuxShellBase(BaseConnection):
         wrapped = f"{command_string}; {MARKER_TEMPLATE}"
         # Drain stale output from a previous command on this cached session
         # before writing, so it cannot bleed into this command's result.
+        # Drain until the channel goes quiet (a single non-blocking read
+        # races output still in flight) so a late marker from an earlier
+        # timed-out command is consumed here rather than terminating this
+        # command's read early.
         try:
-            self.read_channel()
+            stale = self.read_channel() or ""
+            if stale:
+                quiet_budget = time.monotonic() + 0.5
+                while time.monotonic() < quiet_budget:
+                    time.sleep(0.05)
+                    chunk = self.read_channel() or ""
+                    if not chunk:
+                        break
+                    stale += chunk
+                if "__MCP_DONE_" in stale:
+                    logger.debug("Drained stale output carrying a completion marker before new command")
         except Exception:
             pass
         self.write_channel(wrapped + self.RETURN)
@@ -286,9 +306,21 @@ class LinuxShellBase(BaseConnection):
         # read_timeout 0 means "no timeout" (netmiko convention).
         deadline = time.monotonic() + read_timeout if read_timeout else None
         output = ""
+        # Marker-to-command correlation: the shell prints THIS command's
+        # marker only after echoing the wrapped command, and any stale marker
+        # precedes that echo in the byte stream — so only markers beyond the
+        # echo count as ours. If the echo never becomes recognizable (mangled
+        # by the terminal beyond what the fuzzy pattern matches), fall back
+        # to the whole window; the drain above keeps that path rare.
+        search_from = 0
+        echo_pattern = _echo_strip_pattern(wrapped)
         while True:
             output += self.read_channel() or ""
-            if re.search(expect_string, output):
+            if search_from == 0:
+                echo_match = echo_pattern.search(output)
+                if echo_match:
+                    search_from = echo_match.end()
+            if re.search(expect_string, output[search_from:]):
                 break
             if deadline is not None and time.monotonic() >= deadline:
                 self.last_timed_out = True
@@ -296,11 +328,13 @@ class LinuxShellBase(BaseConnection):
                 break
             time.sleep(0.05)
 
-        output = ANSI_ESCAPE_PATTERN.sub("", output)
-
-        marker_match = MARKER_RE.search(output)
+        # Parse the exit code from the raw output: search_from indexes it,
+        # and the ANSI strip below would shift the positions.
+        marker_match = MARKER_RE.search(output, search_from)
         if marker_match:
             self.last_exit_code = int(marker_match.group(1))
+
+        output = ANSI_ESCAPE_PATTERN.sub("", output)
 
         if strip_prompt:
             # Drop the marker line, the echoed wrapped command, any sentinel
@@ -327,7 +361,7 @@ class LinuxShellBase(BaseConnection):
         """Timing variant — identical to the marker-based send_command."""
         return self.send_command(command_string=command_string)
 
-    # ── Shell consoles have no netmiko config-mode/paging concepts ────────
+    # ── Shell consoles have no netmiko config-mode/paging/enable concepts ──
 
     def check_config_mode(self, check_string: str = "", pattern: str = "", force_regex: bool = False) -> bool:
         return False
@@ -339,6 +373,21 @@ class LinuxShellBase(BaseConnection):
         return ""
 
     def disable_paging(self, command: str = "", delay_factor: float | None = None, **kwargs) -> str:
+        return ""
+
+    # A Linux shell has no privilege ladder (no "enable" command, no '#'
+    # prompt to detect). Without these stubs, netmiko's inherited
+    # check_enable_mode() probes with an empty check_string — "" in output is
+    # always True — so batch flows (nornir_netmiko netmiko_send_config,
+    # enable=True by default) "enable" vacuously and then type IOS config
+    # lines into the shell as commands. Reporting "already enabled" keeps the
+    # netmiko plumbing harmless; routing Linux nodes away from the IOS-style
+    # config tools happens at the tool layer (device_config_send rejects
+    # gns3_linux_* and points at console_exec).
+    def check_enable_mode(self, check_string: str = "", pattern: str = "") -> bool:
+        return True
+
+    def enable(self, *args, **kwargs) -> str:
         return ""
 
 
