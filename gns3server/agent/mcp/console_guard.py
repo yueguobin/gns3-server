@@ -144,7 +144,7 @@ def _read_skills_guard_file() -> str | None:
         manager = get_skills_manager()
         if manager is None:
             return None
-        guard_file = manager.skills_dir / GUARD_FILE_RELATIVE_PATH
+        guard_file = manager.local_path / GUARD_FILE_RELATIVE_PATH
         if not guard_file.exists():
             return None
         return guard_file.read_text(encoding="utf-8")
