@@ -150,11 +150,12 @@ def _console_device_type(node: dict[str, Any]) -> str:
     return LINUX_TELNET_DEVICE_TYPE
 
 
-def _resolve_target_sync(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
-    """Fetch the node (names resolved to UUIDs) and validate it for console use.
-
-    Returns the node dict, or an in-band error dict.
-    """
+def _resolve_node_identity_sync(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
+    """Resolve names to the node dict — WITHOUT the console validations of
+    _resolve_target_sync. Acting on an already-open session (read/close) must
+    work on a stopped or crashed node too: the session holds the buffered
+    output, and a crashed node's final output is exactly what the caller
+    wants to read."""
 
     def run(handler, handler_params):
         return handler(handler_params, gns3_ctx)
@@ -167,6 +168,17 @@ def _resolve_target_sync(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> di
     node = get_node_handler(resolved, gns3_ctx)
     if "node_id" not in node:
         return {"status": "failed", "error": f"Node not found: {node!r}"}
+    return node
+
+
+def _resolve_target_sync(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
+    """Fetch the node (names resolved to UUIDs) and validate it for console use.
+
+    Returns the node dict, or an in-band error dict.
+    """
+    node = _resolve_node_identity_sync(params, gns3_ctx)
+    if "node_id" not in node:
+        return node  # in-band error dict
 
     # console_type selects the console transport (telnet/docker_exec/unset →
     # telnet, ssh → SSH). Types without a byte console (vnc, spice, http,
@@ -191,6 +203,15 @@ def _resolve_target_sync(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> di
     if rejection is not None:
         return rejection
     return node
+
+
+async def _resolve_node_identity(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
+    """Resolve node identity in a worker thread (no console validations)."""
+    try:
+        return await asyncio.to_thread(_resolve_node_identity_sync, params, gns3_ctx)
+    except Exception as e:
+        log.debug("console node identity resolution failed", exc_info=True)
+        return {"status": "failed", "error": f"Node lookup failed: {e}"}
 
 
 async def _resolve_target(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -221,13 +242,24 @@ def _truncate(output: str, max_chars: int) -> tuple[str, bool]:
     return output[:max_chars], True
 
 
+def _float_param(params: dict[str, Any], key: str, default: float) -> float:
+    """Float param with a real default: explicit 0 is honored — timeout 0
+    means "no timeout" (netmiko convention) and wait 0 means "drain only" —
+    only an absent/None value falls back (a bare `or` would turn 0 into the
+    default)."""
+    value = params.get(key)
+    return default if value is None else float(value)
+
+
 # ── Tool handlers ─────────────────────────────────────────────────────────
 
 
 async def console_exec_handler(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
     """Run one command on a node console and return its output."""
     command = params.get("command") or ""
-    read_timeout = float(params.get("timeout") or DEFAULT_READ_TIMEOUT)
+    read_timeout = _float_param(params, "timeout", DEFAULT_READ_TIMEOUT)
+    # ttl 0 is not meaningful (it would busy-loop the reaper), so 0 falls
+    # back to the default like an absent value.
     ttl = float(params.get("ttl") or 60.0)
     max_chars = int(params.get("max_chars") or MAX_OUTPUT_CHARS)
 
@@ -305,7 +337,9 @@ async def _find_session(params: dict[str, Any], gns3_ctx: dict[str, Any]):
     """Locate the caller's session for a node, accepting name or UUID ids.
 
     Tries the ids as given first (fast path for UUIDs); on a miss resolves
-    names via the REST API and retries. Returns (session, error_dict).
+    names via the REST API and retries. Resolution is identity-only: a
+    stopped or crashed node with a live session must still be readable by
+    name (the UUID path already works there). Returns (session, error_dict).
     """
     manager = get_console_session_manager()
     user = gns3_ctx.get("jwt_username") or "unknown"
@@ -314,7 +348,7 @@ async def _find_session(params: dict[str, Any], gns3_ctx: dict[str, Any]):
     session = await manager.get(user, str(params.get("project_id") or ""), str(params.get("node_id") or ""))
     if session is not None:
         return session, None
-    node = await _resolve_target(params, gns3_ctx)
+    node = await _resolve_node_identity(params, gns3_ctx)
     if "node_id" not in node:
         return None, node
     session = await manager.get(user, node["project_id"], node["node_id"])
@@ -328,7 +362,7 @@ async def _find_session(params: dict[str, Any], gns3_ctx: dict[str, Any]):
 
 async def console_read_handler(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
     """Read console output that arrived since the last read (bounded wait)."""
-    wait = float(params.get("wait") or 5.0)
+    wait = _float_param(params, "wait", 5.0)
     max_chars = int(params.get("max_chars") or MAX_OUTPUT_CHARS)
 
     session, error = await _find_session(params, gns3_ctx)
@@ -347,12 +381,17 @@ async def console_read_handler(params: dict[str, Any], gns3_ctx: dict[str, Any])
 
 
 async def console_close_handler(params: dict[str, Any], gns3_ctx: dict[str, Any]) -> dict[str, Any]:
-    """Close the console session for a node (releases the device's VTY line)."""
+    """Close the console session for a node (releases the device's VTY line).
+
+    Resolution is identity-only (like _find_session): closing the session of
+    a stopped or crashed node by name must work, or its dead connection
+    lingers until the idle reaper collects it.
+    """
     manager = get_console_session_manager()
     user = gns3_ctx.get("jwt_username") or "unknown"
     closed = await manager.close(user, str(params.get("project_id") or ""), str(params.get("node_id") or ""))
     if not closed:
-        node = await _resolve_target(params, gns3_ctx)
+        node = await _resolve_node_identity(params, gns3_ctx)
         if "node_id" in node:
             closed = await manager.close(user, node["project_id"], node["node_id"])
     return {"status": "ok", "closed": closed}

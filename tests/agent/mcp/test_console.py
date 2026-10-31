@@ -61,7 +61,7 @@ async def test_find_session_by_names_finds_uuid_keyed_session(fresh_manager, mon
     'Error executing tool console_read' in live testing."""
     session = ConsoleSession(("alice", "p-uuid", "n-uuid"), dict(NODE))
     fresh_manager._sessions[("alice", "p-uuid", "n-uuid")] = session
-    monkeypatch.setattr(console, "_resolve_target_sync", lambda params, ctx: dict(NODE))
+    monkeypatch.setattr(console, "_resolve_node_identity_sync", lambda params, ctx: dict(NODE))
 
     found, error = await _find_session({"project_id": "my-proj", "node_id": "linux-1"}, {"jwt_username": "alice"})
     assert found is session
@@ -82,7 +82,7 @@ async def test_find_session_uuid_fast_path(fresh_manager):
 
 @pytest.mark.asyncio
 async def test_find_session_without_session_is_in_band_error(fresh_manager, monkeypatch):
-    monkeypatch.setattr(console, "_resolve_target_sync", lambda params, ctx: dict(NODE))
+    monkeypatch.setattr(console, "_resolve_node_identity_sync", lambda params, ctx: dict(NODE))
 
     found, error = await _find_session({"project_id": "my-proj", "node_id": "linux-1"}, {"jwt_username": "alice"})
     assert found is None
@@ -92,7 +92,9 @@ async def test_find_session_without_session_is_in_band_error(fresh_manager, monk
 
 @pytest.mark.asyncio
 async def test_find_session_node_error_passes_through(fresh_manager, monkeypatch):
-    monkeypatch.setattr(console, "_resolve_target_sync", lambda params, ctx: {"status": "failed", "error": "nope"})
+    monkeypatch.setattr(
+        console, "_resolve_node_identity_sync", lambda params, ctx: {"status": "failed", "error": "nope"}
+    )
 
     found, error = await _find_session({"project_id": "x", "node_id": "y"}, {})
     assert found is None
@@ -227,7 +229,7 @@ async def test_read_strips_sentinel_keeps_marker(fresh_manager, monkeypatch):
     session_info = _node_session_info(NODE, "gns3_linux_telnet")
     session = ConsoleSession(("alice", "p-uuid", "n-uuid"), session_info, conn_factory=lambda: conn)
     fresh_manager._sessions[("alice", "p-uuid", "n-uuid")] = session
-    monkeypatch.setattr(console, "_resolve_target_sync", lambda params, ctx: dict(NODE))
+    monkeypatch.setattr(console, "_resolve_node_identity_sync", lambda params, ctx: dict(NODE))
 
     result = await console_read_handler(
         {"project_id": "p", "node_id": "linux-1", "wait": 0.3}, {"jwt_username": "alice"}

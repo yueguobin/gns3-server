@@ -75,10 +75,16 @@ def resolve_locators(
         result = run(list_projects_handler, {})
         projects = _as_items(result, "projects")
         if projects is None:
-            return None, {"error": f"Could not resolve project '{project_ref}': {_as_error(result)}"}
+            return None, {
+                "status": "failed",
+                "error": f"Could not resolve project '{project_ref}': {_as_error(result)}",
+            }
         match = _match_by_name(projects, project_ref)
         if match is None:
-            return None, {"error": f"Project '{project_ref}' not found. Known projects: {_known_names(projects)}"}
+            return None, {
+                "status": "failed",
+                "error": f"Project '{project_ref}' not found. Known projects: {_known_names(projects)}",
+            }
         params["project_id"] = match["project_id"]
 
     node_ref = params.get("node_id")
@@ -86,10 +92,16 @@ def resolve_locators(
         result = run(get_nodes_handler, {"project_id": params["project_id"]})
         nodes = _as_items(result, "nodes")
         if nodes is None:
-            return None, {"error": f"Could not resolve node '{node_ref}': {_as_error(result)}"}
+            return None, {
+                "status": "failed",
+                "error": f"Could not resolve node '{node_ref}': {_as_error(result)}",
+            }
         match = _match_by_name(nodes, node_ref)
         if match is None:
-            return None, {"error": f"Node '{node_ref}' not found. Known nodes: {_known_names(nodes)}"}
+            return None, {
+                "status": "failed",
+                "error": f"Node '{node_ref}' not found. Known nodes: {_known_names(nodes)}",
+            }
         params["node_id"] = match["node_id"]
 
     return params, None
