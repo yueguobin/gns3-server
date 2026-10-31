@@ -51,7 +51,7 @@ from gns3server.agent.gns3_copilot.gns3_client import get_gns3_server_host
 # Import custom Netmiko device types for GNS3 emulation
 # This registers gns3_huawei_telnet_ce and other custom device types
 # NOTE: Must be imported BEFORE any Nornir operations to ensure device types are registered
-from gns3server.agent.gns3_copilot.utils import get_device_ports_from_topology
+from gns3server.agent.gns3_copilot.utils import get_device_ports_from_topology, reject_shell_console_hosts
 from gns3server.agent.gns3_copilot.utils.command_filter import (
     filter_forbidden_commands,
 )
@@ -541,6 +541,11 @@ class ExecuteMultipleDeviceConfigCommands(BaseTool):
                 project_id or "default",
                 missing_devices,
             )
+
+        # Linux shell consoles belong to the MCP console tools, not to the
+        # IOS-style config path (the helper's docstring explains what would
+        # happen otherwise).
+        reject_shell_console_hosts(hosts_data, use_instead="console_exec")
 
         return hosts_data
 

@@ -198,3 +198,37 @@ def get_device_ports_from_topology(
     except Exception as e:
         logger.error("Error getting device port information: %s", e)
         return {}
+
+
+def reject_shell_console_hosts(hosts_data: dict[str, dict[str, Any]], use_instead: str) -> None:
+    """
+    Mark Linux-shell console hosts (device_type gns3_linux_*) as errors in place.
+
+    The IOS-style batch tools would otherwise open the shell driver and type
+    their config/show lines into a Linux shell as commands: the driver has no
+    privilege ladder, so netmiko's enable() succeeds vacuously and the shell
+    answers "command not found" while nornir reports success. This is the
+    mirror of the MCP console tools' _reject_non_linux (which routes network
+    OS / VPCS nodes to the batch tools in the other direction).
+
+    Args:
+        hosts_data: inventory built by get_device_ports_from_topology()
+        use_instead: tool pointer for the error message (e.g. "console_exec")
+    """
+    for device_name, data in hosts_data.items():
+        if "error" in data:
+            continue
+        extras = data.get("connection_options", {}).get("netmiko", {}).get("extras", {})
+        device_type = extras.get("device_type", "")
+        if isinstance(device_type, str) and device_type.startswith("gns3_linux_"):
+            logger.error(
+                "Device '%s' is a Linux shell console (%s); rejected from the batch network-OS path",
+                device_name,
+                device_type,
+            )
+            hosts_data[device_name] = {
+                "error": (
+                    f"Device '{device_name}' is a Linux shell node (netmiko_device_type '{device_type}'); "
+                    f"this tool serves network OS consoles. Use {use_instead} for Linux shells."
+                )
+            }

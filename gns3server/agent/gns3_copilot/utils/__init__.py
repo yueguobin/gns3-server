@@ -38,7 +38,7 @@ Author: Yue Guobin (岳国宾)
 
 # Import main utility functions
 from .error_handler import format_error_message
-from .get_gns3_device_port import get_device_ports_from_topology
+from .get_gns3_device_port import get_device_ports_from_topology, reject_shell_console_hosts
 from .parse_tool_content import format_tool_response, normalize_tool_response, parse_tool_content
 
 # Dynamic version management
@@ -60,4 +60,5 @@ __all__ = [
     "get_device_ports_from_topology",
     "normalize_tool_response",
     "parse_tool_content",
+    "reject_shell_console_hosts",
 ]
