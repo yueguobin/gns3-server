@@ -306,6 +306,78 @@ async def test_connect_failure_after_retries_is_one_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_connect_auth_failure_fails_fast(monkeypatch):
+    """Rejected credentials must not burn the retry budget: each attempt
+    replays the full login dance (tens of seconds live) and can lock the
+    account. One attempt, error surfaced immediately."""
+    from netmiko.exceptions import NetmikoAuthenticationException
+
+    monkeypatch.setattr(console_session, "CONNECT_RETRY_DELAY", 5.0)  # a retry would blow the elapsed assert
+    attempts = []
+
+    def bad_password_factory():
+        attempts.append(1)
+        raise NetmikoAuthenticationException("Login failed: credentials rejected by the console")
+
+    session = ConsoleSession(("alice", "p1", "n1"), NODE_INFO, conn_factory=bad_password_factory)
+    start = time.monotonic()
+    with pytest.raises(ConsoleSessionError, match="authentication failed"):
+        await session._ensure_conn()
+    assert len(attempts) == 1
+    assert time.monotonic() - start < 1.0
+
+
+@pytest.mark.asyncio
+async def test_close_all_disconnects_outside_the_manager_lock():
+    """A hanging disconnect must not hold the registry lock: another user's
+    lookup proceeds while the disconnect drains (it can wait seconds on an
+    in-flight command's session lock)."""
+    released = asyncio.Event()
+
+    class SlowDisconnectConn(FakeConnection):
+        def disconnect(self):
+            released.wait(2)  # blocks the to_thread worker, not the loop
+
+    mgr = ConsoleSessionManager()
+    session = ConsoleSession(("alice", "p1", "n1"), NODE_INFO, conn_factory=SlowDisconnectConn)
+    await session.exec("uptime")  # establish the connection
+    mgr._sessions[("alice", "p1", "n1")] = session
+
+    closing = asyncio.create_task(mgr.close_all())
+    await asyncio.sleep(0.2)  # let close_all reach the hanging disconnect
+    assert await asyncio.wait_for(mgr.get("bob", "p1", "n1"), timeout=0.5) is None
+    released.set()
+    await asyncio.wait_for(closing, timeout=2.0)
+    assert session.closed
+
+
+@pytest.mark.asyncio
+async def test_identity_change_disconnects_outside_the_manager_lock():
+    """Same rule for the replacement path in get_or_open: closing the old
+    session's connection happens after the registry lock is released."""
+    released = asyncio.Event()
+
+    class SlowDisconnectConn(FakeConnection):
+        def disconnect(self):
+            released.wait(2)
+
+    mgr = ConsoleSessionManager()
+    session = ConsoleSession(("alice", "p1", "n1"), NODE_INFO, conn_factory=SlowDisconnectConn)
+    await session.exec("uptime")
+    mgr._sessions[("alice", "p1", "n1")] = session
+
+    switched = {**NODE_INFO, "device_type": "gns3_linux_ssh", "console": 5002}
+    replacing = asyncio.create_task(mgr.get_or_open("alice", "p1", "n1", switched))
+    await asyncio.sleep(0.2)  # let get_or_open reach the hanging disconnect
+    assert await asyncio.wait_for(mgr.get("bob", "p1", "n1"), timeout=0.5) is None
+    released.set()
+    replacement = await asyncio.wait_for(replacing, timeout=2.0)
+    assert replacement is not session and session.closed
+    assert session.close_reason == "console changed"
+    await mgr.close_all()
+
+
+@pytest.mark.asyncio
 async def test_manager_evicts_lru_at_capacity():
     mgr = ConsoleSessionManager(max_sessions=2)
     sessions = []

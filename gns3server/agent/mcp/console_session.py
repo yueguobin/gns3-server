@@ -109,6 +109,17 @@ class ConsoleSessionError(Exception):
     """Raised for session-level failures (connect, unsupported console, ...)."""
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    """Netmiko authentication failure (rejected credentials, or a login
+    prompt with no credentials configured). Imported lazily: this module
+    must stay importable without the AI-features extra."""
+    try:
+        from netmiko.exceptions import NetmikoAuthenticationException
+    except ImportError:
+        return False
+    return isinstance(exc, NetmikoAuthenticationException)
+
+
 class ConsoleSession:
     """One persistent console connection, self-reaping after an idle TTL."""
 
@@ -222,13 +233,18 @@ class ConsoleSession:
     async def _connect_with_retry(self, factory: Callable[[], Any]):
         """Open the connection, retrying a bounded number of times (QEMU
         serial bridges are single-client: right after a console switch the
-        first attempts are refused until the old client is released)."""
+        first attempts are refused until the old client is released).
+        Authentication failures are NOT retried: rejected credentials never
+        heal, and replaying the login dance only multiplies the wait (and
+        can lock the account)."""
         last_error: Exception | None = None
         for attempt in range(1, MAX_CONNECT_ATTEMPTS + 1):
             try:
                 self._conn = await asyncio.to_thread(factory)
                 return self._conn
             except Exception as e:
+                if _is_auth_error(e):
+                    raise ConsoleSessionError(f"Console authentication failed: {e}") from e
                 last_error = e
                 if attempt < MAX_CONNECT_ATTEMPTS:
                     log.debug(
@@ -335,48 +351,56 @@ class ConsoleSessionManager:
         ttl: float = DEFAULT_SESSION_TTL,
     ) -> ConsoleSession:
         key = (username, project_id, node_id)
-        async with self._lock:
-            session = self._sessions.get(key)
-            if session is not None and session.alive:
-                # The node's console can be rebuilt underneath a live session
-                # (console_type switch, node restart): reuse only when the
-                # console identity still matches, otherwise the cached
-                # connection points at a dead proxy/port.
-                if _console_identity(session.node_info) != _console_identity(node_info):
-                    log.info(
-                        "Console identity changed for %s; replacing session (was %s @ %s:%s)",
-                        key,
-                        session.node_info.get("device_type"),
-                        session.node_info.get("console_host"),
-                        session.node_info.get("console"),
-                    )
-                    del self._sessions[key]
-                    await session.close("console changed")
-                else:
-                    # Adopt the caller's ttl: the newest call expresses how
-                    # long this session should stay reaped-open.
-                    session.ttl = ttl
-                    session.touch()
-                    return session
-            # Evict stale entries, then LRU-evict if still at capacity. Busy
-            # sessions are never evicted — the caller's call is about to use
-            # one, and yanking a connection mid-command corrupts its result.
-            for stale_key in [k for k, s in self._sessions.items() if not s.alive]:
-                del self._sessions[stale_key]
-            while len(self._sessions) >= self.max_sessions:
-                idle_keys = [k for k, s in self._sessions.items() if not s.busy]
-                if not idle_keys:
-                    log.warning(
-                        "All %d console sessions are busy; exceeding the session limit instead of evicting one",
-                        len(self._sessions),
-                    )
-                    break
-                oldest = min(idle_keys, key=lambda k: self._sessions[k].last_activity)
-                evicted = self._sessions.pop(oldest)
-                await evicted.close("evicted (session limit)")
-            session = ConsoleSession(key, node_info, ttl=ttl)
-            self._sessions[key] = session
-            return session
+        # Sessions this call drops, closed AFTER the manager lock is
+        # released (same rule as close()): a disconnect can wait seconds on
+        # an in-flight command's session lock and on the socket, and none of
+        # that may block every other user's session lookup.
+        dropped: list[tuple[ConsoleSession, str]] = []
+        try:
+            async with self._lock:
+                session = self._sessions.get(key)
+                if session is not None and session.alive:
+                    # The node's console can be rebuilt underneath a live session
+                    # (console_type switch, node restart): reuse only when the
+                    # console identity still matches, otherwise the cached
+                    # connection points at a dead proxy/port.
+                    if _console_identity(session.node_info) != _console_identity(node_info):
+                        log.info(
+                            "Console identity changed for %s; replacing session (was %s @ %s:%s)",
+                            key,
+                            session.node_info.get("device_type"),
+                            session.node_info.get("console_host"),
+                            session.node_info.get("console"),
+                        )
+                        del self._sessions[key]
+                        dropped.append((session, "console changed"))
+                    else:
+                        # Adopt the caller's ttl: the newest call expresses how
+                        # long this session should stay reaped-open.
+                        session.ttl = ttl
+                        session.touch()
+                        return session
+                # Evict stale entries, then LRU-evict if still at capacity. Busy
+                # sessions are never evicted — the caller's call is about to use
+                # one, and yanking a connection mid-command corrupts its result.
+                for stale_key in [k for k, s in self._sessions.items() if not s.alive]:
+                    del self._sessions[stale_key]
+                while len(self._sessions) >= self.max_sessions:
+                    idle_keys = [k for k, s in self._sessions.items() if not s.busy]
+                    if not idle_keys:
+                        log.warning(
+                            "All %d console sessions are busy; exceeding the session limit instead of evicting one",
+                            len(self._sessions),
+                        )
+                        break
+                    oldest = min(idle_keys, key=lambda k: self._sessions[k].last_activity)
+                    dropped.append((self._sessions.pop(oldest), "evicted (session limit)"))
+                session = ConsoleSession(key, node_info, ttl=ttl)
+                self._sessions[key] = session
+                return session
+        finally:
+            for dropped_session, reason in dropped:
+                await dropped_session.close(reason)
 
     async def get(self, username: str, project_id: str, node_id: str) -> ConsoleSession | None:
         async with self._lock:
@@ -399,8 +423,10 @@ class ConsoleSessionManager:
         async with self._lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
-            for session in sessions:
-                await session.close("server shutdown")
+        # Close outside the manager lock (same rule as close()): a slow
+        # disconnect must not block other users' session lookups.
+        for session in sessions:
+            await session.close("server shutdown")
 
 
 _console_session_manager: ConsoleSessionManager | None = None
