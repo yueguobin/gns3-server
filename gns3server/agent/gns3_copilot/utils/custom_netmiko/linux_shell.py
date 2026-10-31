@@ -96,6 +96,10 @@ PS1_SENTINEL = "__MCP_PROMPT__"
 MARKER_EXPECT = r"__MCP_DONE_(?:\d+)__"
 MARKER_RE = re.compile(r"__MCP_DONE_(\d+)__")
 MARKER_TEMPLATE = "echo __MCP_DONE_$?__"
+# How far back the incremental marker scan reaches each pass: a marker split
+# across two read chunks starts within this many bytes of the previously
+# scanned position (16 is the longest marker, "3-digit exit code"; padded).
+MARKER_SCAN_OVERLAP = 32
 
 # Environment normalization applied once after login: dumb terminal (some
 # full-screen TUIs degrade to linear output), no pager, and our sentinel PS1
@@ -250,12 +254,7 @@ class LinuxShellBase(BaseConnection):
         command_string: str,
         expect_string: str | None = None,
         read_timeout: float | None = None,
-        delay_factor: float | None = None,
-        max_loops: int | None = None,
         strip_prompt: bool = True,
-        strip_command: bool = True,
-        normalize: bool = False,
-        use_textfsm: bool = False,
     ) -> str:
         """
         Send a command and read until its completion marker.
@@ -264,7 +263,8 @@ class LinuxShellBase(BaseConnection):
         is signalled by the marker (with the exit code embedded) rather than
         by guessing a prompt pattern. The exit code is parsed into
         self.last_exit_code; the echoed wrapped command and the marker line
-        are stripped from the returned output.
+        are stripped from the returned output (strip_prompt=False keeps
+        them).
 
         The read loop is owned here rather than delegated to netmiko's
         read_until_pattern: on timeout that helper RAISES and discards the
@@ -314,14 +314,21 @@ class LinuxShellBase(BaseConnection):
         # to the whole window; the drain above keeps that path rare.
         search_from = 0
         echo_pattern = _echo_strip_pattern(wrapped)
+        # Incremental scan: each pass searches from where the previous one
+        # stopped (minus overlap for a marker straddling the chunk boundary)
+        # instead of re-slicing and re-searching the whole window every
+        # 50ms — that was quadratic in the output of a chatty command.
+        marker_pattern = re.compile(expect_string)
+        scan_pos = 0
         while True:
             output += self.read_channel() or ""
             if search_from == 0:
                 echo_match = echo_pattern.search(output)
                 if echo_match:
                     search_from = echo_match.end()
-            if re.search(expect_string, output[search_from:]):
+            if marker_pattern.search(output, max(search_from, scan_pos - MARKER_SCAN_OVERLAP)):
                 break
+            scan_pos = len(output)
             if deadline is not None and time.monotonic() >= deadline:
                 self.last_timed_out = True
                 logger.debug("Command %r not complete after %.1fs (still running)", command_string, read_timeout)

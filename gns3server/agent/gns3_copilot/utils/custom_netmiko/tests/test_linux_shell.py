@@ -305,6 +305,16 @@ class TestLinuxTelnetSendCommand(unittest.TestCase):
         self.assertNotIn("ONE_$?__", output)
         self.assertIn("127.0.0.1/8", output)
 
+    def test_marker_split_across_reads(self):
+        """A completion marker straddling two read chunks must still end the
+        read with its exit code — the incremental scan rescans enough tail
+        to catch it (regression guard for the O(n²) fix)."""
+        instance = self._make_connected(["", "true\r\n__MCP_D", "ONE_7__\r\n__MCP_PROMPT__ "])
+        output = instance.send_command("true")
+        self.assertEqual(instance.last_exit_code, 7)
+        self.assertFalse(instance.last_timed_out)
+        self.assertNotIn("__MCP_DONE_", output)
+
 
 class TestLinuxTelnetNoOps(unittest.TestCase):
     """A shell console has no netmiko config-mode or paging concepts."""
