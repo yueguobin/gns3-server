@@ -213,16 +213,16 @@ class VPCSTelnet(BaseConnection):
         """
         Send a command to VPCS and return the output.
 
-        This method exactly matches the telnetlib3 implementation:
         1. Encode command as ASCII and append newline
-        2. Write command+newline as single byte sequence
-        3. Sleep for 5 seconds
-        4. Wait for prompt pattern and capture output
-        5. Return captured output
+        2. Drain stale output from a previous command on this cached session
+        3. Write command+newline as a single byte sequence
+        4. Read until the prompt pattern appears; on timeout return the
+           partial output collected so far instead of discarding it
 
         Args:
             command_string: The command to send
-            expect_string: Pattern to expect (default: VPCS prompt r"PC\\d+>")
+            expect_string: Pattern to expect (default: the prompt pattern
+                built in __init__ from pcname)
             read_timeout: Timeout for reading output
             delay_factor: Not used (kept for signature compatibility)
             max_loops: Not used (kept for signature compatibility)
@@ -251,18 +251,27 @@ class VPCSTelnet(BaseConnection):
 
         logger.debug("VPCS: Sent command '%s' (%d bytes)", command_string, len(cmd_bytes))
 
-        # Wait for the prompt pattern directly — the prompt appears as soon as
-        # the device finishes the command, so no fixed sleep is needed; the
-        # read timeout is the backstop (previously this slept a flat 5s,
-        # adding 5s to every command in interactive use).
-        try:
-            output = self.read_until_pattern(pattern=expect_string, read_timeout=read_timeout or 10)
-            logger.debug("VPCS: read_until_pattern returned %d chars", len(output))
-        except Exception as e:
-            # If pattern not found, try to read whatever is available
-            logger.debug("VPCS: Pattern not found, reading available output: %s", e)
-            output = self.read_channel()
-            logger.debug("VPCS: read_channel returned %d chars", len(output) if output else 0)
+        # The read loop is owned here rather than delegated to netmiko's
+        # read_until_pattern: on timeout that helper RAISES and discards the
+        # output it has already read, so a command slower than the timeout
+        # (e.g. a ping whose output lands after ARP resolution) would return
+        # an empty string that looks like success. The prompt appears as soon
+        # as the device finishes the command; on timeout the partial output is
+        # returned instead (the timeout stays the backstop — no fixed sleep).
+        timeout = read_timeout or 10
+        deadline = time.monotonic() + timeout
+        output = ""
+        while True:
+            chunk = self.read_channel() or ""
+            if chunk:
+                output += chunk
+                if re.search(expect_string, output):
+                    logger.debug("VPCS: prompt detected after %d chars", len(output))
+                    break
+            if time.monotonic() >= deadline:
+                logger.debug("VPCS: prompt not seen within %.1fs; returning partial output", timeout)
+                break
+            time.sleep(0.05)
 
         if isinstance(output, bytes):
             output = output.decode("utf-8", errors="replace")
@@ -296,12 +305,12 @@ class VPCSTelnet(BaseConnection):
         """
         Send command using timing-based delay.
 
-        For VPCS, timing-based and pattern-based methods are identical,
-        both use the telnetlib3 implementation pattern with fixed 5s delay.
+        For VPCS, timing-based and pattern-based methods are identical —
+        both delegate to send_command's prompt-pattern read loop.
 
         Args:
             command_string: The command to send
-            delay_factor: Not used (fixed 5s delay for VPCS)
+            delay_factor: Not used (the read loop is deadline-based)
             max_loops: Not used (kept for signature compatibility)
             strip_prompt: Remove prompt from output
             strip_command: Remove command from output
