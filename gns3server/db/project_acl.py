@@ -74,10 +74,17 @@ async def _has_user_ace(db_session: AsyncSession, path: str, user_id: UUID) -> b
 
 
 async def ensure_project_owner_ace(
-    db_session: AsyncSession, project_id: Union[str, UUID], created_by: Optional[str]
+    db_session: AsyncSession,
+    project_id: Union[str, UUID],
+    created_by: Optional[str],
+    role_id: Optional[UUID] = None,
 ) -> bool:
     """
     Create the owner ACE of a project when it is missing.
+
+    ``role_id`` overrides the role carried by the ACE: it is used when a
+    project is distributed to another user, where the owner ACE must carry a
+    reduced role instead of the role that let the caller create projects.
 
     Returns True when an ACE was created. Projects without a resolvable owner
     (created_by is None or the user no longer exists) get no ACE and stay
@@ -99,7 +106,8 @@ async def ensure_project_owner_ace(
         return False
 
     rbac_repo = RbacRepository(db_session)
-    role_id = await _owner_role_id(rbac_repo, user_id)
+    if role_id is None:
+        role_id = await _owner_role_id(rbac_repo, user_id)
     if role_id is None:
         log.error(f"Could not determine a role for the owner '{created_by}' of project '{project_id}'")
         return False

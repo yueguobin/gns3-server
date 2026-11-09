@@ -16,6 +16,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI, status
@@ -34,6 +35,7 @@ from gns3server.schemas.controller.pools import ResourceCreate, ResourcePoolCrea
 from gns3server.schemas.controller.rbac import ACECreate, ACEUpdate
 from gns3server.services import auth_service
 from gns3server.utils import zipfile_zstd
+from tests.utils import AsyncioMagicMock
 
 pytestmark = pytest.mark.asyncio
 
@@ -541,6 +543,267 @@ class TestProjectOwnership:
                     app.url_path_for("import_project", project_id=project_id), content=f.read()
                 )
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+class TestProjectDistribution:
+    """
+    Distributing a project (duplicate with target_user) creates a copy owned
+    by the target user. The owner ACE of the copy carries a reduced role (the
+    built-in "Lab member" role by default), so the recipient can use the lab
+    but not modify its topology, while projects they create themselves keep
+    their full role. The user-level owner ACE replaces group privileges, so a
+    broad group grant cannot widen the copy. The copy is personal: it does not
+    inherit the resource pools of the source, and it ships with a
+    "template state" snapshot the recipient can restore on their own.
+    """
+
+    LAB_MEMBER_PRIVILEGES = {
+        "Project.Allocate",
+        "Project.Audit",
+        "Snapshot.Audit",
+        "Snapshot.Restore",
+        "Node.Audit",
+        "Node.Console",
+        "Node.PowerMgmt",
+        "Link.Audit",
+        "Link.Capture",
+        "Drawing.Audit",
+    }
+
+    @staticmethod
+    async def _distribute(app: FastAPI, teacher: User, student_username: str) -> tuple[str, str]:
+        """
+        Create a project as the teacher and distribute it to the student.
+        Returns (source_id, copy_id).
+        """
+
+        async with TestProjectOwnership._client_for(app, teacher) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            source_id = response.json()["project_id"]
+
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": f"lab-copy-{uuid.uuid4()}", "target_user": student_username},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            return source_id, response.json()["project_id"]
+
+    async def test_distribute_project_to_user(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, copy_id = await self._distribute(app, test_user, student.username)
+
+        # the owner ACE of the copy carries the built-in reduced role
+        rbac_repo = RbacRepository(db_session)
+        ace = await rbac_repo.get_ace_by_path(f"/projects/{copy_id}")
+        assert ace is not None
+        assert str(ace.user_id) == str(student.user_id)
+        lab_member_role = await rbac_repo.get_role_by_name("Lab member")
+        assert str(ace.role_id) == str(lab_member_role.role_id)
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.get(app.url_path_for("get_projects"))
+            assert response.status_code == status.HTTP_200_OK
+            assert copy_id in {p["project_id"] for p in response.json()}
+
+            response = await student_client.get(app.url_path_for("get_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["created_by"] == student.username
+
+            # the copy ships with a snapshot of the template state
+            response = await student_client.get(app.url_path_for("get_snapshots", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert "template state" in {s["name"] for s in response.json()}
+
+        # the copy is personal: the teacher has no access to it
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.get(app.url_path_for("get_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    async def test_distribution_freezes_topology_for_recipient(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, copy_id = await self._distribute(app, test_user, student.username)
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            # frozen: the reduced role has no Project.Modify / Node.Allocate.
+            # (Project.Allocate is part of the role: opening the project and
+            # deleting one's own copy are allowed)
+            response = await student_client.put(
+                app.url_path_for("update_project", project_id=copy_id), json={"name": "hacked"}
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            # usable: opening the project is how the recipient reaches the lab
+            response = await student_client.post(app.url_path_for("open_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+
+            response = await student_client.post(
+                app.url_path_for("create_node", project_id=copy_id),
+                json={"name": "extra", "node_type": "vpcs", "compute_id": "local", "properties": {}},
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            # the effective privilege view shows exactly the reduced set
+            response = await student_client.get(
+                app.url_path_for("get_logged_in_user_privileges_on_project", project_id=copy_id)
+            )
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["is_superadmin"] is False
+            assert set(response.json()["privileges"]) == self.LAB_MEMBER_PRIVILEGES
+
+            # usable: the recipient can reset the lab on their own
+            response = await student_client.get(app.url_path_for("get_snapshots", project_id=copy_id))
+            snapshot_id = next(s["snapshot_id"] for s in response.json() if s["name"] == "template state")
+            response = await student_client.post(
+                app.url_path_for("restore_snapshot", project_id=copy_id, snapshot_id=snapshot_id)
+            )
+            assert response.status_code == status.HTTP_200_OK
+
+        # the teacher's own project keeps the full role
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.put(
+                app.url_path_for("update_project", project_id=source_id), json={"name": "renamed-lab"}
+            )
+            assert response.status_code == status.HTTP_200_OK
+
+    async def test_distribution_shield_against_group_grants(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        # a broad group grant, as in a shared deployment: the Users group gets
+        # the full "User" role on every project
+        rbac_repo = RbacRepository(db_session)
+        group_id = (await UsersRepository(db_session).get_user_group_by_name("Users")).user_group_id
+        role_id = (await rbac_repo.get_role_by_name("User")).role_id
+        await rbac_repo.create_ace(
+            ACECreate(path="/projects", ace_type="group", propagate=True, group_id=str(group_id), role_id=str(role_id))
+        )
+
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        _, copy_id = await self._distribute(app, test_user, student.username)
+
+        # the user-level owner ACE replaces the group privileges: the copy
+        # stays frozen even though the group could modify every other project
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.put(
+                app.url_path_for("update_project", project_id=copy_id), json={"name": "hacked"}
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            response = await student_client.get(
+                app.url_path_for("get_logged_in_user_privileges_on_project", project_id=copy_id)
+            )
+            assert set(response.json()["privileges"]) == self.LAB_MEMBER_PRIVILEGES
+
+    async def test_distribution_to_missing_target_or_role(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "copy", "target_user": "missing-user"},
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "copy", "target_user": student.username, "owner_role": "No such role"},
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_distribution_copy_does_not_inherit_resource_pools(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, copy_id = await self._distribute(app, test_user, student.username)
+
+        # the source belongs to a pool
+        pools_repo = ResourcePoolsRepository(db_session)
+        pool = await pools_repo.create_resource_pool(ResourcePoolCreate(name=f"pool-{uuid.uuid4().hex[:8]}"))
+        resource = await pools_repo.create_resource(
+            ResourceCreate(resource_id=uuid.UUID(source_id), resource_type="project", name="lab")
+        )
+        await pools_repo.add_resource_to_pool(pool.resource_pool_id, resource)
+
+        # a distributed copy is personal: no pool membership. A plain
+        # duplicate keeps inheriting them.
+        assert await pools_repo.get_resource_memberships(uuid.UUID(copy_id)) == []
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": f"plain-copy-{uuid.uuid4()}"},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            plain_copy_id = response.json()["project_id"]
+        memberships = await pools_repo.get_resource_memberships(uuid.UUID(plain_copy_id))
+        assert {m.resource_pool_id for m in memberships} == {pool.resource_pool_id}
+
+    async def test_node_level_freeze_on_distributed_copy(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User, compute
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        _, copy_id = await self._distribute(app, test_user, student.username)
+
+        # the node is part of the lab: the recipient opens the copy, then the
+        # superadmin (who bypasses the privilege checks) adds the node so the
+        # duplication itself stays on the fast path
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.post(app.url_path_for("open_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+
+        admin = await UsersRepository(db_session).get_user_by_username("admin")
+        async with TestProjectOwnership._client_for(app, admin) as admin_client:
+            compute_response = MagicMock()
+            compute_response.json = {"console": 2048}
+            compute.post = AsyncioMagicMock(return_value=compute_response)
+            response = await admin_client.post(
+                app.url_path_for("create_node", project_id=copy_id),
+                json={
+                    "name": "r1",
+                    "node_type": "vpcs",
+                    "compute_id": "example.com",
+                    "properties": {},
+                },
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            node_id = response.json()["node_id"]
+
+        compute.post = AsyncioMagicMock()
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.get(app.url_path_for("get_node", project_id=copy_id, node_id=node_id))
+            assert response.status_code == status.HTTP_200_OK
+
+            # frozen: the reduced role has no Node.Modify
+            response = await student_client.put(
+                app.url_path_for("update_node", project_id=copy_id, node_id=node_id), json={"name": "hacked"}
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            # usable: starting the node is a power operation, not a topology edit
+            response = await student_client.post(
+                app.url_path_for("start_node", project_id=copy_id, node_id=node_id), json={}
+            )
+            assert response.status_code == status.HTTP_200_OK
 
 
 # class TestProjectsWithRbac:

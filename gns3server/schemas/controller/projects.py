@@ -83,6 +83,10 @@ class ProjectDuplicate(ProjectBase):
 
     name: str
     reset_mac_addresses: Optional[bool] = Field(False, description="Reset MAC addresses for this project")
+    target_user: Optional[str] = Field(None, description="Distribute the copy to this user instead of keeping it")
+    owner_role: Optional[str] = Field(
+        None, description="Role of the owner ACE put on a distributed copy (default: the built-in Lab member role)"
+    )
 
 
 class ProjectUpdate(PartialUpdateModel, ProjectBase):

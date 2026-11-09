@@ -569,6 +569,12 @@ class TestControllerProjectRoutes:
         # the duplicated project is owned by the user who duplicated it
         assert response.json()["created_by"] == "admin"
 
+        # a plain duplicate is not a distribution: no "template state" snapshot
+        new_project_id = response.json()["project_id"]
+        response = await client.get(app.url_path_for("get_snapshots", project_id=new_project_id))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == []
+
     async def test_lock_unlock(self, app: FastAPI, client: AsyncClient, project: Project, compute: Compute) -> None:
 
         # add a drawing and node to the project
