@@ -222,5 +222,25 @@ def add_privileges_to_default_roles(target, connection, **kw):
 
     add_privileges_to_role(target, connection, "ACL manager", acl_manager_privileges)
 
+    # add required privileges to the "Lab member" role: users who received a
+    # distributed lab project can use it (open it, console, power, capture,
+    # restore a snapshot) but cannot modify the lab topology. Project.Allocate
+    # is needed to open the project and lets the recipient delete their copy;
+    # creating other projects is ruled by the collection ACE on /projects.
+    lab_member_privileges = (
+        "Project.Allocate",
+        "Project.Audit",
+        "Snapshot.Audit",
+        "Snapshot.Restore",
+        "Node.Audit",
+        "Node.Console",
+        "Node.PowerMgmt",
+        "Link.Audit",
+        "Link.Capture",
+        "Drawing.Audit",
+    )
+
+    add_privileges_to_role(target, connection, "Lab member", lab_member_privileges)
+
     connection.commit()
     log.debug("Privileges have been added to the default roles in the database")

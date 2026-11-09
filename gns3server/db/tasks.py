@@ -144,6 +144,9 @@ async def connect_to_db(app: FastAPI) -> None:
                         from gns3server.db_migrations.versions.a6c8e1b2d490_add_second_qemu_cdrom import (
                             upgrade as upgrade_cdrom,
                         )
+                        from gns3server.db_migrations.versions.a7c2e9f4b8d1_add_lab_member_role import (
+                            upgrade as upgrade_lab_member_role,
+                        )
                         from gns3server.db_migrations.versions.b5f3a8c1d902_restrict_default_projects_ace_scope import (
                             upgrade as upgrade_projects_ace_scope,
                         )
@@ -174,6 +177,7 @@ async def connect_to_db(app: FastAPI) -> None:
                             upgrade_projects_ace_scope()
                             upgrade_notification_privilege()
                             upgrade_user_preferences()
+                            upgrade_lab_member_role()
 
                     await conn.run_sync(upgrade_inventory)
                     await conn.run_sync(run_stamp, alembic_cfg)

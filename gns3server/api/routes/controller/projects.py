@@ -70,6 +70,7 @@ from gns3server.db.project_acl import ensure_project_owner_ace
 from gns3server.db.repositories.pools import ResourcePoolsRepository
 from gns3server.db.repositories.rbac import RbacRepository
 from gns3server.db.repositories.templates import TemplatesRepository
+from gns3server.db.repositories.users import UsersRepository
 from gns3server.services.templates import TemplatesService
 from gns3server.utils.asyncio import aiozipstream
 from gns3server.utils.path import is_safe_path
@@ -91,6 +92,11 @@ responses: dict[int | str, dict[str, Any]] = {
 }
 
 router = APIRouter(responses=responses)
+
+# Role put on the owner ACE of a distributed copy, and name of the snapshot
+# shipped with the copy so the recipient can reset the lab on their own.
+DISTRIBUTION_DEFAULT_ROLE = "Lab member"
+TEMPLATE_SNAPSHOT_NAME = "template state"
 
 
 def dep_project(project_id: UUID) -> Project:
@@ -912,7 +918,10 @@ async def import_project(
     "/{project_id}/duplicate",
     status_code=status.HTTP_201_CREATED,
     response_model=schemas.Project,
-    responses={**responses, 409: {"model": schemas.ErrorMessage, "description": "Could not duplicate project"}},
+    responses={
+        **responses,
+        409: {"model": schemas.ErrorMessage, "description": "Could not duplicate project"},
+    },
     dependencies=[Depends(has_privilege("Project.Audit"))],
 )
 async def duplicate_project(
@@ -924,10 +933,30 @@ async def duplicate_project(
     db_session: AsyncSession = Depends(get_db_session),
 ) -> schemas.Project:
     """
-    Duplicate a project.
+    Duplicate a project, or distribute it to another user by setting
+    ``target_user``: the copy is then owned by that user, its owner ACE
+    carries a reduced role (``owner_role``, the built-in "Lab member" role by
+    default) and it ships with a snapshot of the template state.
 
-    Required privilege: Project.Audit
+    Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
     """
+
+    # A distribution duplicates the project on behalf of another user: resolve
+    # the target and the role of its owner ACE before doing any work.
+    target_user = None
+    owner_role_id = None
+    if project_data.target_user:
+        target_user = await UsersRepository(db_session).get_user_by_username(project_data.target_user)
+        if target_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Target user '{project_data.target_user}' does not exist",
+            )
+        role_name = project_data.owner_role or DISTRIBUTION_DEFAULT_ROLE
+        role = await rbac_repo.get_role_by_name(role_name)
+        if role is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Role '{role_name}' does not exist")
+        owner_role_id = role.role_id
 
     pool_memberships = await pools_repo.get_resource_memberships(project.id)
 
@@ -952,19 +981,35 @@ async def duplicate_project(
     new_project = await project.duplicate(
         name=project_data.name,
         reset_mac_addresses=reset_mac_addresses,
-        user=current_user.username,
+        user=target_user.username if target_user else current_user.username,
     )
-    # The duplicated project is owned by the user who duplicated it.
-    await ensure_project_owner_ace(db_session, new_project.id, new_project.created_by)
+    # The duplicated project is owned by the user who duplicated it. A
+    # distributed copy is owned by the target user, with the reduced role.
+    await ensure_project_owner_ace(db_session, new_project.id, new_project.created_by, role_id=owner_role_id)
 
-    # Add the new project in the same resource pools if the duplicated project belongs to any
-    if pool_memberships:
+    # Add the new project in the same resource pools if the duplicated project belongs to any.
+    # A distributed copy is personal: it does not inherit the pools.
+    if target_user is None and pool_memberships:
         resource_create = schemas.ResourceCreate(
             resource_id=new_project.id, resource_type="project", name=new_project.name
         )
         resource = await pools_repo.create_resource(resource_create)
         for pool in pool_memberships:
             await pools_repo.add_resource_to_pool(pool.resource_pool_id, resource)
+
+    if target_user is not None:
+        # Ship the copy with a snapshot of the template state so the recipient
+        # can reset the lab to its initial state (Snapshot.Restore). Snapshots
+        # of the source project are already part of the copy.
+        if TEMPLATE_SNAPSHOT_NAME not in [snapshot.name for snapshot in new_project.snapshots.values()]:
+            reopen = new_project.status == "closed"
+            if reopen:
+                await new_project.open()
+            try:
+                await new_project.snapshot(TEMPLATE_SNAPSHOT_NAME)
+            finally:
+                if reopen:
+                    await new_project.close()
 
     return new_project.asdict()
 
