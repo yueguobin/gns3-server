@@ -37,7 +37,7 @@ from .templates import (
     VMwareTemplate,
     VPCSTemplate,
 )
-from .users import User, UserGroup
+from .users import User, UserGroup, UserPreferences
 
 __all__ = [
     "ACE",
@@ -61,6 +61,7 @@ __all__ = [
     "Template",
     "User",
     "UserGroup",
+    "UserPreferences",
     "VMwareTemplate",
     "VPCSTemplate",
     "VirtualBoxTemplate",

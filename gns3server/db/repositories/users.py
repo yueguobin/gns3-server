@@ -16,11 +16,12 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
-from typing import List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast
 from uuid import UUID
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -172,6 +173,52 @@ class UsersRepository(BaseRepository):
         user.updated_at = updated_at
         await self._db_session.commit()
         return user
+
+    async def get_user_preferences(self, user_id: UUID) -> Optional[models.UserPreferences]:
+        """
+        Get the preferences document of a user, or None if never saved.
+        """
+
+        query = select(models.UserPreferences).where(models.UserPreferences.user_id == user_id)
+        result = await self._db_session.execute(query)
+        return result.scalars().first()
+
+    async def save_user_preferences(self, user_id: UUID, preferences: Dict[str, Any]) -> models.UserPreferences:
+        """
+        Create or replace the preferences document of a user (last write wins).
+
+        Concurrent first saves (e.g. two tabs of the same user) race on the
+        single-row insert: the loser falls back to updating the winning row.
+        """
+
+        db_prefs = await self.get_user_preferences(user_id)
+        if db_prefs is None:
+            db_prefs = models.UserPreferences(user_id=user_id, preferences=preferences)
+            self._db_session.add(db_prefs)
+            try:
+                await self._db_session.commit()
+            except IntegrityError:
+                await self._db_session.rollback()
+                db_prefs = await self.get_user_preferences(user_id)
+                if db_prefs is None:
+                    raise
+                db_prefs.preferences = preferences
+                await self._db_session.commit()
+        else:
+            db_prefs.preferences = preferences
+            await self._db_session.commit()
+        await self._db_session.refresh(db_prefs)
+        return db_prefs
+
+    async def delete_user_preferences(self, user_id: UUID) -> bool:
+        """
+        Delete the preferences document of a user.
+        """
+
+        query = delete(models.UserPreferences).where(models.UserPreferences.user_id == user_id)
+        result = await self._db_session.execute(query)
+        await self._db_session.commit()
+        return cast(CursorResult, result).rowcount > 0
 
     async def get_user_memberships(self, user_id: UUID) -> List[models.UserGroup]:
         """

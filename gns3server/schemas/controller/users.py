@@ -15,7 +15,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
@@ -82,6 +82,19 @@ class UserPrivileges(BaseModel):
 
     is_superadmin: bool
     privileges: List[str]
+
+
+class UserPreferences(BaseModel):
+    """
+    Preferences document of a user: an arbitrary JSON object owned by the client
+    (e.g. the web UI keeps its per-user settings there so they follow the user
+    across machines). The server stores it as-is and does not interpret its
+    contents. Clients are expected to carry their own schema version inside the
+    document and must not store credentials there.
+    """
+
+    preferences: Dict[str, Any] = Field(default_factory=dict)
+    updated_at: Optional[datetime] = None
 
 
 class UserGroupBase(BaseModel):
