@@ -84,6 +84,7 @@ from .controller.users import (
     UserGroup,
     UserGroupCreate,
     UserGroupUpdate,
+    UserPreferences,
     UserPrivileges,
     UserUpdate,
 )
@@ -400,6 +401,7 @@ __all__ = [
     "UserGroup",
     "UserGroupCreate",
     "UserGroupUpdate",
+    "UserPreferences",
     "UserPrivileges",
     "UserUpdate",
     "VMware",

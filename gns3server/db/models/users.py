@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Table, event
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Table, event, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from gns3server.config import Config
@@ -93,3 +93,17 @@ def create_default_user_groups(target, connection, **kw):
     connection.execute(stmt)
     connection.commit()
     log.debug("The default user groups have been created in the database")
+
+
+class UserPreferences(BaseTable):
+    """
+    Arbitrary JSON document stored per user, owned by the client (e.g. the web UI
+    keeps its per-user settings there so they follow the user across machines).
+    The server stores the document as-is and does not interpret its contents.
+    """
+
+    __tablename__ = "user_preferences"
+
+    user_id = Column(GUID, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
+    # Mapped style so type checkers see `dict` instead of `Column[dict]`
+    preferences: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default=text("'{}'"))

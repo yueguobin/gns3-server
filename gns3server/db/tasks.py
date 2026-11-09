@@ -153,6 +153,9 @@ async def connect_to_db(app: FastAPI) -> None:
                         from gns3server.db_migrations.versions.c8d4b6e2f913_add_notification_audit_privilege import (
                             upgrade as upgrade_notification_privilege,
                         )
+                        from gns3server.db_migrations.versions.d4f1b8c2a6e3_add_user_preferences_table import (
+                            upgrade as upgrade_user_preferences,
+                        )
                         from gns3server.db_migrations.versions.d9e8a2b7c401_image_inventory_reconciliation import (
                             upgrade,
                         )
@@ -170,6 +173,7 @@ async def connect_to_db(app: FastAPI) -> None:
                             # ... and apply the later changes on top of the seed
                             upgrade_projects_ace_scope()
                             upgrade_notification_privilege()
+                            upgrade_user_preferences()
 
                     await conn.run_sync(upgrade_inventory)
                     await conn.run_sync(run_stamp, alembic_cfg)

@@ -20,10 +20,10 @@ API routes for users.
 """
 
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 import gns3server.db.models as models
@@ -46,6 +46,10 @@ from .dependencies.rbac import has_privilege
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# The preferences document is client-controlled storage: cap it so a single
+# user cannot grow the controller database without bound.
+MAX_PREFERENCES_SIZE_BYTES = 256 * 1024
 
 
 @router.post("/login", response_model=schemas.Token)
@@ -189,6 +193,71 @@ async def get_logged_in_user_privileges(
 
     privilege_names = await rbac_repo.get_user_privileges(current_user.user_id)
     return schemas.UserPrivileges(is_superadmin=False, privileges=sorted(privilege_names))
+
+
+@router.get("/me/preferences", response_model=schemas.UserPreferences)
+async def get_logged_in_user_preferences(
+    current_user: schemas.User = Depends(get_current_active_user),
+    users_repo: UsersRepository = Depends(get_repository(UsersRepository)),
+) -> schemas.UserPreferences:
+    """
+    Get the preferences document of the current user.
+
+    The document is an arbitrary JSON object owned by the client (e.g. the web UI
+    stores its per-user settings there so they follow the user across machines).
+    The server stores it as-is and does not interpret its contents. Returns an
+    empty object when no preferences have been saved yet.
+
+    Example: curl -X GET http://host:port/v3/access/users/me/preferences -H "Authorization: Bearer <token>"
+    """
+
+    db_prefs = await users_repo.get_user_preferences(current_user.user_id)
+    if db_prefs is None:
+        return schemas.UserPreferences()
+    return schemas.UserPreferences(preferences=db_prefs.preferences, updated_at=db_prefs.updated_at)
+
+
+@router.put("/me/preferences", response_model=schemas.UserPreferences)
+async def update_logged_in_user_preferences(
+    request: Request,
+    current_user: schemas.User = Depends(get_current_active_user),
+    users_repo: UsersRepository = Depends(get_repository(UsersRepository)),
+    preferences: Dict[str, Any] = Body(...),
+) -> schemas.UserPreferences:
+    """
+    Replace the preferences document of the current user.
+
+    The request body is the document itself (a JSON object) and replaces any
+    previously saved document as a whole (last write wins). Clients should keep
+    the document small (it is capped at 256 KiB) and carry their own schema
+    version inside it. Credentials must not be stored there.
+
+    Example: curl -X PUT http://host:port/v3/access/users/me/preferences -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"version": 1, "theme": "dark"}'
+    """
+
+    body = await request.body()
+    if len(body) > MAX_PREFERENCES_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Preferences document is too large (maximum {MAX_PREFERENCES_SIZE_BYTES} bytes)",
+        )
+
+    db_prefs = await users_repo.save_user_preferences(current_user.user_id, preferences)
+    return schemas.UserPreferences(preferences=db_prefs.preferences, updated_at=db_prefs.updated_at)
+
+
+@router.delete("/me/preferences", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_logged_in_user_preferences(
+    current_user: schemas.User = Depends(get_current_active_user),
+    users_repo: UsersRepository = Depends(get_repository(UsersRepository)),
+) -> None:
+    """
+    Reset the preferences document of the current user.
+
+    Example: curl -X DELETE http://host:port/v3/access/users/me/preferences -H "Authorization: Bearer <token>"
+    """
+
+    await users_repo.delete_user_preferences(current_user.user_id)
 
 
 @router.get("", response_model=List[schemas.User], dependencies=[Depends(has_privilege("User.Audit"))])
