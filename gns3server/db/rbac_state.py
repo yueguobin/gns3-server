@@ -36,6 +36,10 @@ The evaluation methods replicate the semantics of the previous
 database-backed implementation, quirks included (path reverse traversal,
 deny raising PermissionError, pool checks with the "/pool" prefix, group
 ACEs in natural order while user ACEs are sorted by descending path).
+One semantic is stronger here: a user-level ACE covering a path decides
+the check alone, whatever role it carries, so a group grant can never
+widen a reduced user-level role (this is what freezes a distributed
+project copy for its recipient).
 """
 
 import logging
@@ -219,6 +223,15 @@ class RbacState:
         ]
         return sorted(aces, key=lambda ace: ace.path, reverse=True)
 
+    def _all_user_aces(self, user_id: UUID) -> List[AceEntry]:
+        """
+        Every ACE assigned to the user itself, whatever its role carries: a
+        user-level ACE covering a path decides the check alone, so all of
+        them are candidates when looking for the deciding one.
+        """
+
+        return [ace for ace in self._aces if ace.user_id == user_id]
+
     def _group_aces(self, user_id: UUID, privilege_name: str) -> List[AceEntry]:
         """
         ACEs assigned to the groups the user belongs to granting the
@@ -283,18 +296,45 @@ class RbacState:
                         return ace.role_id
         return _ACE_NO_MATCH
 
+    @staticmethod
+    def _deciding_user_ace(path: str, aces: Iterable[AceEntry]) -> Optional[AceEntry]:
+        """
+        The user-level ACE that decides a check on the path, or None.
+
+        Deepest path first, an allow only covers the exact path or propagates:
+        whatever role it carries, that ACE speaks for the user on this path
+        and replaces every group-level ACE (a reduced role must not be widen
+        by a group grant, a deny must not be bypassed either).
+        """
+
+        parsed_url = urlparse(path)
+        original_path = path
+        path_components = parsed_url.path.split("/")
+        for i in range(len(path_components), 0, -1):
+            candidate = "/".join(path_components[:i])
+            if not candidate:
+                candidate = "/"
+            for ace in aces:
+                if ace.path == candidate and (candidate == original_path or ace.propagate):
+                    return ace
+        return None
+
     def effective_role_id(self, user_id: UUID, path: str, privilege_name: str) -> Optional[UUID]:
         """
         Role id of the ACE that decides a privilege check for the user.
 
-        User ACEs are evaluated before group ACEs, exactly like
+        A user-level ACE covering the path decides alone, exactly like in
         user_has_privilege. Returns None when the check is denied or when no
         ACE matches.
         """
 
-        role_id = self._check_path_role(path, self._user_aces(user_id, privilege_name))
-        if role_id is _ACE_NO_MATCH:
-            role_id = self._check_path_role(path, self._group_aces(user_id, privilege_name))
+        deciding_ace = self._deciding_user_ace(path, self._all_user_aces(user_id))
+        if deciding_ace is not None:
+            if deciding_ace.allowed and privilege_name in self._role_privileges.get(deciding_ace.role_id, ()):
+                return deciding_ace.role_id
+            return None  # the user-level ACE speaks for the user: the check is denied
+
+        role_id = self._check_path_role(path, self._group_aces(user_id, privilege_name))
         if role_id is _ACE_NO_MATCH or role_id is _ACE_DENIED:
             return None
         return role_id
@@ -323,23 +363,26 @@ class RbacState:
 
         The following inheritance rules are used:
 
-        * Privileges for individual users always replace group privileges.
+        * A user-level ACE covering the path decides the check alone, whatever
+          role it carries: a group grant cannot widen a reduced user-level
+          role, and a user-level deny cannot be bypassed by a group either.
         * Privileges for groups apply when the user is member of that group.
         * Privileges on deeper levels replace those inherited from an upper level.
         """
 
         path_is_in_pool = any(path.startswith(f"/projects/{resource_id}") for resource_id in self._project_resource_ids)
 
+        # a user-level ACE covering the path replaces everything else
+        deciding_ace = self._deciding_user_ace(path, self._all_user_aces(user_id))
+        if deciding_ace is not None:
+            return deciding_ace.allowed and privilege_name in self._role_privileges.get(deciding_ace.role_id, ())
+
+        # no user-level ACE covers the path: a user-level resource pool can
+        # still grant it, before the group-level ACEs are considered
         user_aces = self._user_aces(user_id, privilege_name)
         try:
-            # Check regular ACEs first
-            if self._check_path_with_aces(path, user_aces):
-                # the user has an ACE matching the path and privilege, there is no need to check group ACEs
+            if path_is_in_pool and self._pool_grants_path(user_aces, path):
                 return True
-            # Then check resource pool ACEs
-            if path_is_in_pool:
-                if self._pool_grants_path(user_aces, path):
-                    return True
         except PermissionError:
             return False
 
@@ -373,45 +416,46 @@ class RbacState:
         return names
 
     def _direct_project_ids(
-        self, user_aces: List[AceEntry], group_aces: List[AceEntry], all_project_ids: List[str]
+        self, user_aces_all: List[AceEntry], group_aces: List[AceEntry], privilege_name: str, all_project_ids: List[str]
     ) -> Tuple[Set[str], Set[str]]:
         """
-        Projects the user can access via a direct ACE on /projects/<id>:
-        user ACEs first (a deny puts the project aside as denied), then
-        group ACEs skipping already accessible or denied projects.
+        Projects the user can access via a direct ACE on /projects/<id>.
+
+        A user-level ACE covering the project path decides alone, even when
+        its role lacks the privilege: the group ACEs are only consulted for
+        projects without a user-level ACE. Returns the accessible ids and
+        the ids decided by a user-level ACE (out of reach for pools too).
         """
 
         direct_ace_ids = set()
-        user_denied = set()
+        user_decided = set()
 
         # --- User ACE: direct path check ---
         for pid in all_project_ids:
             path = f"/projects/{pid}"
-            try:
-                if self._check_path_with_aces(path, user_aces):
+            deciding_ace = self._deciding_user_ace(path, user_aces_all)
+            if deciding_ace is not None:
+                user_decided.add(pid)
+                if deciding_ace.allowed and privilege_name in self._role_privileges.get(deciding_ace.role_id, ()):
                     direct_ace_ids.add(pid)
-            except PermissionError:
-                user_denied.add(pid)
-
-        # --- Group ACE: direct path check (skip already accessible or denied) ---
-        for pid in all_project_ids:
-            if pid in direct_ace_ids or pid in user_denied:
                 continue
-            path = f"/projects/{pid}"
+
+            # --- Group ACE: direct path check (only without a user-level ACE) ---
             try:
                 if self._check_path_with_aces(path, group_aces):
                     direct_ace_ids.add(pid)
             except PermissionError:
                 pass
 
-        return direct_ace_ids, user_denied
+        return direct_ace_ids, user_decided
 
     def _pooled_project_ids(
-        self, user_aces: List[AceEntry], group_aces: List[AceEntry], user_denied: Set[str]
+        self, user_aces: List[AceEntry], group_aces: List[AceEntry], user_decided: Set[str]
     ) -> Set[str]:
         """
         Projects the user can access because they sit in a resource pool
         referenced by an allowed ACE: user pools first, then group pools.
+        Projects decided by a user-level ACE are left alone.
         """
 
         # --- User ACE: pool check ---
@@ -421,7 +465,7 @@ class RbacState:
         for pool_id, project_ids in self._pool_projects.items():
             if pool_id in user_pool_ids:
                 for pid in project_ids:
-                    if pid not in user_denied:
+                    if pid not in user_decided:
                         pool_accessible_ids.add(pid)
 
         # --- Group ACE: pool check ---
@@ -432,7 +476,7 @@ class RbacState:
         for pool_id, project_ids in self._pool_projects.items():
             if pool_id in group_pool_ids:
                 for pid in project_ids:
-                    if pid not in user_denied and pid not in pool_accessible_ids:
+                    if pid not in user_decided and pid not in pool_accessible_ids:
                         pool_accessible_ids.add(pid)
 
         return pool_accessible_ids
@@ -443,15 +487,21 @@ class RbacState:
         """
         Batch check which projects a user can access via direct ACE or resource pools.
 
+        A user-level ACE on the project path decides alone (see
+        user_has_privilege); group ACEs apply only to projects without one.
+
         Returns:
             (direct_ace_ids, pool_accessible_ids) where:
             - direct_ace_ids: projects the user has a direct ACE on (needs created_by filter)
             - pool_accessible_ids: projects in resource pools the user can access (no created_by filter)
         """
 
+        user_aces_all = self._all_user_aces(user_id)
         user_aces = self._user_aces(user_id, privilege_name)
         group_aces = self._group_aces(user_id, privilege_name)
 
-        direct_ace_ids, user_denied = self._direct_project_ids(user_aces, group_aces, all_project_ids)
-        pool_accessible_ids = self._pooled_project_ids(user_aces, group_aces, user_denied)
+        direct_ace_ids, user_decided = self._direct_project_ids(
+            user_aces_all, group_aces, privilege_name, all_project_ids
+        )
+        pool_accessible_ids = self._pooled_project_ids(user_aces, group_aces, user_decided)
         return direct_ace_ids, pool_accessible_ids

@@ -164,6 +164,53 @@ class TestRbacStateWriteThrough:
         )
         assert await rbac_repo.check_user_has_privilege(test_user.user_id, path, "Project.Audit") is False
 
+    async def test_user_ace_with_reduced_role_shadows_group_grant(
+        self, test_user: User, db_session: AsyncSession
+    ) -> None:
+        """
+        A user-level ACE decides alone whatever its role carries: a broad
+        group grant cannot widen it. This is what freezes a distributed
+        project copy for its recipient.
+        """
+
+        rbac_repo = RbacRepository(db_session)
+        users_repo = UsersRepository(db_session)
+
+        # a broad group grant: the full "User" role on every project
+        group_id = (await users_repo.get_user_group_by_name("Users")).user_group_id
+        user_role = await rbac_repo.get_role_by_name("User")
+        await rbac_repo.create_ace(
+            ACECreate(
+                path="/projects",
+                ace_type="group",
+                propagate=True,
+                group_id=str(group_id),
+                role_id=str(user_role.role_id),
+            )
+        )
+
+        # a user-level ACE carrying a role without Project.Modify ("Auditor"
+        # reads projects but cannot modify them)
+        path = f"/projects/{uuid.uuid4()}"
+        auditor_role = await rbac_repo.get_role_by_name("Auditor")
+        await rbac_repo.create_ace(
+            ACECreate(
+                path=path,
+                ace_type="user",
+                propagate=True,
+                user_id=str(test_user.user_id),
+                role_id=str(auditor_role.role_id),
+            )
+        )
+
+        # the group grant leaks in neither the check...
+        assert await rbac_repo.check_user_has_privilege(test_user.user_id, path, "Project.Modify") is False
+        assert await rbac_repo.check_user_has_privilege(test_user.user_id, path, "Project.Audit") is True
+
+        # ...nor the role resolution: the user-level ACE is the effective one
+        role_id = await rbac_repo.get_effective_role_id(test_user.user_id, path, "Project.Audit")
+        assert str(role_id) == str(auditor_role.role_id)
+
 
 class TestRbacStateReload:
     async def test_dirty_flag_cycle(self, test_user: User, db_session: AsyncSession) -> None:
