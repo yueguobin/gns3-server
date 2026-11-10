@@ -85,6 +85,11 @@ class ProjectDuplicate(ProjectBase):
     name: str
     reset_mac_addresses: Optional[bool] = Field(False, description="Reset MAC addresses for this project")
     target_user: Optional[str] = Field(None, description="Distribute the copy to this user instead of keeping it")
+    target_users: Optional[List[str]] = Field(
+        None,
+        min_length=1,
+        description="Distribute one copy to each of these users (each user gets their own)",
+    )
     target_group: Optional[str] = Field(
         None, description="Distribute one copy to every member of this user group (each member gets their own)"
     )
@@ -95,11 +100,13 @@ class ProjectDuplicate(ProjectBase):
     @model_validator(mode="after")
     def check_distribution_targets(self) -> "ProjectDuplicate":
         """
-        A distribution targets a single user or a whole group, never both.
+        A distribution targets a single user, a list of users or a whole
+        group, and only one of them.
         """
 
-        if self.target_user and self.target_group:
-            raise ValueError("target_user and target_group cannot be set at the same time")
+        targets = [self.target_user, self.target_users, self.target_group]
+        if sum(bool(target) for target in targets) > 1:
+            raise ValueError("target_user, target_users and target_group cannot be combined")
         return self
 
 

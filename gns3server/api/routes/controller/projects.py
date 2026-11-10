@@ -923,8 +923,9 @@ async def _resolve_distribution_targets(
     """
     Resolve the distribution target(s) and the role of their owner ACE.
 
-    A distribution targets a single user or a whole group. Raises 404 when the
-    user, the group or the role does not exist, 409 when the group is empty.
+    A distribution targets a single user, a list of users or a whole group.
+    Raises 404 when a user, the group or the role does not exist, 409 when
+    the group is empty. Everything is resolved before any work is done.
     """
 
     role_name = project_data.owner_role or DISTRIBUTION_DEFAULT_ROLE
@@ -940,6 +941,20 @@ async def _resolve_distribution_targets(
                 detail=f"Target user '{project_data.target_user}' does not exist",
             )
         return target_user, None, role.role_id
+
+    if project_data.target_users:
+        # every username must exist before the first copy is made; duplicates
+        # in the list are collapsed so a user never receives two copies
+        targets = []
+        for username in dict.fromkeys(project_data.target_users):
+            user = await users_repo.get_user_by_username(username)
+            if user is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Target user '{username}' does not exist",
+                )
+            targets.append(user)
+        return None, targets, role.role_id
 
     if project_data.target_group:
         group = await users_repo.get_user_group_by_name(project_data.target_group)
@@ -958,7 +973,7 @@ async def _resolve_distribution_targets(
 
     raise HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        detail="A distribution needs target_user or target_group",
+        detail="A distribution needs target_user, target_users or target_group",
     )
 
 
@@ -1018,10 +1033,11 @@ async def duplicate_project(
 ) -> Union[dict, List[schemas.ProjectDistributionResult]]:
     """
     Duplicate a project, or distribute it by setting ``target_user`` (one
-    user) or ``target_group`` (one copy per group member): each copy is owned
-    by its recipient, its owner ACE carries a reduced role (``owner_role``, the
-    built-in "Lab member" role by default) and it ships with a snapshot of the
-    template state. A group distribution returns one result per member.
+    user), ``target_users`` (one copy per listed user) or ``target_group``
+    (one copy per group member): each copy is owned by its recipient, its
+    owner ACE carries a reduced role (``owner_role``, the built-in "Lab
+    member" role by default) and it ships with a snapshot of the template
+    state. A multi-recipient distribution returns one result per recipient.
 
     Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
     """
@@ -1029,10 +1045,10 @@ async def duplicate_project(
     # A distribution duplicates the project on behalf of other users: resolve
     # the target(s) and the role of their owner ACE before doing any work.
     target_user: Optional[models.User] = None
-    target_group_members: Optional[List[models.User]] = None
+    recipients: Optional[List[models.User]] = None
     owner_role_id: Optional[UUID] = None
-    if project_data.target_user or project_data.target_group:
-        target_user, target_group_members, owner_role_id = await _resolve_distribution_targets(
+    if project_data.target_user or project_data.target_users or project_data.target_group:
+        target_user, recipients, owner_role_id = await _resolve_distribution_targets(
             UsersRepository(db_session), rbac_repo, project_data
         )
 
@@ -1061,11 +1077,11 @@ async def duplicate_project(
             db_session, project, target_user, owner_role_id, project_data.name, project_data.reset_mac_addresses
         )
 
-    if target_group_members is not None:
+    if recipients is not None:
         assert owner_role_id is not None  # a distribution always resolves the role first
-        # Every member gets their own copy, named after the lab and the member
+        # Every recipient gets their own copy, named after the lab and the user
         results = []
-        for member in target_group_members:
+        for member in recipients:
             try:
                 copy = await _distribute_project_copy(
                     db_session,
