@@ -62,6 +62,7 @@ from gns3server.controller.controller_error import (
     ControllerError,
     ControllerForbiddenError,
 )
+from gns3server.controller.distribution import Distribution, DistributionRegistry
 from gns3server.controller.export_project import export_project as export_controller_project
 from gns3server.controller.import_project import import_project as import_controller_project
 from gns3server.controller.link import _UNSET
@@ -1093,10 +1094,44 @@ async def duplicate_project(
     return new_project.asdict()
 
 
+async def _run_distribution(
+    engine: Any,
+    job: Distribution,
+    project_id: str,
+    recipients: List[Tuple[models.User, str]],
+    owner_role_id: UUID,
+    reset_mac_addresses: Optional[bool],
+) -> None:
+    """
+    Create one copy per recipient in the background, recording a result per
+    recipient as it completes. A failing recipient never stops the job.
+    """
+
+    registry = DistributionRegistry.instance()
+    try:
+        # the background task outlives the request: it needs its own session
+        async with AsyncSession(engine, expire_on_commit=False) as db_session:
+            project = Controller.instance().get_project(project_id)
+            for member, name in recipients:
+                try:
+                    copy = await _distribute_project_copy(
+                        db_session, project, member, owner_role_id, name, reset_mac_addresses
+                    )
+                    registry.record_result(job, {"username": member.username, "project": copy, "error": None})
+                except Exception as e:
+                    log.error(f"Could not distribute a copy to '{member.username}': {e}")
+                    registry.record_result(
+                        job, {"username": member.username, "project": None, "error": {"message": str(e)}}
+                    )
+        registry.complete(job)
+    except Exception as e:
+        registry.fail(job, str(e))
+
+
 @router.post(
     "/{project_id}/distribute",
-    status_code=status.HTTP_201_CREATED,
-    response_model=List[schemas.ProjectDistributionResult],
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=schemas.ProjectDistribution,
     responses={
         **responses,
         409: {"model": schemas.ErrorMessage, "description": "Could not distribute project"},
@@ -1110,19 +1145,21 @@ async def distribute_project(
     rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
     pools_repo: ResourcePoolsRepository = Depends(get_repository(ResourcePoolsRepository)),
     db_session: AsyncSession = Depends(get_db_session),
-) -> List[schemas.ProjectDistributionResult]:
+) -> dict:
     """
     Distribute a project: create one copy per recipient (a single user, every
-    listed user, or every member of a user group). Each copy is owned by its
-    recipient, its owner ACE carries a reduced role (``owner_role``, the
-    built-in "Lab member" role by default) and it ships with a snapshot of
-    the template state. Returns one result per recipient: the copy on
-    success, the error when it could not be created.
+    listed user, or every member of a user group) in the background. Each
+    copy is owned by its recipient, its owner ACE carries a reduced role
+    (``owner_role``, the built-in "Lab member" role by default) and it ships
+    with a snapshot of the template state. Returns the distribution job:
+    poll ``GET /projects/{project_id}/distributions/{distribution_id}`` for
+    the progress and the per-recipient results.
 
     Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
     """
 
-    # Resolve the recipient(s) and the role of their owner ACE before doing any work.
+    # Resolve the recipient(s) and the role of their owner ACE before the job
+    # starts: a bad request must not distribute anything.
     target_user, recipients, owner_role_id = await _resolve_distribution_targets(
         UsersRepository(db_session), rbac_repo, project_data
     )
@@ -1130,19 +1167,78 @@ async def distribute_project(
 
     # a single recipient keeps the given name, a fan-out names every copy
     # after the lab and its recipient (lab1-alice)
-    results = []
-    for member in [target_user] if target_user is not None else recipients or []:
-        name = project_data.name if target_user is not None else f"{project_data.name}-{member.username}"
-        try:
-            copy = await _distribute_project_copy(
-                db_session, project, member, owner_role_id, name, project_data.reset_mac_addresses
-            )
-            results.append(schemas.ProjectDistributionResult(username=member.username, project=copy))
-        except ControllerError as e:
-            results.append(
-                schemas.ProjectDistributionResult(username=member.username, error=schemas.ErrorMessage(message=str(e)))
-            )
-    return results
+    targets = [target_user] if target_user is not None else recipients or []
+    names = [
+        (member, project_data.name if target_user is not None else f"{project_data.name}-{member.username}")
+        for member in targets
+    ]
+
+    registry = DistributionRegistry.instance()
+    registry.prune()
+    assert current_user.username is not None  # an authenticated user always has a name
+    job = registry.create(str(project.id), project_data.name, current_user.username, total=len(names))
+    job.task = asyncio.create_task(
+        _run_distribution(
+            # the bound engine outlives the request-scoped session
+            db_session.bind,
+            job,
+            str(project.id),
+            names,
+            owner_role_id,
+            project_data.reset_mac_addresses,
+        )
+    )
+    return job.asdict()
+
+
+@router.get(
+    "/{project_id}/distributions",
+    response_model=List[schemas.ProjectDistribution],
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def get_project_distributions(
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+) -> List[dict]:
+    """
+    Return the recent distributions of a project (the caller's own, plus
+    every one for a superadmin).
+
+    Required privilege: Project.Audit
+    """
+
+    registry = DistributionRegistry.instance()
+    registry.prune()
+    jobs = registry.get_for_project(str(project.id))
+    return [job.asdict() for job in jobs if current_user.is_superadmin or job.created_by == current_user.username]
+
+
+@router.get(
+    "/{project_id}/distributions/{distribution_id}",
+    response_model=schemas.ProjectDistribution,
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def get_project_distribution(
+    distribution_id: UUID,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+) -> dict:
+    """
+    Return the state of one distribution job: the progress and the
+    per-recipient results recorded so far.
+
+    Required privilege: Project.Audit
+    """
+
+    registry = DistributionRegistry.instance()
+    job = registry.get(str(distribution_id))
+    if job is None or job.project_id != str(project.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not find this distribution")
+    if not current_user.is_superadmin and job.created_by != current_user.username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
+        )
+    return job.asdict()
 
 
 @router.get("/{project_id}/locked", dependencies=[Depends(has_privilege("Project.Audit"))])
