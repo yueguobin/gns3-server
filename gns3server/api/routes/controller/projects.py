@@ -275,13 +275,26 @@ async def update_project(
 )
 async def delete_project(
     project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
     rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
 ) -> None:
     """
     Delete a project.
 
-    Required privilege: Project.Allocate
+    Deleting is reserved to the project owner (its ``created_by``) and to
+    superadmins: users with access through a share or a resource pool carry
+    ``Project.Allocate`` (it is required to open a project) but must not be
+    able to destroy a project they do not own. The owner of a distributed
+    copy is its creator, so recipients can still delete their own copy.
+
+    Required privilege: Project.Allocate, owner or superadmin
     """
+
+    if not current_user.is_superadmin and project.created_by != current_user.username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the project owner or a superadmin can delete this project",
+        )
 
     controller = Controller.instance()
     await project.delete()
@@ -883,12 +896,20 @@ async def import_project(
     # The client picks the target project ID. A brand new project is covered by
     # the collection ACE on /projects (the default ACE does not propagate),
     # while importing on top of an existing project requires access to it.
+    # Importing over an existing project destroys it, so like deletion it is
+    # reserved to the project owner and to superadmins.
+    existing_project = controller.projects.get(str(project_id))
     if not current_user.is_superadmin:
-        path = f"/projects/{project_id}" if str(project_id) in controller.projects else "/projects"
+        path = f"/projects/{project_id}" if existing_project is not None else "/projects"
         if not await rbac_repo.check_user_has_privilege(current_user.user_id, path, "Project.Allocate"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Permission denied (privilege Project.Allocate is required)",
+            )
+        if existing_project is not None and existing_project.created_by != current_user.username:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the project owner or a superadmin can import on top of this project",
             )
 
     # We write the content to a temporary location and then we extract it all.
