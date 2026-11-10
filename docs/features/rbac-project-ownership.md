@@ -2,7 +2,7 @@
 
 ## Overview
 
-Projects are private to their creator by default. The default ACE granting the `User` role to the `Users` group on `/projects` does not propagate: it only covers the collection endpoints. Every project gets a per-project owner ACE when it is created, imported, duplicated or loaded from disk, and access to an existing project is only granted by an ACE on its own path or by a resource pool. Projects without a resolvable owner stay restricted to superadmins.
+Projects are private to their creator by default. The default ACE granting the `User` role to the `Users` group on `/projects` does not propagate: it only covers the collection endpoints. Every project gets a per-project owner ACE when it is created, imported, duplicated or loaded from disk, and access to an existing project is only granted by an ACE on its own path or by a resource pool. The owner can write such an ACE for other users with the [share endpoint](project-sharing.md); handing out a copy per recipient instead is a [distribution](project-distribution.md). Projects without a resolvable owner stay restricted to superadmins.
 
 This replaces the previous model, where the `created_by` field only filtered the project list while the propagated `/projects` ACE granted every user access to every project by ID.
 
