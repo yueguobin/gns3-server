@@ -1108,6 +1108,377 @@ class TestProjectDistribution:
             assert response.status_code == status.HTTP_409_CONFLICT
 
 
+class TestProjectShare:
+    """
+    Sharing a project (the /share endpoint) gives the targets access to this
+    very project through an ACE: no copy is created. Only the owner (or a
+    superadmin) can manage the shares. The default role is the built-in
+    "Lab member" role (use the lab, frozen topology), and a share cannot grant
+    a role wider than the sharer's own access to the project: the owner of a
+    distributed (frozen) copy cannot unfreeze it by sharing. Re-sharing with
+    the same target replaces its role; removing a share removes the access.
+    """
+
+    @staticmethod
+    async def _create_project(app: FastAPI, owner: User) -> str:
+        """
+        Create a project as the given user and return its id.
+        """
+
+        async with TestProjectOwnership._client_for(app, owner) as owner_client:
+            response = await owner_client.post(
+                app.url_path_for("create_project"), json={"name": f"shared-{uuid.uuid4()}"}
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            return response.json()["project_id"]
+
+    async def test_share_project_with_user(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        project_id = await self._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            shares = response.json()
+            assert len(shares) == 1
+            assert shares[0]["username"] == student.username
+            assert shares[0]["group_name"] is None
+            assert shares[0]["role"] == "Lab member"
+
+            # the share is listed; the owner ACE of the creator is not a share
+            response = await teacher_client.get(app.url_path_for("get_project_shares", project_id=project_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert {share["ace_id"] for share in response.json()} == {shares[0]["ace_id"]}
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            # no copy: this very project, still owned by the teacher
+            response = await student_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["created_by"] == test_user.username
+
+            response = await student_client.get(app.url_path_for("get_projects"))
+            assert project_id in {p["project_id"] for p in response.json()}
+
+            # usable (open the lab) but frozen, like a distributed copy
+            response = await student_client.post(app.url_path_for("open_project", project_id=project_id))
+            assert response.status_code == status.HTTP_200_OK
+
+            response = await student_client.put(
+                app.url_path_for("update_project", project_id=project_id), json={"name": "hacked"}
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            response = await student_client.get(
+                app.url_path_for("get_logged_in_user_privileges_on_project", project_id=project_id)
+            )
+            assert set(response.json()["privileges"]) == TestProjectDistribution.LAB_MEMBER_PRIVILEGES
+
+        # removing the share removes the access
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.delete(
+                app.url_path_for("delete_project_share", project_id=project_id, ace_id=shares[0]["ace_id"])
+            )
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    async def test_share_with_full_role_allows_edits(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        project_id = await self._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": student.username, "role": "User"},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            assert response.json()[0]["role"] == "User"
+
+        # with the full role, the target edits the shared project like its owner
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.put(
+                app.url_path_for("update_project", project_id=project_id), json={"name": "renamed-together"}
+            )
+            assert response.status_code == status.HTTP_200_OK
+
+    async def test_sharing_again_replaces_the_role(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        project_id = await self._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": student.username, "role": "User"},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            first_share = response.json()[0]
+
+            # sharing again with the same target must replace the role, not
+            # stack a second ACE (a user-level ACE decides alone on its path)
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            shares = response.json()
+            assert len(shares) == 1
+            assert shares[0]["ace_id"] == first_share["ace_id"]
+            assert shares[0]["role"] == "Lab member"
+
+            response = await teacher_client.get(app.url_path_for("get_project_shares", project_id=project_id))
+            assert len(response.json()) == 1
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.put(
+                app.url_path_for("update_project", project_id=project_id), json={"name": "hacked"}
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    async def test_share_with_multiple_users(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        names = [f"student-{uuid.uuid4().hex[:8]}", f"student-{uuid.uuid4().hex[:8]}"]
+        students = [await TestProjectOwnership._create_user_in_users_group(db_session, name) for name in names]
+        project_id = await self._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_users": [students[0].username, students[1].username, students[0].username]},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            # duplicates in the list are collapsed: one share per user
+            assert {share["username"] for share in response.json()} == set(names)
+            assert len(response.json()) == 2
+
+        for student in students:
+            async with TestProjectOwnership._client_for(app, student) as student_client:
+                response = await student_client.get(app.url_path_for("get_project", project_id=project_id))
+                assert response.status_code == status.HTTP_200_OK
+
+    async def test_share_with_group(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        users_repo = UsersRepository(db_session)
+        group = await users_repo.create_user_group(schemas.UserGroupCreate(name=f"team-{uuid.uuid4().hex[:8]}"))
+        members = []
+        for name in ("alice", "bob"):
+            member = await TestProjectOwnership._create_user_in_users_group(
+                db_session, f"{name}-{uuid.uuid4().hex[:8]}"
+            )
+            await users_repo.add_member_to_user_group(group.user_group_id, member)
+            members.append(member)
+
+        project_id = await self._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_group": group.name},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            shares = response.json()
+            assert len(shares) == 1  # one group ACE for all the members
+            assert shares[0]["group_name"] == group.name
+            assert shares[0]["username"] is None
+
+        # every member sees the project
+        for member in members:
+            async with TestProjectOwnership._client_for(app, member) as member_client:
+                response = await member_client.get(app.url_path_for("get_project", project_id=project_id))
+                assert response.status_code == status.HTTP_200_OK
+
+        # removing the group share removes every member's access
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.delete(
+                app.url_path_for("delete_project_share", project_id=project_id, ace_id=shares[0]["ace_id"])
+            )
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        async with TestProjectOwnership._client_for(app, members[0]) as member_client:
+            response = await member_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    async def test_share_validation(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        project_id = await self._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            # a share targets one kind of recipient, never several
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": "user1", "target_group": "Users"},
+            )
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": "user1", "target_users": ["user2"]},
+            )
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+            # an empty list of users and a share without any target are rejected
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id), json={"target_users": []}
+            )
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+            response = await teacher_client.post(app.url_path_for("share_project", project_id=project_id), json={})
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+            # a missing user, group or role is rejected before anything is written
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id), json={"target_user": "missing-user"}
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id), json={"target_group": "missing-group"}
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": student.username, "role": "No such role"},
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+            # an empty group must be rejected
+            empty_group = await UsersRepository(db_session).create_user_group(
+                schemas.UserGroupCreate(name=f"empty-{uuid.uuid4().hex[:8]}")
+            )
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id), json={"target_group": empty_group.name}
+            )
+            assert response.status_code == status.HTTP_409_CONFLICT
+
+    async def test_only_owner_or_superadmin_can_manage_shares(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        # a project owned by a student, shared with a colleague
+        owner = await TestProjectOwnership._create_user_in_users_group(db_session, f"owner-{uuid.uuid4().hex[:8]}")
+        colleague = await TestProjectOwnership._create_user_in_users_group(db_session, f"peer-{uuid.uuid4().hex[:8]}")
+        outsider = await TestProjectOwnership._create_user_in_users_group(db_session, f"peer-{uuid.uuid4().hex[:8]}")
+        project_id = await self._create_project(app, owner)
+
+        async with TestProjectOwnership._client_for(app, owner) as owner_client:
+            response = await owner_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": colleague.username},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            share_ace_id = response.json()[0]["ace_id"]
+
+        # the colleague has access (and Project.Audit), but is not the owner
+        async with TestProjectOwnership._client_for(app, colleague) as colleague_client:
+            response = await colleague_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.status_code == status.HTTP_200_OK
+
+            response = await colleague_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": outsider.username},
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            response = await colleague_client.get(app.url_path_for("get_project_shares", project_id=project_id))
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            response = await colleague_client.delete(
+                app.url_path_for("delete_project_share", project_id=project_id, ace_id=share_ace_id)
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+        # a superadmin can share someone else's project, with any role
+        admin = await UsersRepository(db_session).get_user_by_username("admin")
+        async with TestProjectOwnership._client_for(app, admin) as admin_client:
+            response = await admin_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": outsider.username, "role": "User"},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+
+        async with TestProjectOwnership._client_for(app, outsider) as outsider_client:
+            response = await outsider_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.status_code == status.HTTP_200_OK
+
+    async def test_owner_ace_cannot_be_removed_as_a_share(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        project_id = await self._create_project(app, test_user)
+
+        # the ACE of the creator on the project path is the owner ACE
+        rbac_repo = RbacRepository(db_session)
+        aces = await rbac_repo.get_aces_for_path(f"/projects/{project_id}")
+        owner_ace_id = next(ace.ace_id for ace in aces if ace.user is not None and ace.user.username == "user1")
+
+        async with TestProjectOwnership._client_for(app, test_user) as owner_client:
+            response = await owner_client.delete(
+                app.url_path_for("delete_project_share", project_id=project_id, ace_id=owner_ace_id)
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+            # the owner ACE is intact
+            response = await owner_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.status_code == status.HTTP_200_OK
+
+    async def test_frozen_owner_cannot_share_a_wider_role(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        classmate = await TestProjectOwnership._create_user_in_users_group(db_session, f"peer-{uuid.uuid4().hex[:8]}")
+        _, copy_id = await TestProjectDistribution._distribute(app, test_user, student.username)
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            # the frozen owner cannot unfreeze their copy by sharing, not even
+            # with themselves
+            for target in (student.username, classmate.username):
+                response = await student_client.post(
+                    app.url_path_for("share_project", project_id=copy_id),
+                    json={"target_user": target, "role": "User"},
+                )
+                assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            # sharing within what they hold is fine: a frozen pair share
+            response = await student_client.post(
+                app.url_path_for("share_project", project_id=copy_id),
+                json={"target_user": classmate.username},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+
+        async with TestProjectOwnership._client_for(app, classmate) as classmate_client:
+            response = await classmate_client.get(app.url_path_for("get_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+
+            response = await classmate_client.put(
+                app.url_path_for("update_project", project_id=copy_id), json={"name": "hacked"}
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
 # class TestProjectsWithRbac:
 #
 #     async def test_admin_create_project(self, app: FastAPI, client: AsyncClient):

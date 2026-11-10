@@ -172,6 +172,46 @@ class ProjectDistribution(BaseModel):
     error: Optional[ErrorMessage] = Field(None, description="Set when the job itself failed")
 
 
+class ProjectShare(BaseModel):
+    """
+    Properties for project sharing: the project itself becomes accessible to
+    the target(s), no copy is created.
+    """
+
+    role: Optional[str] = Field(None, description="Role carried by the share (default: the built-in Lab member role)")
+    target_user: Optional[str] = Field(None, description="Share the project with this user")
+    target_users: Optional[List[str]] = Field(
+        None, min_length=1, description="Share the project with each of these users"
+    )
+    target_group: Optional[str] = Field(None, description="Share the project with this user group (one group ACE)")
+
+    @model_validator(mode="after")
+    def check_share_targets(self) -> "ProjectShare":
+        """
+        A share targets a single user, a list of users or a whole group, and
+        only one of them.
+        """
+
+        targets = [self.target_user, self.target_users, self.target_group]
+        if sum(bool(target) for target in targets) > 1:
+            raise ValueError("target_user, target_users and target_group cannot be combined")
+        return self
+
+
+class ProjectShareResult(BaseModel):
+    """
+    One share of a project: a user or a user group, with the role the share
+    carries.
+    """
+
+    ace_id: UUID
+    username: Optional[str] = Field(None, description="The user, when the share targets a user")
+    group_name: Optional[str] = Field(None, description="The group, when the share targets a user group")
+    role: str = Field(..., description="The role carried by the share")
+    created_at: datetime
+    updated_at: datetime
+
+
 class ProjectFile(BaseModel):
     path: str = Field(..., description="File path")
     md5sum: str = Field(..., description="File checksum")

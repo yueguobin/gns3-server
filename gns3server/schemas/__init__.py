@@ -75,6 +75,8 @@ from .controller.projects import (
     ProjectDuplicate,
     ProjectFile,
     ProjectPrivileges,
+    ProjectShare,
+    ProjectShareResult,
     ProjectStats,
     ProjectUpdate,
 )
@@ -360,6 +362,8 @@ __all__ = [
     "ProjectFile",
     "ProjectMarker",
     "ProjectPrivileges",
+    "ProjectShare",
+    "ProjectShareResult",
     "ProjectStats",
     "ProjectUpdate",
     "Qemu",

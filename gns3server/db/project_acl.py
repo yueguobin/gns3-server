@@ -30,6 +30,10 @@ path. When a project is created, an owner ACE is added for its creator:
 
 The helper is idempotent: an existing owner ACE (whatever its role) is never
 replaced, and an ACE an administrator customized is left untouched.
+
+Sharing a project (the /projects/{project_id}/share endpoint) writes the same
+kind of ACE for another user or a user group; an existing share ACE is updated
+instead, so re-sharing replaces the role (see ``upsert_project_share_ace``).
 """
 
 import logging
@@ -124,6 +128,54 @@ async def ensure_project_owner_ace(
     )
     log.debug(f"Created the owner ACE on '{path}' for user '{created_by}'")
     return True
+
+
+async def upsert_project_share_ace(
+    db_session: AsyncSession,
+    project_id: Union[str, UUID],
+    role_id: UUID,
+    user_id: Optional[UUID] = None,
+    group_id: Optional[UUID] = None,
+) -> Tuple[models.ACE, bool]:
+    """
+    Create (or update) the share ACE of a project for a user or a user group.
+
+    Unlike the owner ACE, an existing share ACE is updated instead of left
+    untouched: a user-level ACE decides alone on its path, so sharing again
+    with another role must replace the role, never stack a second ACE. Returns
+    the ACE and whether it was created.
+    """
+
+    path = project_ace_path(project_id)
+    query = select(models.ACE).where(models.ACE.path == path)
+    if user_id is not None:
+        query = query.where(models.ACE.user_id == user_id)
+    else:
+        query = query.where(models.ACE.group_id == group_id)
+    result = await db_session.execute(query)
+    ace = result.scalars().first()
+
+    rbac_repo = RbacRepository(db_session)
+    if ace is not None:
+        updated = await rbac_repo.update_ace(
+            cast(UUID, ace.ace_id), schemas.ACEUpdate(ace_type=ace.ace_type, path=path, role_id=role_id)
+        )
+        assert updated is not None  # the ACE was just fetched
+        return updated, False
+
+    ace_type = "user" if user_id is not None else "group"
+    ace = await rbac_repo.create_ace(
+        schemas.ACECreate(
+            path=path,
+            ace_type=ace_type,
+            propagate=True,
+            allowed=True,
+            user_id=user_id,
+            group_id=group_id,
+            role_id=role_id,
+        )
+    )
+    return ace, True
 
 
 async def ensure_all_project_aces(

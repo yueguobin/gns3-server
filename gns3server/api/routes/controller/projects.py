@@ -31,7 +31,7 @@ import gns3server.utils.zipfile_zstd as zipfile
 
 log = logging.getLogger()
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from fastapi import (
@@ -61,6 +61,7 @@ from gns3server.controller.controller_error import (
     ControllerBadRequestError,
     ControllerError,
     ControllerForbiddenError,
+    ControllerNotFoundError,
 )
 from gns3server.controller.distribution import Distribution, DistributionRegistry
 from gns3server.controller.export_project import export_project as export_controller_project
@@ -68,7 +69,7 @@ from gns3server.controller.import_project import import_project as import_contro
 from gns3server.controller.link import _UNSET
 from gns3server.controller.marker_replay import SharkdError, SharkdMissingError
 from gns3server.controller.project import Project
-from gns3server.db.project_acl import ensure_project_owner_ace
+from gns3server.db.project_acl import ensure_project_owner_ace, project_ace_path, upsert_project_share_ace
 from gns3server.db.repositories.pools import ResourcePoolsRepository
 from gns3server.db.repositories.rbac import RbacRepository
 from gns3server.db.repositories.templates import TemplatesRepository
@@ -1239,6 +1240,234 @@ async def get_project_distribution(
             status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
         )
     return job.asdict()
+
+
+def _ensure_project_share_manager(project: Project, current_user: schemas.User) -> None:
+    """
+    Only the owner of a project (or a superadmin) can manage its shares.
+    """
+
+    if not current_user.is_superadmin and project.created_by != current_user.username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the project owner or a superadmin can manage the shares of this project",
+        )
+
+
+def _share_result(ace: models.ACE, username: Optional[str], group_name: Optional[str], role_name: str) -> dict:
+    """
+    One share as returned by the share endpoints.
+    """
+
+    return {
+        "ace_id": ace.ace_id,
+        "username": username,
+        "group_name": group_name,
+        "role": role_name,
+        "created_at": ace.created_at,
+        "updated_at": ace.updated_at,
+    }
+
+
+async def _share_aces(rbac_repo: RbacRepository, project: Project) -> List[models.ACE]:
+    """
+    The ACEs sharing a project: every user and group ACE on the project path,
+    except the owner ACE of its creator.
+    """
+
+    path = project_ace_path(project.id)
+    aces = await rbac_repo.get_aces_for_path(path)
+    return [
+        ace
+        for ace in aces
+        if ace.path == path
+        and not (ace.user is not None and project.created_by is not None and ace.user.username == project.created_by)
+    ]
+
+
+async def _resolve_share_targets(
+    users_repo: UsersRepository, share_data: schemas.ProjectShare
+) -> Tuple[Optional[List[models.User]], Optional[models.UserGroup]]:
+    """
+    Resolve the share target(s) and their role. A share targets a single user,
+    a list of users or a whole group (one group ACE for all its members).
+    Raises 404 when a user or the group does not exist, 409 when the group is
+    empty. Everything is resolved before any ACE is written.
+    """
+
+    if share_data.target_user:
+        user = await users_repo.get_user_by_username(share_data.target_user)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Target user '{share_data.target_user}' does not exist",
+            )
+        return [user], None
+
+    if share_data.target_users:
+        targets = []
+        for username in dict.fromkeys(share_data.target_users):
+            user = await users_repo.get_user_by_username(username)
+            if user is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Target user '{username}' does not exist",
+                )
+            targets.append(user)
+        return targets, None
+
+    if share_data.target_group:
+        group = await users_repo.get_user_group_by_name(share_data.target_group)
+        if group is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Target group '{share_data.target_group}' does not exist",
+            )
+        members = await users_repo.get_user_group_members(group.user_group_id)
+        if not members:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Target group '{share_data.target_group}' has no members",
+            )
+        return None, group
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="A share needs target_user, target_users or target_group",
+    )
+
+
+async def _check_share_role_width(
+    rbac_repo: RbacRepository, current_user: schemas.User, project: Project, role: models.Role
+) -> None:
+    """
+    A share cannot grant a role with privileges the sharer does not hold on
+    the project: in particular, the owner of a distributed (frozen) copy
+    cannot unfreeze it by sharing it to anyone — themselves included — with a
+    wider role. Superadmins can share with any role.
+    """
+
+    if current_user.is_superadmin:
+        return
+    path = project_ace_path(project.id)
+    for privilege in role.privileges:
+        if not await rbac_repo.check_user_has_privilege(current_user.user_id, path, privilege.name):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role '{role.name}' has privileges you do not have on this project",
+            )
+
+
+@router.post(
+    "/{project_id}/share",
+    status_code=status.HTTP_201_CREATED,
+    response_model=List[schemas.ProjectShareResult],
+    responses={
+        **responses,
+        409: {"model": schemas.ErrorMessage, "description": "Could not share project"},
+    },
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def share_project(
+    share_data: schemas.ProjectShare,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> List[dict]:
+    """
+    Share a project with a single user, a list of users or a whole user group:
+    no copy is created, the targets get access to this very project through an
+    ACE carrying ``role`` (the built-in "Lab member" role by default). Sharing
+    again with the same target replaces its role. Only the project owner (or a
+    superadmin) can share, and a share cannot grant a role with privileges the
+    sharer does not hold on the project.
+
+    Required privilege: Project.Audit
+    """
+
+    _ensure_project_share_manager(project, current_user)
+
+    role_name = share_data.role or DISTRIBUTION_DEFAULT_ROLE
+    role = await rbac_repo.get_role_by_name(role_name)
+    if role is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Role '{role_name}' does not exist")
+    await _check_share_role_width(rbac_repo, current_user, project, role)
+
+    users, group = await _resolve_share_targets(UsersRepository(db_session), share_data)
+
+    shares = []
+    if users is not None:
+        for user in users:
+            ace, _created = await upsert_project_share_ace(
+                db_session, project.id, role.role_id, user_id=cast(UUID, user.user_id)
+            )
+            shares.append(_share_result(ace, user.username, None, role_name))
+    else:
+        assert group is not None  # one of users or group is set
+        ace, _created = await upsert_project_share_ace(
+            db_session, project.id, role.role_id, group_id=group.user_group_id
+        )
+        shares.append(_share_result(ace, None, cast(str, group.name), role_name))
+    return shares
+
+
+@router.get(
+    "/{project_id}/shares",
+    response_model=List[schemas.ProjectShareResult],
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def get_project_shares(
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+) -> List[dict]:
+    """
+    Return who a project is shared with. The owner ACE of the creator is not a
+    share and is not listed; resource pool memberships are a different
+    mechanism and are not listed either.
+
+    Required privilege: Project.Audit
+    """
+
+    _ensure_project_share_manager(project, current_user)
+
+    shares = []
+    for ace in await _share_aces(rbac_repo, project):
+        if ace.user is not None:
+            shares.append(_share_result(ace, ace.user.username, None, ace.role.name))
+        else:
+            shares.append(_share_result(ace, None, ace.group.name, ace.role.name))
+    return shares
+
+
+@router.delete(
+    "/{project_id}/shares/{ace_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        **responses,
+        409: {"model": schemas.ErrorMessage, "description": "Could not delete share"},
+    },
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def delete_project_share(
+    ace_id: UUID,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+) -> None:
+    """
+    Remove one share of a project. The owner ACE of the creator cannot be
+    removed this way.
+
+    Required privilege: Project.Audit
+    """
+
+    _ensure_project_share_manager(project, current_user)
+
+    if ace_id not in {ace.ace_id for ace in await _share_aces(rbac_repo, project)}:
+        raise ControllerNotFoundError(f"Share '{ace_id}' does not exist")
+    await rbac_repo.delete_ace(ace_id)
 
 
 @router.get("/{project_id}/locked", dependencies=[Depends(has_privilege("Project.Audit"))])
