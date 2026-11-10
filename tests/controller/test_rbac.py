@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gns3server import schemas
 from gns3server.controller import Controller
+from gns3server.controller.controller_error import ControllerError
 from gns3server.db.models import User
 from gns3server.db.project_acl import ensure_all_project_aces, ensure_project_owner_ace
 from gns3server.db.repositories.pools import ResourcePoolsRepository
@@ -804,6 +805,151 @@ class TestProjectDistribution:
                 app.url_path_for("start_node", project_id=copy_id, node_id=node_id), json={}
             )
             assert response.status_code == status.HTTP_200_OK
+
+    async def test_distribute_project_to_group(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        # a group with two members
+        users_repo = UsersRepository(db_session)
+        group = await users_repo.create_user_group(schemas.UserGroupCreate(name=f"lab-{uuid.uuid4().hex[:8]}"))
+        members = []
+        for name in ("alice", "bob"):
+            member = await TestProjectOwnership._create_user_in_users_group(
+                db_session, f"{name}-{uuid.uuid4().hex[:8]}"
+            )
+            await users_repo.add_member_to_user_group(group.user_group_id, member)
+            members.append(member)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "lab1", "target_group": group.name},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            results = response.json()
+            assert {result["username"] for result in results} == {member.username for member in members}
+            copy_ids = {}
+            for result in results:
+                assert result["error"] is None
+                assert result["project"]["created_by"] == result["username"]
+                assert result["project"]["name"] == f"lab1-{result['username']}"
+                copy_ids[result["username"]] = result["project"]["project_id"]
+
+        # every member owns a private copy with the reduced role and the
+        # template state snapshot
+        rbac_repo = RbacRepository(db_session)
+        lab_member_role = await rbac_repo.get_role_by_name("Lab member")
+        for member in members:
+            ace = await rbac_repo.get_ace_by_path(f"/projects/{copy_ids[member.username]}")
+            assert str(ace.user_id) == str(member.user_id)
+            assert str(ace.role_id) == str(lab_member_role.role_id)
+
+            async with TestProjectOwnership._client_for(app, member) as member_client:
+                response = await member_client.get(app.url_path_for("get_projects"))
+                visible = {p["project_id"] for p in response.json()}
+                assert copy_ids[member.username] in visible
+                # the other member's copy stays private
+                other = next(m for m in members if m.username != member.username)
+                assert copy_ids[other.username] not in visible
+
+                response = await member_client.get(
+                    app.url_path_for("get_snapshots", project_id=copy_ids[member.username])
+                )
+                assert "template state" in {s["name"] for s in response.json()}
+
+    async def test_group_distribution_reports_member_failures(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User, controller
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        users_repo = UsersRepository(db_session)
+        group = await users_repo.create_user_group(schemas.UserGroupCreate(name=f"lab-{uuid.uuid4().hex[:8]}"))
+        members = []
+        for name in ("alice", "bob"):
+            member = await TestProjectOwnership._create_user_in_users_group(
+                db_session, f"{name}-{uuid.uuid4().hex[:8]}"
+            )
+            await users_repo.add_member_to_user_group(group.user_group_id, member)
+            members.append(member)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            source = controller.get_project(source_id)
+            original_duplicate = source.duplicate
+            calls = 0
+
+            async def fail_on_second_call(**kwargs):
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    raise ControllerError("boom")
+                return await original_duplicate(**kwargs)
+
+            source.duplicate = fail_on_second_call  # type: ignore[method-assign]
+            try:
+                response = await teacher_client.post(
+                    app.url_path_for("duplicate_project", project_id=source_id),
+                    json={"name": "lab1", "target_group": group.name},
+                )
+            finally:
+                source.duplicate = original_duplicate  # type: ignore[method-assign]
+
+        # one member got their copy, the failed one is reported with the error
+        assert response.status_code == status.HTTP_201_CREATED
+        results = response.json()
+        assert len(results) == 2
+        by_username = {result["username"]: result for result in results}
+        failed = [result for result in results if result["error"] is not None]
+        succeeded = [result for result in results if result["project"] is not None]
+        assert len(failed) == 1 and len(succeeded) == 1
+        assert failed[0]["error"]["message"] == "boom"
+        assert succeeded[0]["project"]["created_by"] == succeeded[0]["username"]
+        assert by_username[failed[0]["username"]]["project"] is None
+
+    async def test_group_distribution_validation(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+
+            # a distribution targets a single user or a whole group, never both
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "copy", "target_user": "user1", "target_group": "Users"},
+            )
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "copy", "target_group": "missing-group"},
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+            # the built-in "Users" group has the admin as member, but an empty
+            # group must be rejected
+            empty_group = await UsersRepository(db_session).create_user_group(
+                schemas.UserGroupCreate(name=f"empty-{uuid.uuid4().hex[:8]}")
+            )
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "copy", "target_group": empty_group.name},
+            )
+            assert response.status_code == status.HTTP_409_CONFLICT
 
 
 # class TestProjectsWithRbac:

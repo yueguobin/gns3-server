@@ -20,8 +20,9 @@ from enum import StrEnum
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
+from ..common import ErrorMessage
 from ..update import PartialUpdateModel
 
 
@@ -84,9 +85,22 @@ class ProjectDuplicate(ProjectBase):
     name: str
     reset_mac_addresses: Optional[bool] = Field(False, description="Reset MAC addresses for this project")
     target_user: Optional[str] = Field(None, description="Distribute the copy to this user instead of keeping it")
+    target_group: Optional[str] = Field(
+        None, description="Distribute one copy to every member of this user group (each member gets their own)"
+    )
     owner_role: Optional[str] = Field(
         None, description="Role of the owner ACE put on a distributed copy (default: the built-in Lab member role)"
     )
+
+    @model_validator(mode="after")
+    def check_distribution_targets(self) -> "ProjectDuplicate":
+        """
+        A distribution targets a single user or a whole group, never both.
+        """
+
+        if self.target_user and self.target_group:
+            raise ValueError("target_user and target_group cannot be set at the same time")
+        return self
 
 
 class ProjectUpdate(PartialUpdateModel, ProjectBase):
@@ -102,6 +116,16 @@ class Project(ProjectBase):
     status: Optional[ProjectStatus] = None
     filename: Optional[str] = None
     created_by: Optional[str] = Field(None, description="Username of the user who created the project")
+
+
+class ProjectDistributionResult(BaseModel):
+    """
+    Outcome of one recipient of a group distribution request.
+    """
+
+    username: str = Field(..., description="User the copy was distributed to")
+    project: Optional[Project] = Field(None, description="The distributed copy, set on success")
+    error: Optional[ErrorMessage] = Field(None, description="The error, set when the copy could not be created")
 
 
 class ProjectFile(BaseModel):
