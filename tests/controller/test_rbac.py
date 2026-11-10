@@ -916,6 +916,62 @@ class TestProjectDistribution:
         assert succeeded[0]["project"]["created_by"] == succeeded[0]["username"]
         assert by_username[failed[0]["username"]]["project"] is None
 
+    async def test_distribute_project_to_multiple_users(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student1 = await TestProjectOwnership._create_user_in_users_group(db_session, f"alice-{uuid.uuid4().hex[:8]}")
+        student2 = await TestProjectOwnership._create_user_in_users_group(db_session, f"bob-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "lab1", "target_users": [student2.username, student1.username, student2.username]},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            results = response.json()
+            # duplicates in the list are collapsed: one copy per user
+            assert {result["username"] for result in results} == {student1.username, student2.username}
+            for result in results:
+                assert result["error"] is None
+                assert result["project"]["created_by"] == result["username"]
+                assert result["project"]["name"] == f"lab1-{result['username']}"
+
+        rbac_repo = RbacRepository(db_session)
+        lab_member_role = await rbac_repo.get_role_by_name("Lab member")
+        for result in results:
+            ace = await rbac_repo.get_ace_by_path(f"/projects/{result['project']['project_id']}")
+            assert str(ace.role_id) == str(lab_member_role.role_id)
+
+    async def test_multiple_users_distribution_fails_fast_on_unknown_user(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"alice-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "lab1", "target_users": [student.username, "missing-user"]},
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+        # nothing was distributed: a typo in the list must not half-succeed
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.get(app.url_path_for("get_projects"))
+            assert source_id not in {p["project_id"] for p in response.json()}
+            assert all(not p["name"].startswith("lab1-") for p in response.json())
+
     async def test_group_distribution_validation(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
     ) -> None:
@@ -927,7 +983,7 @@ class TestProjectDistribution:
             )
             source_id = response.json()["project_id"]
 
-            # a distribution targets a single user or a whole group, never both
+            # a distribution targets one kind of recipient, never several
             response = await teacher_client.post(
                 app.url_path_for("duplicate_project", project_id=source_id),
                 json={"name": "copy", "target_user": "user1", "target_group": "Users"},
@@ -936,9 +992,22 @@ class TestProjectDistribution:
 
             response = await teacher_client.post(
                 app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "copy", "target_user": "user1", "target_users": ["user2"]},
+            )
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
                 json={"name": "copy", "target_group": "missing-group"},
             )
             assert response.status_code == status.HTTP_404_NOT_FOUND
+
+            # an empty list of users is rejected at validation time
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": "copy", "target_users": []},
+            )
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
             # the built-in "Users" group has the admin as member, but an empty
             # group must be rejected
