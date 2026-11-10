@@ -88,7 +88,9 @@ Only the project owner (its `created_by`) or a superadmin can share, list or rem
 
 A share cannot grant a role with privileges the sharer does not hold on the project. In particular the owner of a distributed (frozen) copy cannot unfreeze it by sharing it to anyone, themselves included: the share would have to carry a wider role than the frozen one they hold. Superadmins are not bound by this rule.
 
-There is no snapshot and no reset anchor here: a restore, a topology edit or a deletion hits the one shared project and therefore every user of it. Give out the "Lab member" role when the topology must stay put, or distribute copies instead when each recipient needs an isolated lab.
+A share target cannot delete the project, and cannot import another archive on top of it: both destroy the project, and both are reserved to its owner and to superadmins. This matters because the "Lab member" role carries `Project.Allocate` — required just to open the project — and allocation alone must not grant destruction of a project the caller does not own.
+
+There is no snapshot and no reset anchor here: a restore, a topology edit or a node power cycle hits the one shared project and therefore every user of it. Give out the "Lab member" role when the topology must stay put, or distribute copies instead when each recipient needs an isolated lab.
 
 A group share is one ACE on the group, so members joining the group later get access too — unlike a group distribution, which copies to the members of the group at the time of the call.
 

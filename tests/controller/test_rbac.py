@@ -759,6 +759,19 @@ class TestProjectDistribution:
             )
             assert response.status_code == status.HTTP_404_NOT_FOUND
 
+    async def test_recipient_can_delete_their_own_copy(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        _, copy_id = await self._distribute(app, test_user, student.username)
+
+        # the copy belongs to its recipient: deleting it stays allowed (the
+        # deletion guard is ownership-based, and the recipient is the owner)
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.delete(app.url_path_for("delete_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
     async def test_distribution_copy_does_not_inherit_resource_pools(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
     ) -> None:
@@ -1247,6 +1260,31 @@ class TestProjectShare:
                 app.url_path_for("update_project", project_id=project_id), json={"name": "hacked"}
             )
             assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    async def test_share_target_cannot_delete_the_project(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        project_id = await self._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+
+        # the target carries Project.Allocate (it is required to open the
+        # project) but must not be able to destroy the sharer's project
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.delete(app.url_path_for("delete_project", project_id=project_id))
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+        # the owner deletes their own project
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.delete(app.url_path_for("delete_project", project_id=project_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
 
     async def test_share_with_multiple_users(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User

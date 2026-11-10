@@ -82,10 +82,10 @@ The same pattern applies to imports (the importer becomes the owner), duplicates
 | `GET` | `/v3/projects` | List the projects accessible through an ACE or a resource pool; no `created_by` filter anymore | login only |
 | `POST` | `/v3/projects` | Create a project and its owner ACE | `Project.Allocate` |
 | `POST` | `/v3/projects/{project_id}/duplicate` | Duplicate a project; the new project gets an owner ACE for the caller | `Project.Audit` |
-| `POST` | `/v3/projects/{project_id}/import` | New target ID: collection check, then owner ACE for the importer; existing target ID: `Project.Allocate` on that project | `Project.Allocate` |
+| `POST` | `/v3/projects/{project_id}/import` | New target ID: collection check, then owner ACE for the importer; existing target ID: `Project.Allocate` on that project, and only its owner or a superadmin (the import destroys the existing project) | `Project.Allocate` |
 | `POST` | `/v3/projects/load` | Load a project from a local path; now `Server.Modify` and local server only | `Server.Modify` |
 | `GET` | `/v3/projects/{project_id}` | Read a project | `Project.Audit` |
-| `DELETE` | `/v3/projects/{project_id}` | Delete a project and all ACEs under its path | `Project.Allocate` |
+| `DELETE` | `/v3/projects/{project_id}` | Delete a project and all ACEs under its path; only its owner or a superadmin (users with access through a share or a resource pool cannot) | `Project.Allocate` |
 | `POST` | `/v3/copilot/projects/{project_id}/chat/*` | Chat endpoints now require access to the project; chat sessions are also checked against the current user | `Project.Audit` |
 
 The project-scoped routes not listed here keep their privilege names; they are covered by the owner ACE through path propagation (`/projects/<project_id>/nodes/...` and so on), including the console and notification WebSockets.
