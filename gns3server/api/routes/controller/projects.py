@@ -31,7 +31,7 @@ import gns3server.utils.zipfile_zstd as zipfile
 
 log = logging.getLogger()
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import UUID
 
 from fastapi import (
@@ -51,6 +51,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+import gns3server.db.models as models
 from gns3server import schemas
 from gns3server.api.openapi import ZIP_MEDIA_TYPE, binary_request_body, binary_response
 from gns3server.api.responses import NDJSON_MEDIA_TYPE, NOTIFICATION_STREAM_RESPONSES, NDJSONResponse
@@ -914,10 +915,93 @@ async def import_project(
     return project.asdict()
 
 
+async def _resolve_distribution_targets(
+    users_repo: UsersRepository,
+    rbac_repo: RbacRepository,
+    project_data: schemas.ProjectDuplicate,
+) -> Tuple[Optional[models.User], Optional[List[models.User]], UUID]:
+    """
+    Resolve the distribution target(s) and the role of their owner ACE.
+
+    A distribution targets a single user or a whole group. Raises 404 when the
+    user, the group or the role does not exist, 409 when the group is empty.
+    """
+
+    role_name = project_data.owner_role or DISTRIBUTION_DEFAULT_ROLE
+    role = await rbac_repo.get_role_by_name(role_name)
+    if role is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Role '{role_name}' does not exist")
+
+    if project_data.target_user:
+        target_user = await users_repo.get_user_by_username(project_data.target_user)
+        if target_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Target user '{project_data.target_user}' does not exist",
+            )
+        return target_user, None, role.role_id
+
+    if project_data.target_group:
+        group = await users_repo.get_user_group_by_name(project_data.target_group)
+        if group is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Target group '{project_data.target_group}' does not exist",
+            )
+        members = await users_repo.get_user_group_members(group.user_group_id)
+        if not members:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Target group '{project_data.target_group}' has no members",
+            )
+        return None, members, role.role_id
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="A distribution needs target_user or target_group",
+    )
+
+
+async def _distribute_project_copy(
+    db_session: AsyncSession,
+    project: Project,
+    target: models.User,
+    owner_role_id: UUID,
+    name: str,
+    reset_mac_addresses: Optional[bool],
+) -> dict:
+    """
+    Duplicate a project on behalf of another user: the copy is owned by that
+    user, its owner ACE carries the given (reduced) role, and it ships with a
+    snapshot of the template state.
+    """
+
+    new_project = await project.duplicate(
+        name=name,
+        reset_mac_addresses=reset_mac_addresses,
+        user=target.username,
+    )
+    await ensure_project_owner_ace(db_session, new_project.id, new_project.created_by, role_id=owner_role_id)
+
+    # Ship the copy with a snapshot of the template state so the recipient can
+    # reset the lab to its initial state (Snapshot.Restore). Snapshots of the
+    # source project are already part of the copy.
+    if TEMPLATE_SNAPSHOT_NAME not in [snapshot.name for snapshot in new_project.snapshots.values()]:
+        reopen = new_project.status == "closed"
+        if reopen:
+            await new_project.open()
+        try:
+            await new_project.snapshot(TEMPLATE_SNAPSHOT_NAME)
+        finally:
+            if reopen:
+                await new_project.close()
+    return new_project.asdict()
+
+
 @router.post(
     "/{project_id}/duplicate",
     status_code=status.HTTP_201_CREATED,
-    response_model=schemas.Project,
+    response_model=Union[schemas.Project, List[schemas.ProjectDistributionResult]],
     responses={
         **responses,
         409: {"model": schemas.ErrorMessage, "description": "Could not duplicate project"},
@@ -931,32 +1015,26 @@ async def duplicate_project(
     rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
     pools_repo: ResourcePoolsRepository = Depends(get_repository(ResourcePoolsRepository)),
     db_session: AsyncSession = Depends(get_db_session),
-) -> schemas.Project:
+) -> Union[dict, List[schemas.ProjectDistributionResult]]:
     """
-    Duplicate a project, or distribute it to another user by setting
-    ``target_user``: the copy is then owned by that user, its owner ACE
-    carries a reduced role (``owner_role``, the built-in "Lab member" role by
-    default) and it ships with a snapshot of the template state.
+    Duplicate a project, or distribute it by setting ``target_user`` (one
+    user) or ``target_group`` (one copy per group member): each copy is owned
+    by its recipient, its owner ACE carries a reduced role (``owner_role``, the
+    built-in "Lab member" role by default) and it ships with a snapshot of the
+    template state. A group distribution returns one result per member.
 
     Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
     """
 
-    # A distribution duplicates the project on behalf of another user: resolve
-    # the target and the role of its owner ACE before doing any work.
-    target_user = None
-    owner_role_id = None
-    if project_data.target_user:
-        target_user = await UsersRepository(db_session).get_user_by_username(project_data.target_user)
-        if target_user is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Target user '{project_data.target_user}' does not exist",
-            )
-        role_name = project_data.owner_role or DISTRIBUTION_DEFAULT_ROLE
-        role = await rbac_repo.get_role_by_name(role_name)
-        if role is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Role '{role_name}' does not exist")
-        owner_role_id = role.role_id
+    # A distribution duplicates the project on behalf of other users: resolve
+    # the target(s) and the role of their owner ACE before doing any work.
+    target_user: Optional[models.User] = None
+    target_group_members: Optional[List[models.User]] = None
+    owner_role_id: Optional[UUID] = None
+    if project_data.target_user or project_data.target_group:
+        target_user, target_group_members, owner_role_id = await _resolve_distribution_targets(
+            UsersRepository(db_session), rbac_repo, project_data
+        )
 
     pool_memberships = await pools_repo.get_resource_memberships(project.id)
 
@@ -977,39 +1055,52 @@ async def duplicate_project(
             log.warning(f"Project {project.name} cannot be duplicated anywhere")
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
+    if target_user is not None:
+        assert owner_role_id is not None  # a distribution always resolves the role first
+        return await _distribute_project_copy(
+            db_session, project, target_user, owner_role_id, project_data.name, project_data.reset_mac_addresses
+        )
+
+    if target_group_members is not None:
+        assert owner_role_id is not None  # a distribution always resolves the role first
+        # Every member gets their own copy, named after the lab and the member
+        results = []
+        for member in target_group_members:
+            try:
+                copy = await _distribute_project_copy(
+                    db_session,
+                    project,
+                    member,
+                    owner_role_id,
+                    f"{project_data.name}-{member.username}",
+                    project_data.reset_mac_addresses,
+                )
+                results.append(schemas.ProjectDistributionResult(username=member.username, project=copy))
+            except ControllerError as e:
+                results.append(
+                    schemas.ProjectDistributionResult(
+                        username=member.username, error=schemas.ErrorMessage(message=str(e))
+                    )
+                )
+        return results
+
     reset_mac_addresses = project_data.reset_mac_addresses
     new_project = await project.duplicate(
         name=project_data.name,
         reset_mac_addresses=reset_mac_addresses,
-        user=target_user.username if target_user else current_user.username,
+        user=current_user.username,
     )
-    # The duplicated project is owned by the user who duplicated it. A
-    # distributed copy is owned by the target user, with the reduced role.
-    await ensure_project_owner_ace(db_session, new_project.id, new_project.created_by, role_id=owner_role_id)
+    # The duplicated project is owned by the user who duplicated it.
+    await ensure_project_owner_ace(db_session, new_project.id, new_project.created_by)
 
     # Add the new project in the same resource pools if the duplicated project belongs to any.
-    # A distributed copy is personal: it does not inherit the pools.
-    if target_user is None and pool_memberships:
+    if pool_memberships:
         resource_create = schemas.ResourceCreate(
             resource_id=new_project.id, resource_type="project", name=new_project.name
         )
         resource = await pools_repo.create_resource(resource_create)
         for pool in pool_memberships:
             await pools_repo.add_resource_to_pool(pool.resource_pool_id, resource)
-
-    if target_user is not None:
-        # Ship the copy with a snapshot of the template state so the recipient
-        # can reset the lab to its initial state (Snapshot.Restore). Snapshots
-        # of the source project are already part of the copy.
-        if TEMPLATE_SNAPSHOT_NAME not in [snapshot.name for snapshot in new_project.snapshots.values()]:
-            reopen = new_project.status == "closed"
-            if reopen:
-                await new_project.open()
-            try:
-                await new_project.snapshot(TEMPLATE_SNAPSHOT_NAME)
-            finally:
-                if reopen:
-                    await new_project.close()
 
     return new_project.asdict()
 

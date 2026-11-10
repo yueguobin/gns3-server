@@ -2,7 +2,9 @@
 
 ## Overview
 
-A duplication can be made on behalf of another user: `POST /projects/{project_id}/duplicate` with `target_user` set creates a copy owned by that user. This is how a lab built by a teacher reaches every student: each recipient gets a personal copy they can use but not edit, because the owner ACE written on the copy carries a reduced role — the built-in "Lab member" role by default — instead of the full role the recipient keeps on their own projects.
+A duplication can be made on behalf of another user: `POST /projects/{project_id}/duplicate` with `target_user` set creates a copy owned by that user. With `target_group` set, every member of the group receives their own copy in one call. This is how a lab built by a teacher reaches every student: each recipient gets a personal copy they can use but not edit, because the owner ACE written on the copy carries a reduced role — the built-in "Lab member" role by default — instead of the full role the recipient keeps on their own projects.
+
+A group distribution is a fan-out, not a share: each member works on their own copy in isolation, and a restore resets only their copy. Sharing one project between several users is a different need, already covered by a resource pool or an explicit group ACE.
 
 The copy also ships with a "template state" snapshot, so a recipient can reset the lab to its initial state on their own (`Snapshot.Restore`).
 
@@ -10,7 +12,8 @@ The copy also ships with a "template state" snapshot, so a recipient can reset t
 
 | Term | Meaning |
 |---|---|
-| Distribution | A duplication with `target_user` set: the copy belongs to that user |
+| Distribution | A duplication with `target_user` or `target_group` set: the copy belongs to the recipient(s) |
+| Group distribution | A fan-out: one copy per group member, each owned by that member |
 | Owner ACE | The user-level ACE on `/projects/<project_id>` created with every new project |
 | Lab member | Built-in role carried by distributed copies by default: use the lab, do not touch the topology |
 | Template state | Snapshot taken right after a distributed copy is created; the reset anchor for the recipient |
@@ -62,20 +65,25 @@ After the distribution, the recipient lists the copy like any of their projects 
 
 | Method | Path | Description | Privilege |
 |---|---|---|---|
-| POST | `/v3/projects/{project_id}/duplicate` | Duplicate, or distribute with `target_user` | `Project.Audit`, plus `Project.Allocate` somewhere the copy can live |
+| POST | `/v3/projects/{project_id}/duplicate` | Duplicate, or distribute with `target_user` / `target_group` | `Project.Audit`, plus `Project.Allocate` somewhere the copy can live |
 
 Request fields added to `ProjectDuplicate`:
 
 | Field | Type | Description |
 |---|---|---|
 | `target_user` | string, optional | Username receiving the copy. Missing user: 404 |
+| `target_group` | string, optional | User group name: every member receives their own copy. Missing group: 404, empty group: 409 |
 | `owner_role` | string, optional | Role of the owner ACE on the copy. Default: `Lab member`. Missing role: 404 |
+
+`target_user` and `target_group` cannot be set at the same time (422). The response is the new `Project` for a plain duplication or a single-user distribution. A group distribution returns one result per member instead: `{username, project, error}`, where `project` is the member's copy on success and `error` carries the message when their copy could not be created (the other members are unaffected).
 
 ## Notes
 
 The "Lab member" role carries exactly these privileges: `Project.Allocate`, `Project.Audit`, `Snapshot.Audit`, `Snapshot.Restore`, `Node.Audit`, `Node.Console`, `Node.PowerMgmt`, `Link.Audit`, `Link.Capture`, `Drawing.Audit`. `Project.Allocate` is required to open a project at all (everything under an open project is gated by `open_required`); on the copy path it also lets the recipient delete their own copy. Creating other projects is ruled by the collection ACE on `/projects`, not by the copy.
 
 A distributed copy is personal: it does not inherit the resource pools of the source project, and the distributing user has no access to it (an explicit share or a superadmin is needed to watch a recipient's work).
+
+A group distribution reaches the members of the group at the time of the call. Members added later have no copy: the teacher distributes again for them. Copies of a group distribution are named after the lab and the member (`lab1-alice`).
 
 `owner_role` accepts any existing role, custom ones included. An ACE on `/projects/<project_id>` can only reach project-scoped paths, so even a generous role cannot unlock user, compute or server administration through a copy.
 
