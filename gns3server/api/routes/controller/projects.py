@@ -31,7 +31,7 @@ import gns3server.utils.zipfile_zstd as zipfile
 
 log = logging.getLogger()
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from fastapi import (
@@ -918,7 +918,7 @@ async def import_project(
 async def _resolve_distribution_targets(
     users_repo: UsersRepository,
     rbac_repo: RbacRepository,
-    project_data: schemas.ProjectDuplicate,
+    project_data: schemas.ProjectDistribute,
 ) -> Tuple[Optional[models.User], Optional[List[models.User]], UUID]:
     """
     Resolve the distribution target(s) and the role of their owner ACE.
@@ -1013,44 +1013,17 @@ async def _distribute_project_copy(
     return new_project.asdict()
 
 
-@router.post(
-    "/{project_id}/duplicate",
-    status_code=status.HTTP_201_CREATED,
-    response_model=Union[schemas.Project, List[schemas.ProjectDistributionResult]],
-    responses={
-        **responses,
-        409: {"model": schemas.ErrorMessage, "description": "Could not duplicate project"},
-    },
-    dependencies=[Depends(has_privilege("Project.Audit"))],
-)
-async def duplicate_project(
-    project_data: schemas.ProjectDuplicate,
-    project: Project = Depends(dep_project),
-    current_user: schemas.User = Depends(get_current_active_user),
-    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
-    pools_repo: ResourcePoolsRepository = Depends(get_repository(ResourcePoolsRepository)),
-    db_session: AsyncSession = Depends(get_db_session),
-) -> Union[dict, List[schemas.ProjectDistributionResult]]:
+async def _duplicable_pool_memberships(
+    current_user: schemas.User,
+    project: Project,
+    rbac_repo: RbacRepository,
+    pools_repo: ResourcePoolsRepository,
+) -> List:
     """
-    Duplicate a project, or distribute it by setting ``target_user`` (one
-    user), ``target_users`` (one copy per listed user) or ``target_group``
-    (one copy per group member): each copy is owned by its recipient, its
-    owner ACE carries a reduced role (``owner_role``, the built-in "Lab
-    member" role by default) and it ships with a snapshot of the template
-    state. A multi-recipient distribution returns one result per recipient.
-
-    Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
+    Pool memberships of the source project, after checking the user can
+    create a copy of it somewhere: in the root (/projects) or in a pool the
+    project belongs to. Superadmins always pass.
     """
-
-    # A distribution duplicates the project on behalf of other users: resolve
-    # the target(s) and the role of their owner ACE before doing any work.
-    target_user: Optional[models.User] = None
-    recipients: Optional[List[models.User]] = None
-    owner_role_id: Optional[UUID] = None
-    if project_data.target_user or project_data.target_users or project_data.target_group:
-        target_user, recipients, owner_role_id = await _resolve_distribution_targets(
-            UsersRepository(db_session), rbac_repo, project_data
-        )
 
     pool_memberships = await pools_repo.get_resource_memberships(project.id)
 
@@ -1071,45 +1044,44 @@ async def duplicate_project(
             log.warning(f"Project {project.name} cannot be duplicated anywhere")
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
-    if target_user is not None:
-        assert owner_role_id is not None  # a distribution always resolves the role first
-        return await _distribute_project_copy(
-            db_session, project, target_user, owner_role_id, project_data.name, project_data.reset_mac_addresses
-        )
+    return pool_memberships
 
-    if recipients is not None:
-        assert owner_role_id is not None  # a distribution always resolves the role first
-        # Every recipient gets their own copy, named after the lab and the user
-        results = []
-        for member in recipients:
-            try:
-                copy = await _distribute_project_copy(
-                    db_session,
-                    project,
-                    member,
-                    owner_role_id,
-                    f"{project_data.name}-{member.username}",
-                    project_data.reset_mac_addresses,
-                )
-                results.append(schemas.ProjectDistributionResult(username=member.username, project=copy))
-            except ControllerError as e:
-                results.append(
-                    schemas.ProjectDistributionResult(
-                        username=member.username, error=schemas.ErrorMessage(message=str(e))
-                    )
-                )
-        return results
 
-    reset_mac_addresses = project_data.reset_mac_addresses
+@router.post(
+    "/{project_id}/duplicate",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.Project,
+    responses={
+        **responses,
+        409: {"model": schemas.ErrorMessage, "description": "Could not duplicate project"},
+    },
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def duplicate_project(
+    project_data: schemas.ProjectDuplicate,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+    pools_repo: ResourcePoolsRepository = Depends(get_repository(ResourcePoolsRepository)),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> schemas.Project:
+    """
+    Duplicate a project: the copy belongs to the user who duplicated it.
+
+    Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
+    """
+
+    pool_memberships = await _duplicable_pool_memberships(current_user, project, rbac_repo, pools_repo)
+
     new_project = await project.duplicate(
         name=project_data.name,
-        reset_mac_addresses=reset_mac_addresses,
+        reset_mac_addresses=project_data.reset_mac_addresses,
         user=current_user.username,
     )
     # The duplicated project is owned by the user who duplicated it.
     await ensure_project_owner_ace(db_session, new_project.id, new_project.created_by)
 
-    # Add the new project in the same resource pools if the duplicated project belongs to any.
+    # Add the new project in the same resource pools if the duplicated project belongs to any
     if pool_memberships:
         resource_create = schemas.ResourceCreate(
             resource_id=new_project.id, resource_type="project", name=new_project.name
@@ -1119,6 +1091,58 @@ async def duplicate_project(
             await pools_repo.add_resource_to_pool(pool.resource_pool_id, resource)
 
     return new_project.asdict()
+
+
+@router.post(
+    "/{project_id}/distribute",
+    status_code=status.HTTP_201_CREATED,
+    response_model=List[schemas.ProjectDistributionResult],
+    responses={
+        **responses,
+        409: {"model": schemas.ErrorMessage, "description": "Could not distribute project"},
+    },
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def distribute_project(
+    project_data: schemas.ProjectDistribute,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+    pools_repo: ResourcePoolsRepository = Depends(get_repository(ResourcePoolsRepository)),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> List[schemas.ProjectDistributionResult]:
+    """
+    Distribute a project: create one copy per recipient (a single user, every
+    listed user, or every member of a user group). Each copy is owned by its
+    recipient, its owner ACE carries a reduced role (``owner_role``, the
+    built-in "Lab member" role by default) and it ships with a snapshot of
+    the template state. Returns one result per recipient: the copy on
+    success, the error when it could not be created.
+
+    Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
+    """
+
+    # Resolve the recipient(s) and the role of their owner ACE before doing any work.
+    target_user, recipients, owner_role_id = await _resolve_distribution_targets(
+        UsersRepository(db_session), rbac_repo, project_data
+    )
+    await _duplicable_pool_memberships(current_user, project, rbac_repo, pools_repo)
+
+    # a single recipient keeps the given name, a fan-out names every copy
+    # after the lab and its recipient (lab1-alice)
+    results = []
+    for member in [target_user] if target_user is not None else recipients or []:
+        name = project_data.name if target_user is not None else f"{project_data.name}-{member.username}"
+        try:
+            copy = await _distribute_project_copy(
+                db_session, project, member, owner_role_id, name, project_data.reset_mac_addresses
+            )
+            results.append(schemas.ProjectDistributionResult(username=member.username, project=copy))
+        except ControllerError as e:
+            results.append(
+                schemas.ProjectDistributionResult(username=member.username, error=schemas.ErrorMessage(message=str(e)))
+            )
+    return results
 
 
 @router.get("/{project_id}/locked", dependencies=[Depends(has_privilege("Project.Audit"))])

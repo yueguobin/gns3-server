@@ -586,11 +586,16 @@ class TestProjectDistribution:
             source_id = response.json()["project_id"]
 
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": f"lab-copy-{uuid.uuid4()}", "target_user": student_username},
             )
             assert response.status_code == status.HTTP_201_CREATED
-            return source_id, response.json()["project_id"]
+            # even a single recipient is reported as a one-item list
+            results = response.json()
+            assert len(results) == 1
+            assert results[0]["error"] is None
+            assert results[0]["username"] == student_username
+            return source_id, results[0]["project"]["project_id"]
 
     async def test_distribute_project_to_user(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
@@ -718,13 +723,13 @@ class TestProjectDistribution:
             source_id = response.json()["project_id"]
 
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "copy", "target_user": "missing-user"},
             )
             assert response.status_code == status.HTTP_404_NOT_FOUND
 
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "copy", "target_user": student.username, "owner_role": "No such role"},
             )
             assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -829,7 +834,7 @@ class TestProjectDistribution:
             source_id = response.json()["project_id"]
 
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "lab1", "target_group": group.name},
             )
             assert response.status_code == status.HTTP_201_CREATED
@@ -898,7 +903,7 @@ class TestProjectDistribution:
             source.duplicate = fail_on_second_call  # type: ignore[method-assign]
             try:
                 response = await teacher_client.post(
-                    app.url_path_for("duplicate_project", project_id=source_id),
+                    app.url_path_for("distribute_project", project_id=source_id),
                     json={"name": "lab1", "target_group": group.name},
                 )
             finally:
@@ -930,7 +935,7 @@ class TestProjectDistribution:
             source_id = response.json()["project_id"]
 
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "lab1", "target_users": [student2.username, student1.username, student2.username]},
             )
             assert response.status_code == status.HTTP_201_CREATED
@@ -961,7 +966,7 @@ class TestProjectDistribution:
             source_id = response.json()["project_id"]
 
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "lab1", "target_users": [student.username, "missing-user"]},
             )
             assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -985,27 +990,34 @@ class TestProjectDistribution:
 
             # a distribution targets one kind of recipient, never several
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "copy", "target_user": "user1", "target_group": "Users"},
             )
             assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "copy", "target_user": "user1", "target_users": ["user2"]},
             )
             assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "copy", "target_group": "missing-group"},
             )
             assert response.status_code == status.HTTP_404_NOT_FOUND
 
             # an empty list of users is rejected at validation time
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "copy", "target_users": []},
+            )
+            assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+            # a distribution without any target is rejected as well
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "copy"},
             )
             assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -1015,7 +1027,7 @@ class TestProjectDistribution:
                 schemas.UserGroupCreate(name=f"empty-{uuid.uuid4().hex[:8]}")
             )
             response = await teacher_client.post(
-                app.url_path_for("duplicate_project", project_id=source_id),
+                app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "copy", "target_group": empty_group.name},
             )
             assert response.status_code == status.HTTP_409_CONFLICT
