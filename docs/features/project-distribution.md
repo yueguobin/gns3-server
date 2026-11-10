@@ -2,7 +2,7 @@
 
 ## Overview
 
-A duplication can be made on behalf of other users: `POST /projects/{project_id}/duplicate` with `target_user` set creates a copy owned by that user; with `target_users` (a list) or `target_group` (a whole group), every listed user or group member receives their own copy in one call. This is how a lab built by a teacher reaches every student: each recipient gets a personal copy they can use but not edit, because the owner ACE written on the copy carries a reduced role — the built-in "Lab member" role by default — instead of the full role the recipient keeps on their own projects.
+`POST /projects/{project_id}/distribute` creates one copy of a project per recipient: a single user (`target_user`), every listed user (`target_users`) or every member of a user group (`target_group`). This is how a lab built by a teacher reaches every student: each recipient gets a personal copy they can use but not edit, because the owner ACE written on the copy carries a reduced role — the built-in "Lab member" role by default — instead of the full role the recipient keeps on their own projects. A plain duplication stays a separate operation (`POST /projects/{project_id}/duplicate`): the copy belongs to the caller.
 
 A group distribution is a fan-out, not a share: each member works on their own copy in isolation, and a restore resets only their copy. Sharing one project between several users is a different need, already covered by a resource pool or an explicit group ACE.
 
@@ -12,7 +12,7 @@ The copy also ships with a "template state" snapshot, so a recipient can reset t
 
 | Term | Meaning |
 |---|---|
-| Distribution | A duplication with `target_user`, `target_users` or `target_group` set: the copy belongs to the recipient(s) |
+| Distribution | One copy per recipient via the distribute endpoint: each copy belongs to its recipient |
 | Group distribution | A fan-out: one copy per group member, each owned by that member |
 | Owner ACE | The user-level ACE on `/projects/<project_id>` created with every new project |
 | Lab member | Built-in role carried by distributed copies by default: use the lab, do not touch the topology |
@@ -65,18 +65,21 @@ After the distribution, the recipient lists the copy like any of their projects 
 
 | Method | Path | Description | Privilege |
 |---|---|---|---|
-| POST | `/v3/projects/{project_id}/duplicate` | Duplicate, or distribute with `target_user` / `target_users` / `target_group` | `Project.Audit`, plus `Project.Allocate` somewhere the copy can live |
+| POST | `/v3/projects/{project_id}/distribute` | Create one copy per recipient | `Project.Audit`, plus `Project.Allocate` somewhere the copy can live |
+| POST | `/v3/projects/{project_id}/duplicate` | Duplicate: the copy belongs to the caller | `Project.Audit`, plus `Project.Allocate` somewhere the copy can live |
 
-Request fields added to `ProjectDuplicate`:
+Request fields of `ProjectDistribute`:
 
 | Field | Type | Description |
 |---|---|---|
-| `target_user` | string, optional | Username receiving the copy. Missing user: 404 |
-| `target_users` | list of strings, optional | Every listed user receives their own copy. Unknown name: 404 before any copy is made; an empty list: 422 |
-| `target_group` | string, optional | User group name: every member receives their own copy. Missing group: 404, empty group: 409 |
-| `owner_role` | string, optional | Role of the owner ACE on the copy. Default: `Lab member`. Missing role: 404 |
+| `name` | string | Base name of the copies (required) |
+| `reset_mac_addresses` | bool, optional | Reset MAC addresses on every copy |
+| `target_user` | string, optional | Username receiving the copy, named `name`. Missing user: 404 |
+| `target_users` | list of strings, optional | Every listed user receives their own copy, named `name-username`. Unknown name: 404 before any copy is made; an empty list: 422 |
+| `target_group` | string, optional | Every member of the group receives their own copy, named `name-username`. Missing group: 404, empty group: 409 |
+| `owner_role` | string, optional | Role of the owner ACE on the copies. Default: `Lab member`. Missing role: 404 |
 
-`target_user`, `target_users` and `target_group` cannot be combined (422). The response is the new `Project` for a plain duplication or a single-user distribution. A multi-recipient distribution returns one result per recipient instead: `{username, project, error}`, where `project` is the recipient's copy on success and `error` carries the message when their copy could not be created (the other recipients are unaffected).
+Exactly one of `target_user`, `target_users` or `target_group` must be set (combining them, or none: 422). The response is always one result per recipient: `{username, project, error}`, where `project` is the recipient's copy on success and `error` carries the message when their copy could not be created (the other recipients are unaffected).
 
 ## Notes
 

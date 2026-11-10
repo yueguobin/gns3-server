@@ -84,7 +84,17 @@ class ProjectDuplicate(ProjectBase):
 
     name: str
     reset_mac_addresses: Optional[bool] = Field(False, description="Reset MAC addresses for this project")
-    target_user: Optional[str] = Field(None, description="Distribute the copy to this user instead of keeping it")
+
+
+class ProjectDistribute(ProjectBase):
+    """
+    Properties for project distribution: a copy is created for every
+    recipient, owned by that recipient.
+    """
+
+    name: str
+    reset_mac_addresses: Optional[bool] = Field(False, description="Reset MAC addresses for this project")
+    target_user: Optional[str] = Field(None, description="Distribute the copy to this user")
     target_users: Optional[List[str]] = Field(
         None,
         min_length=1,
@@ -98,7 +108,7 @@ class ProjectDuplicate(ProjectBase):
     )
 
     @model_validator(mode="after")
-    def check_distribution_targets(self) -> "ProjectDuplicate":
+    def check_distribution_targets(self) -> "ProjectDistribute":
         """
         A distribution targets a single user, a list of users or a whole
         group, and only one of them.
