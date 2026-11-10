@@ -137,12 +137,39 @@ class Project(ProjectBase):
 
 class ProjectDistributionResult(BaseModel):
     """
-    Outcome of one recipient of a group distribution request.
+    Outcome of one recipient of a distribution request.
     """
 
     username: str = Field(..., description="User the copy was distributed to")
     project: Optional[Project] = Field(None, description="The distributed copy, set on success")
     error: Optional[ErrorMessage] = Field(None, description="The error, set when the copy could not be created")
+
+
+class ProjectDistributionStatus(StrEnum):
+    """
+    Status of a project distribution job.
+    """
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ProjectDistribution(BaseModel):
+    """
+    A project distribution job: one copy per recipient, created in the
+    background. Poll the job to follow the progress and read the results.
+    """
+
+    distribution_id: UUID
+    project_id: UUID
+    name: str = Field(..., description="Base name of the copies")
+    created_by: str = Field(..., description="Username of the user who started the distribution")
+    status: ProjectDistributionStatus
+    total: int = Field(..., description="Number of recipients")
+    completed: int = Field(..., description="Recipients processed so far, successful or not")
+    results: List[ProjectDistributionResult] = Field(default_factory=list)
+    error: Optional[ErrorMessage] = Field(None, description="Set when the job itself failed")
 
 
 class ProjectFile(BaseModel):

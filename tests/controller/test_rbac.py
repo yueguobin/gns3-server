@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import asyncio
+import time
 import uuid
 from unittest.mock import MagicMock
 
@@ -572,6 +574,27 @@ class TestProjectDistribution:
     }
 
     @staticmethod
+    async def _wait_for_distribution(
+        app: FastAPI, client: AsyncClient, project_id: str, distribution_id: str, timeout_seconds: float = 10.0
+    ) -> dict:
+        """
+        Poll a distribution job until it completes and return its final state.
+        """
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            response = await client.get(
+                app.url_path_for("get_project_distribution", project_id=project_id, distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_200_OK
+            job = response.json()
+            if job["status"] == "completed":
+                return job
+            assert job["status"] == "running"
+            await asyncio.sleep(0.05)
+        raise AssertionError(f"Distribution '{distribution_id}' did not complete in {timeout_seconds} seconds")
+
+    @staticmethod
     async def _distribute(app: FastAPI, teacher: User, student_username: str) -> tuple[str, str]:
         """
         Create a project as the teacher and distribute it to the student.
@@ -589,9 +612,11 @@ class TestProjectDistribution:
                 app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": f"lab-copy-{uuid.uuid4()}", "target_user": student_username},
             )
-            assert response.status_code == status.HTTP_201_CREATED
-            # even a single recipient is reported as a one-item list
-            results = response.json()
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            assert job["total"] == 1
+            results = job["results"]
             assert len(results) == 1
             assert results[0]["error"] is None
             assert results[0]["username"] == student_username
@@ -837,8 +862,11 @@ class TestProjectDistribution:
                 app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "lab1", "target_group": group.name},
             )
-            assert response.status_code == status.HTTP_201_CREATED
-            results = response.json()
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            assert job["total"] == 2
+            results = job["results"]
             assert {result["username"] for result in results} == {member.username for member in members}
             copy_ids = {}
             for result in results:
@@ -906,12 +934,16 @@ class TestProjectDistribution:
                     app.url_path_for("distribute_project", project_id=source_id),
                     json={"name": "lab1", "target_group": group.name},
                 )
+                assert response.status_code == status.HTTP_202_ACCEPTED
+                distribution_id = response.json()["distribution_id"]
+                job = await TestProjectDistribution._wait_for_distribution(
+                    app, teacher_client, source_id, distribution_id
+                )
             finally:
                 source.duplicate = original_duplicate  # type: ignore[method-assign]
 
         # one member got their copy, the failed one is reported with the error
-        assert response.status_code == status.HTTP_201_CREATED
-        results = response.json()
+        results = job["results"]
         assert len(results) == 2
         by_username = {result["username"]: result for result in results}
         failed = [result for result in results if result["error"] is not None]
@@ -938,8 +970,11 @@ class TestProjectDistribution:
                 app.url_path_for("distribute_project", project_id=source_id),
                 json={"name": "lab1", "target_users": [student2.username, student1.username, student2.username]},
             )
-            assert response.status_code == status.HTTP_201_CREATED
-            results = response.json()
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            assert job["total"] == 2
+            results = job["results"]
             # duplicates in the list are collapsed: one copy per user
             assert {result["username"] for result in results} == {student1.username, student2.username}
             for result in results:
@@ -976,6 +1011,46 @@ class TestProjectDistribution:
             response = await student_client.get(app.url_path_for("get_projects"))
             assert source_id not in {p["project_id"] for p in response.json()}
             assert all(not p["name"].startswith("lab1-") for p in response.json())
+
+    async def test_distribution_job_visibility(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            assert job["created_by"] == test_user.username
+            assert job["total"] == 1 and job["completed"] == 1
+
+            # the job is listed with the project
+            response = await teacher_client.get(app.url_path_for("get_project_distributions", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert distribution_id in {job["distribution_id"] for job in response.json()}
+
+            # an unknown distribution id is a 404
+            response = await teacher_client.get(
+                app.url_path_for("get_project_distribution", project_id=source_id, distribution_id=str(uuid.uuid4()))
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+        # a user without access to the source project cannot read the job
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.get(
+                app.url_path_for("get_project_distribution", project_id=source_id, distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
 
     async def test_group_distribution_validation(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
