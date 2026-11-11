@@ -91,6 +91,7 @@ from .controller.users import (
     UserGroupUpdate,
     UserPreferences,
     UserPrivileges,
+    UserQuotaUsage,
     UserUpdate,
 )
 from .version import Version
@@ -413,6 +414,7 @@ __all__ = [
     "UserGroupUpdate",
     "UserPreferences",
     "UserPrivileges",
+    "UserQuotaUsage",
     "UserUpdate",
     "VMware",
     "VMwareCreate",

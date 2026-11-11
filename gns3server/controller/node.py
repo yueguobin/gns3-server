@@ -32,6 +32,7 @@ from ..utils.vxlan import vxlan_device_name
 from .controller_error import ComputeConflictError, ComputeError, ControllerError, ControllerTimeoutError
 from .node_types import BUILTIN_NODE_TYPES
 from .ports.port_factory import DynamipsPortFactory, PortFactory, StandardPortFactory
+from .quota_usage import reserve_start
 
 log = logging.getLogger(__name__)
 
@@ -954,6 +955,20 @@ class Node:
         """
         Start a node
         """
+        # Starting an already started node is a no-op on the compute side
+        # and takes no additional quota slot.
+        reservation = reserve_start(self.project) if self._status != "started" else None
+        try:
+            await self._start_checked(data)
+        finally:
+            if reservation is not None:
+                reservation.release()
+
+    async def _start_checked(self, data=None):
+        """
+        Start a node, after the running-node quota has been reserved.
+        """
+
         if self.missing_image:
             images = ", ".join(m["image"] for m in self._missing_images)
             raise ControllerError(
@@ -1091,10 +1106,16 @@ class Node:
         """
         Suspend a node
         """
+        # A reload ends with the node started: reserve a running slot
+        # unless it already holds one.
+        reservation = reserve_start(self.project) if self._status != "started" else None
         try:
             await self.post("/reload", timeout=240)
         except TimeoutError:
             raise ControllerTimeoutError(f"Timeout when reloading {self._name}")
+        finally:
+            if reservation is not None:
+                reservation.release()
         self._confirm_status("started")
 
     async def reset_console(self):

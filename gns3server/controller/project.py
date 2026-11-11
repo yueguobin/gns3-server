@@ -48,6 +48,7 @@ from .export_project import export_project
 from .import_project import import_project, regenerate_topology_ids, update_snapshots
 from .link import _UNSET
 from .node import Node
+from .quota_usage import QUOTA_COUNTED_TYPES, reserve_create, reserve_import
 from .snapshot import Snapshot
 from .topology import load_topology, project_to_topology
 from .udp_link import _VXLAN_ATTEMPTS, UDPLink
@@ -678,50 +679,57 @@ class Project:
         if node_id in self._nodes:
             return self._nodes[node_id]
 
-        if compute.id not in self._computes:
-            self._computes.append(compute.id)
+        # Opening a project replays its existing nodes through add_node:
+        # they are not new creations and must not be quota-checked.
+        reservation = None if self._loading else reserve_create(self)
+        try:
+            if compute.id not in self._computes:
+                self._computes.append(compute.id)
 
-        if node_type == "iou":
-            async with self._application_id_lock:
-                # IOU application IDs must be allocated serially to avoid duplicates.
-                # The lock must also cover _create_node() because get_next_application_id()
-                # checks in-memory nodes (self._nodes), which are only registered
-                # after _create_node() completes.
-                if "properties" in kwargs.keys():
-                    kwargs.get("properties")["application_id"] = get_next_application_id(
-                        self._controller.projects, self._computes
+            if node_type == "iou":
+                async with self._application_id_lock:
+                    # IOU application IDs must be allocated serially to avoid duplicates.
+                    # The lock must also cover _create_node() because get_next_application_id()
+                    # checks in-memory nodes (self._nodes), which are only registered
+                    # after _create_node() completes.
+                    if "properties" in kwargs.keys():
+                        kwargs.get("properties")["application_id"] = get_next_application_id(
+                            self._controller.projects, self._computes
+                        )
+                    elif "application_id" not in kwargs.keys() and not kwargs.get("properties"):
+                        kwargs["application_id"] = get_next_application_id(self._controller.projects, self._computes)
+                    node = await self._create_node(
+                        compute, name, node_id, node_type, allow_missing_image=allow_missing_image, **kwargs
                     )
-                elif "application_id" not in kwargs.keys() and not kwargs.get("properties"):
-                    kwargs["application_id"] = get_next_application_id(self._controller.projects, self._computes)
-                node = await self._create_node(
-                    compute, name, node_id, node_type, allow_missing_image=allow_missing_image, **kwargs
-                )
-        elif node_type == "docker" and _is_iol_docker_kwargs(kwargs):
-            # IOL Docker nodes derive interface MACs from the application ID
-            # exactly like IOU; they draw from the disjoint upper half of the
-            # id space so the two node types can neither collide nor starve
-            # each other.
-            async with self._application_id_lock:
-                if "properties" in kwargs.keys():
-                    properties = kwargs.get("properties") or {}
-                    if "application_id" not in properties:
-                        properties["application_id"] = get_next_application_id(
+            elif node_type == "docker" and _is_iol_docker_kwargs(kwargs):
+                # IOL Docker nodes derive interface MACs from the application ID
+                # exactly like IOU; they draw from the disjoint upper half of the
+                # id space so the two node types can neither collide nor starve
+                # each other.
+                async with self._application_id_lock:
+                    if "properties" in kwargs.keys():
+                        properties = kwargs.get("properties") or {}
+                        if "application_id" not in properties:
+                            properties["application_id"] = get_next_application_id(
+                                self._controller.projects, self._computes, iol_docker=True
+                            )
+                    elif "application_id" not in kwargs.keys():
+                        kwargs["application_id"] = get_next_application_id(
                             self._controller.projects, self._computes, iol_docker=True
                         )
-                elif "application_id" not in kwargs.keys():
-                    kwargs["application_id"] = get_next_application_id(
-                        self._controller.projects, self._computes, iol_docker=True
+                    node = await self._create_node(
+                        compute, name, node_id, node_type, allow_missing_image=allow_missing_image, **kwargs
                     )
+            else:
                 node = await self._create_node(
                     compute, name, node_id, node_type, allow_missing_image=allow_missing_image, **kwargs
                 )
-        else:
-            node = await self._create_node(
-                compute, name, node_id, node_type, allow_missing_image=allow_missing_image, **kwargs
-            )
-        self.emit_notification("node.created", node.asdict())
-        if dump:
-            self.dump()
+            self.emit_notification("node.created", node.asdict())
+            if dump:
+                self.dump()
+        finally:
+            if reservation is not None:
+                reservation.release()
         return node
 
     @locking
@@ -2256,53 +2264,62 @@ class Project:
             if compute.id != "local":
                 log.warning(f"Fast duplication is not supported with remote compute: '{compute.id}'")
                 return None
-        # work dir
-        p_work = pathlib.Path(location or self.path).parent.absolute()
-        t0 = time.time()
-        new_project_id = str(uuid.uuid4())
-        if location:
-            new_project_path = p_work.joinpath(location)
-        else:
-            new_project_path = p_work.joinpath(new_project_id)
-        # copy dir
-        await wait_run_in_executor(
-            shutil.copytree, self.path, new_project_path.as_posix(), symlinks=True, ignore_dangling_symlinks=True
-        )
-        log.info(f"Project content copied from '{self.path}' to '{new_project_path}' in {time.time() - t0}s")
 
-        # Read the topology file using the actual filename (self._filename), not self.name
-        # This handles the case where a project has been renamed but we need to read the actual file
-        old_gns3_file = new_project_path.joinpath(self._filename)
-        topology = json.loads(old_gns3_file.read_bytes())
-        project_name = name or topology["name"]
-        # If the project name is already used we generate a new one
-        project_name = self.controller.get_free_project_name(project_name)
-        topology["name"] = project_name
-        # To avoid unexpected behavior (project start without manual operations just after import)
-        topology["auto_start"] = False
-        topology["auto_open"] = False
-        topology["auto_close"] = False
+        # The copy carries the same nodes to a new owner: reserve them
+        # against its quota before any file is written. The export/import
+        # fallback path is covered by the check in import_project().
+        node_count = sum(1 for node in self._nodes.values() if node.node_type in QUOTA_COUNTED_TYPES)
+        reservation = reserve_import(user, node_count)
+        try:
+            # work dir
+            p_work = pathlib.Path(location or self.path).parent.absolute()
+            t0 = time.time()
+            new_project_id = str(uuid.uuid4())
+            if location:
+                new_project_path = p_work.joinpath(location)
+            else:
+                new_project_path = p_work.joinpath(new_project_id)
+            # copy dir
+            await wait_run_in_executor(
+                shutil.copytree, self.path, new_project_path.as_posix(), symlinks=True, ignore_dangling_symlinks=True
+            )
+            log.info(f"Project content copied from '{self.path}' to '{new_project_path}' in {time.time() - t0}s")
 
-        if user:
-            topology["created_by"] = user
+            # Read the topology file using the actual filename (self._filename), not self.name
+            # This handles the case where a project has been renamed but we need to read the actual file
+            old_gns3_file = new_project_path.joinpath(self._filename)
+            topology = json.loads(old_gns3_file.read_bytes())
+            project_name = name or topology["name"]
+            # If the project name is already used we generate a new one
+            project_name = self.controller.get_free_project_name(project_name)
+            topology["name"] = project_name
+            # To avoid unexpected behavior (project start without manual operations just after import)
+            topology["auto_start"] = False
+            topology["auto_open"] = False
+            topology["auto_close"] = False
 
-        # regenerate IDs for the duplicated project
-        regenerate_topology_ids(topology, new_project_path, reset_mac_addresses)
+            if user:
+                topology["created_by"] = user
 
-        # dump the updated .gns3 project file
-        dot_gns3_path = new_project_path.joinpath(f"{project_name}.gns3")
-        topology["project_id"] = new_project_id
-        with open(dot_gns3_path, "w+") as f:
-            json.dump(topology, f, indent=4, sort_keys=True)
+            # regenerate IDs for the duplicated project
+            regenerate_topology_ids(topology, new_project_path, reset_mac_addresses)
 
-        # update the snapshots with new IDs
-        snapshots_dir = os.path.join(new_project_path, "snapshots")
-        if os.path.isdir(snapshots_dir):
-            await update_snapshots(snapshots_dir, new_project_path, project_name, new_project_id)
+            # dump the updated .gns3 project file
+            dot_gns3_path = new_project_path.joinpath(f"{project_name}.gns3")
+            topology["project_id"] = new_project_id
+            with open(dot_gns3_path, "w+") as f:
+                json.dump(topology, f, indent=4, sort_keys=True)
 
-        # Remove the old .gns3 file (which has the original project name)
-        os.remove(old_gns3_file)
-        project = await self.controller.load_project(dot_gns3_path, load=False)
+            # update the snapshots with new IDs
+            snapshots_dir = os.path.join(new_project_path, "snapshots")
+            if os.path.isdir(snapshots_dir):
+                await update_snapshots(snapshots_dir, new_project_path, project_name, new_project_id)
+
+            # Remove the old .gns3 file (which has the original project name)
+            os.remove(old_gns3_file)
+            project = await self.controller.load_project(dot_gns3_path, load=False)
+        finally:
+            reservation.release()
         log.info(f"Project '{project.name}': fast duplicated in {time.time() - t0:.4f} seconds")
         return project
 

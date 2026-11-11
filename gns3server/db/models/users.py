@@ -52,6 +52,10 @@ class User(BaseTable):
     token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     is_active = Column(Boolean, default=True)
     is_superadmin = Column(Boolean, default=False)
+    # Per-user node quotas. NULL means "inherit the group default" and -1 means
+    # "explicitly unlimited" (so a user can be freed from a group limit).
+    max_nodes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_running_nodes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     groups = relationship("UserGroup", secondary=user_group_map, back_populates="users")
     acl_entries = relationship("ACE")
 
@@ -80,6 +84,10 @@ class UserGroup(BaseTable):
     user_group_id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=generate_uuid)
     name = Column(String, unique=True, index=True)
     is_builtin = Column(Boolean, default=False)
+    # Node quotas applied to the group members that do not override them.
+    # NULL means unlimited.
+    default_max_nodes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    default_max_running_nodes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     users = relationship("User", secondary=user_group_map, back_populates="groups")
     acl_entries = relationship("ACE")
 

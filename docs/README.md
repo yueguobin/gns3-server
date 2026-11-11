@@ -115,6 +115,9 @@ One frozen copy per recipient: `POST /projects/{project_id}/distribute` duplicat
 ### Global Notification Stream RBAC (`features/global-notification-stream-rbac.md`)
 The global notification stream (`/v3/notifications` NDJSON and WebSocket) requires the `Notification.Audit` privilege, held by superadmins only by default; a stream open on revocation is closed by the server within one ping tick.
 
+### User Node Quotas (`features/user-node-quotas.md`)
+Per-user limits on how many nodes a user can own (`max_nodes`) and run at once (`max_running_nodes`), across all their projects: user values override the group defaults, `-1` is explicitly unlimited, resource-free node types are not counted, and creation, start, import and distribution all reserve against the owner's quota. `GET /access/users/me/quotas` returns the effective limits plus current usage for the web UI.
+
 ---
 
 ## Design & Roadmaps (`design/`)
