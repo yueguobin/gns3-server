@@ -103,4 +103,8 @@ A group distribution reaches the members of the group at the time of the call. M
 
 Snapshots of the source project ride along with the copy. If the source already has a "template state" snapshot, the copy keeps it instead of creating a second one.
 
+Each copy is a full directory copy of the source project, and recipients are processed one at a time. Base disk images are never copied: a QEMU node cloned from a template keeps only its overlay in the project directory, and every copy shares the base image through its qcow2 backing file. The cost therefore scales with the total size of the node overlays times the number of recipients — overlays grow as the source lab is booted and configured — and the per-copy "template state" snapshot writes the project content a second time as an uncompressed zip. A topology using remote computes falls back to the slower export/import path instead of the directory copy.
+
+This is good enough for a small teaching environment (a handful of nodes, a few dozen recipients), which is the current target. Cheaper copying — compacting overlays before distributing, copy-on-write clones of the project directory, or instantiating each copy from its templates instead of copying files — is known future work, deferred until larger classes need it.
+
 Distribution jobs live in an in-process registry, like the rest of the controller state. A finished job stays queryable for one hour, then it is pruned. Restarting the server loses the job records — the copies already created are real projects and are unaffected — which is the documented trade-off until distribution records are persisted.
