@@ -560,6 +560,16 @@ class TestProjectDistribution:
     "template state" snapshot the recipient can restore on their own.
     """
 
+    # These tests run on the class event loop, like the class-scoped database
+    # fixtures. The distribution job runs in the background and shares the
+    # class engine: with an in-memory database all sessions share one pooled
+    # connection, and when a polling request and the job execute at the same
+    # time the connection's execute mutex binds to the event loop of that
+    # test. On the next test (a new event loop) a concurrent execute then
+    # fails with "Lock is bound to a different event loop". One loop for the
+    # whole class makes the job, the requests and the connection agree.
+    pytestmark = pytest.mark.asyncio(loop_scope="class")
+
     LAB_MEMBER_PRIVILEGES = {
         "Project.Allocate",
         "Project.Audit",
