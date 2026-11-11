@@ -35,8 +35,10 @@ from gns3server.controller.controller_error import (
     ControllerForbiddenError,
     ControllerNotFoundError,
 )
+from gns3server.controller.quota_usage import count_usage
 from gns3server.db.repositories.rbac import RbacRepository
 from gns3server.db.repositories.users import UsersRepository
+from gns3server.db.user_quota_state import UserQuotaState
 from gns3server.services import auth_service
 
 from .dependencies.authentication import get_current_active_user
@@ -193,6 +195,39 @@ async def get_logged_in_user_privileges(
 
     privilege_names = await rbac_repo.get_user_privileges(current_user.user_id)
     return schemas.UserPrivileges(is_superadmin=False, privileges=sorted(privilege_names))
+
+
+@router.get("/me/quotas", response_model=schemas.UserQuotaUsage)
+async def get_logged_in_user_quotas(
+    current_user: schemas.User = Depends(get_current_active_user),
+) -> schemas.UserQuotaUsage:
+    """
+    Get the effective node quotas of the current user along with the current
+    usage across all the projects they own. A NULL limit means unlimited
+    (superadmins are never limited). The usage only counts the node types
+    that consume resources (Ethernet switches, hubs, clouds and NATs are
+    not counted).
+
+    Meant for rendering purposes (e.g. a quota bar in the web UI).
+
+    Example: curl -X GET http://host:port/v3/access/users/me/quotas -H "Authorization: Bearer <token>"
+    """
+
+    assert current_user.username is not None  # an authenticated user always has a name
+    if current_user.is_superadmin:
+        current_nodes, current_running_nodes = count_usage(current_user.username)
+        return schemas.UserQuotaUsage(current_nodes=current_nodes, current_running_nodes=current_running_nodes)
+
+    limits = UserQuotaState.instance().get(current_user.username)
+    current_nodes, current_running_nodes = count_usage(current_user.username)
+    if limits is None:
+        return schemas.UserQuotaUsage(current_nodes=current_nodes, current_running_nodes=current_running_nodes)
+    return schemas.UserQuotaUsage(
+        max_nodes=limits.max_nodes,
+        max_running_nodes=limits.max_running_nodes,
+        current_nodes=current_nodes,
+        current_running_nodes=current_running_nodes,
+    )
 
 
 @router.get("/me/preferences", response_model=schemas.UserPreferences)

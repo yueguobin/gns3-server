@@ -29,7 +29,13 @@ from gns3server.compute.port_manager import PortManager
 from gns3server.config import Config
 from gns3server.controller import Controller
 from gns3server.db.project_acl import ensure_all_project_aces
-from gns3server.db.tasks import connect_to_db, disconnect_from_db, get_computes, load_rbac_state
+from gns3server.db.tasks import (
+    connect_to_db,
+    disconnect_from_db,
+    get_computes,
+    load_rbac_state,
+    load_user_quota_state,
+)
 from gns3server.services.image_reconciliation import get_image_reconciliation_service
 from gns3server.utils.http_client import HTTPClient
 
@@ -78,6 +84,9 @@ async def startup(app: FastAPI) -> None:
 
     # load the in-memory RBAC snapshot before serving requests
     await load_rbac_state(app)
+
+    # load the in-memory node quota snapshot the same way
+    await load_user_quota_state(app)
 
     # The default ACE on /projects does not propagate: every project gets an
     # owner ACE for its creator. Projects loaded from disk (startup, directory

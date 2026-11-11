@@ -30,6 +30,7 @@ import gns3server.utils.zipfile_zstd as zipfile_zstd
 
 from ..utils.asyncio import aiozipstream, wait_run_in_executor
 from .controller_error import ControllerError
+from .quota_usage import QUOTA_COUNTED_TYPES, reserve_import
 from .topology import load_topology
 
 log = logging.getLogger(__name__)
@@ -97,89 +98,107 @@ async def import_project(
     except (ValueError, KeyError):
         raise ControllerError("Cannot import project, the project.gns3 file is corrupted")
 
-    if location:
-        path = location
+    # A new import with a known future owner counts its nodes against the
+    # owner's quota (a snapshot restore keeps the nodes it replaces).
+    # The reservation covers the whole import: until the project is
+    # registered the nodes only exist as in-flight quota slots.
+    if user and not restoring_snapshot:
+        node_count = sum(
+            1 for node in topology.get("topology", {}).get("nodes", []) if node.get("node_type") in QUOTA_COUNTED_TYPES
+        )
+        reservation = reserve_import(user, node_count)
     else:
-        projects_path = controller.projects_directory()
-        path = os.path.join(projects_path, project_id)
-    try:
-        os.makedirs(path, exist_ok=True)
-    except UnicodeEncodeError:
-        raise ControllerError("The project name contain non supported or invalid characters")
+        reservation = None
 
     try:
-        with zipfile_zstd.ZipFile(stream) as zip_file:
-            await wait_run_in_executor(zip_file.extractall, path)
-            _create_symbolic_links(zip_file, path)
-    except zipfile_zstd.BadZipFile:
-        raise ControllerError("Cannot extract files from GNS3 project (invalid zip)")
-
-    topology = load_topology(os.path.join(path, "project.gns3"))
-    topology["name"] = project_name
-    # To avoid unexpected behavior (project start without manual operations just after import)
-    topology["auto_start"] = auto_start
-    topology["auto_open"] = auto_open
-    topology["auto_close"] = auto_close
-
-    if user:
-        topology["created_by"] = user
-
-    if not restoring_snapshot:
-        # Do not re-generate IDs if we are restoring a snapshot because they should be the same in a project
-        regenerate_topology_ids(topology, path, reset_mac_addresses=reset_mac_addresses)
-
-    # Modify the compute id of the node depending on compute capacity
-    if not keep_compute_ids:
-        # Round-robin through available compute resources.
-        # Only use computes that are connected to avoid import failures
-        available_computes = {
-            compute_id: compute for compute_id, compute in controller.computes.items() if compute.connected
-        }
-        if available_computes:
-            compute_nodes = itertools.cycle(available_computes)
-            for node in topology["topology"]["nodes"]:
-                node["compute_id"] = next(compute_nodes)
+        if location:
+            path = location
         else:
-            # No remote computes are connected, use local only
-            for node in topology["topology"]["nodes"]:
-                node["compute_id"] = "local"
+            projects_path = controller.projects_directory()
+            path = os.path.join(projects_path, project_id)
+        try:
+            os.makedirs(path, exist_ok=True)
+        except UnicodeEncodeError:
+            raise ControllerError("The project name contain non supported or invalid characters")
 
-    compute_created = set()
-    for node in topology["topology"]["nodes"]:
-        if node["compute_id"] != "local":
-            # Project created on the remote GNS3 VM?
-            if node["compute_id"] not in compute_created:
-                compute = controller.get_compute(node["compute_id"])
-                await compute.post(
-                    "/projects",
-                    data={
-                        "name": project_name,
-                        "project_id": project_id,
-                    },
+        try:
+            with zipfile_zstd.ZipFile(stream) as zip_file:
+                await wait_run_in_executor(zip_file.extractall, path)
+                _create_symbolic_links(zip_file, path)
+        except zipfile_zstd.BadZipFile:
+            raise ControllerError("Cannot extract files from GNS3 project (invalid zip)")
+
+        topology = load_topology(os.path.join(path, "project.gns3"))
+        topology["name"] = project_name
+        # To avoid unexpected behavior (project start without manual operations just after import)
+        topology["auto_start"] = auto_start
+        topology["auto_open"] = auto_open
+        topology["auto_close"] = auto_close
+
+        if user:
+            topology["created_by"] = user
+
+        if not restoring_snapshot:
+            # Do not re-generate IDs if we are restoring a snapshot because they should be the same in a project
+            regenerate_topology_ids(topology, path, reset_mac_addresses=reset_mac_addresses)
+
+        # Modify the compute id of the node depending on compute capacity
+        if not keep_compute_ids:
+            # Round-robin through available compute resources.
+            # Only use computes that are connected to avoid import failures
+            available_computes = {
+                compute_id: compute for compute_id, compute in controller.computes.items() if compute.connected
+            }
+            if available_computes:
+                compute_nodes = itertools.cycle(available_computes)
+                for node in topology["topology"]["nodes"]:
+                    node["compute_id"] = next(compute_nodes)
+            else:
+                # No remote computes are connected, use local only
+                for node in topology["topology"]["nodes"]:
+                    node["compute_id"] = "local"
+
+        compute_created = set()
+        for node in topology["topology"]["nodes"]:
+            if node["compute_id"] != "local":
+                # Project created on the remote GNS3 VM?
+                if node["compute_id"] not in compute_created:
+                    compute = controller.get_compute(node["compute_id"])
+                    await compute.post(
+                        "/projects",
+                        data={
+                            "name": project_name,
+                            "project_id": project_id,
+                        },
+                    )
+                    compute_created.add(node["compute_id"])
+                await _move_files_to_compute(
+                    compute, project_id, path, os.path.join("project-files", node["node_type"], node["node_id"])
                 )
-                compute_created.add(node["compute_id"])
-            await _move_files_to_compute(
-                compute, project_id, path, os.path.join("project-files", node["node_type"], node["node_id"])
+
+        # And we dump the updated.gns3
+        dot_gns3_path = os.path.join(path, project_name + ".gns3")
+        # We change the project_id to avoid erasing the project
+        topology["project_id"] = project_id
+        with open(dot_gns3_path, "w+") as f:
+            json.dump(topology, f, indent=4, sort_keys=True)
+        os.remove(os.path.join(path, "project.gns3"))
+
+        images_path = os.path.join(path, "images")
+        if os.path.exists(images_path):
+            await _import_images(controller, images_path)
+
+        snapshots_path = os.path.join(path, "snapshots")
+        if not restoring_snapshot and os.path.exists(snapshots_path):
+            await update_snapshots(
+                snapshots_path, path, project_name, project_id, reset_mac_addresses=reset_mac_addresses
             )
 
-    # And we dump the updated.gns3
-    dot_gns3_path = os.path.join(path, project_name + ".gns3")
-    # We change the project_id to avoid erasing the project
-    topology["project_id"] = project_id
-    with open(dot_gns3_path, "w+") as f:
-        json.dump(topology, f, indent=4, sort_keys=True)
-    os.remove(os.path.join(path, "project.gns3"))
-
-    images_path = os.path.join(path, "images")
-    if os.path.exists(images_path):
-        await _import_images(controller, images_path)
-
-    snapshots_path = os.path.join(path, "snapshots")
-    if not restoring_snapshot and os.path.exists(snapshots_path):
-        await update_snapshots(snapshots_path, path, project_name, project_id, reset_mac_addresses=reset_mac_addresses)
-
-    project = await controller.load_project(dot_gns3_path, load=False)
-    return project
+        project = await controller.load_project(dot_gns3_path, load=False)
+        return project
+    finally:
+        if reservation is not None:
+            reservation.release()
 
 
 def _create_symbolic_links(zip_file, path):

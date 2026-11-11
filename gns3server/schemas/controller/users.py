@@ -33,6 +33,10 @@ class UserBase(BaseModel):
     is_active: bool = True
     email: Optional[EmailStr] = None
     full_name: Optional[str] = None
+    # Node quotas: -1 means explicitly unlimited, NULL means inherit the group
+    # defaults (which are unlimited when unset).
+    max_nodes: Optional[int] = Field(None, ge=-1)
+    max_running_nodes: Optional[int] = Field(None, ge=-1)
 
 
 class UserCreate(UserBase):
@@ -84,6 +88,23 @@ class UserPrivileges(BaseModel):
     privileges: List[str]
 
 
+class UserQuotaUsage(BaseModel):
+    """
+    Effective node quotas of the logged in user (user value, or the group
+    default when the user does not override it) along with the current usage
+    across all the projects they own. A NULL limit means unlimited. The
+    usage counts the node types that consume resources (an Ethernet switch,
+    hub, cloud or NAT node is not counted).
+
+    This is a hint for rendering purposes (e.g. a quota bar in the web UI).
+    """
+
+    max_nodes: Optional[int] = None
+    max_running_nodes: Optional[int] = None
+    current_nodes: int = 0
+    current_running_nodes: int = 0
+
+
 class UserPreferences(BaseModel):
     """
     Preferences document of a user: an arbitrary JSON object owned by the client
@@ -103,6 +124,11 @@ class UserGroupBase(BaseModel):
     """
 
     name: Optional[str] = Field(None, min_length=3, pattern="[a-zA-Z0-9_-]+$")
+    # Default node quotas for the group members: -1 means unlimited, NULL means
+    # unlimited as well (a member can still override both with max_nodes /
+    # max_running_nodes on its own user record).
+    default_max_nodes: Optional[int] = Field(None, ge=-1)
+    default_max_running_nodes: Optional[int] = Field(None, ge=-1)
 
 
 class UserGroupCreate(UserGroupBase):
