@@ -48,7 +48,7 @@ The freeze does not come from a new enforcement mechanism: it comes from the ACE
 ```mermaid
 sequenceDiagram
     participant T as Teacher
-    participant API as POST /distribute
+    participant API as REST API
     participant J as Background job
     participant R as RBAC tables
     T->>API: target_user(s)/target_group, optional owner_role
@@ -60,6 +60,11 @@ sequenceDiagram
         J->>R: owner ACE, role = Lab member
         J->>J: snapshot "template state"
         J->>J: record result (copy or error)
+    end
+    opt cancel the job
+        T->>API: DELETE /distributions/{distribution_id}
+        API-->>T: job "cancelling"
+        J->>J: copy in flight done, rest skipped
     end
     T->>API: GET /distributions/{distribution_id}
     API-->>T: progress and per-recipient results
@@ -74,6 +79,7 @@ After the distribution, the recipient lists the copy like any of their projects 
 | POST | `/v3/projects/{project_id}/distribute` | Start a distribution job: one copy per recipient, in the background. Returns `202` with the job | `Project.Audit`, plus `Project.Allocate` somewhere the copy can live |
 | GET | `/v3/projects/{project_id}/distributions` | List the recent distribution jobs of the project (the caller's own; every one for a superadmin) | `Project.Audit` |
 | GET | `/v3/projects/{project_id}/distributions/{distribution_id}` | Poll one job: status, progress and the per-recipient results so far | `Project.Audit` |
+| DELETE | `/v3/projects/{project_id}/distributions/{distribution_id}` | Cancel a running job: the copy in flight completes, the remaining recipients are skipped. Returns the job, `status` `cancelling` | `Project.Audit`, and only the user who started the job (or a superadmin) |
 | POST | `/v3/projects/{project_id}/duplicate` | Duplicate: the copy belongs to the caller | `Project.Audit`, plus `Project.Allocate` somewhere the copy can live |
 
 Request fields of `ProjectDistribute`:
@@ -89,7 +95,9 @@ Request fields of `ProjectDistribute`:
 
 Exactly one of `target_user`, `target_users` or `target_group` must be set (combining them, or none: 422). Recipients and role are resolved before the job starts, so a bad request distributes nothing.
 
-The `202` response (and every poll) is the job: `{distribution_id, project_id, name, created_by, status, total, completed, results, error}`. `status` is `running`, `completed` or `failed`; `completed` counts the recipients processed so far, successful or not. `results` grows as the job goes: one `{username, project, error}` per recipient, where `project` is the recipient's copy on success and `error` carries the message when their copy could not be created (a failing recipient never stops the job; the others are unaffected). `error` on the job itself is set only when the job as a whole failed.
+The `202` response (and every poll) is the job: `{distribution_id, project_id, name, created_by, status, total, completed, results, error}`. `status` is `running`, `cancelling`, `cancelled`, `completed` or `failed`; `completed` counts the recipients processed so far, successful or not. `results` grows as the job goes: one `{username, project, error}` per recipient, where `project` is the recipient's copy on success and `error` carries the message when their copy could not be created (a failing recipient never stops the job; the others are unaffected). `error` on the job itself is set only when the job as a whole failed.
+
+Cancelling is cooperative and never cuts a copy in half: the `DELETE` request switches the job to `cancelling` right away, but the copy in flight completes first — the job stops at the next recipient boundary and reports `cancelled`. Copies already made are real projects and are kept; only the recipients not started yet are skipped. Cancelling takes effect after the current copy finishes, so with heavy QEMU labs the `cancelling` state can last minutes. A finished or already cancelled job answers `409`, and a repeated cancel request while `cancelling` is accepted as a no-op.
 
 ## Notes
 

@@ -151,6 +151,8 @@ class ProjectDistributionStatus(StrEnum):
     """
 
     RUNNING = "running"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
 
