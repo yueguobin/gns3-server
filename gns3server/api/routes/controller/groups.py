@@ -110,8 +110,11 @@ async def update_user_group(
     if not user_group:
         raise ControllerNotFoundError(f"User group '{user_group_id}' not found")
 
-    if user_group.is_builtin:
-        raise ControllerForbiddenError(f"Built-in user group '{user_group_id}' cannot be updated")
+    # A built-in group cannot be renamed, but its quota defaults stay
+    # editable: they are the natural place to set a limit for the default
+    # "Users" group everyone is created into.
+    if user_group.is_builtin and "name" in user_group_update.model_fields_set:
+        raise ControllerForbiddenError(f"Built-in user group '{user_group_id}' name cannot be changed")
 
     return await users_repo.update_user_group(user_group_id, user_group_update)
 
