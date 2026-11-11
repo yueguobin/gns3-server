@@ -1126,7 +1126,9 @@ async def _run_distribution(
 ) -> None:
     """
     Create one copy per recipient in the background, recording a result per
-    recipient as it completes. A failing recipient never stops the job.
+    recipient as it completes. A failing recipient never stops the job. A
+    cancel request stops it at the next recipient boundary: the copy in
+    flight completes, the remaining recipients are skipped.
     """
 
     registry = DistributionRegistry.instance()
@@ -1135,6 +1137,10 @@ async def _run_distribution(
         async with AsyncSession(engine, expire_on_commit=False) as db_session:
             project = Controller.instance().get_project(project_id)
             for member, name in recipients:
+                if job.cancel_requested:
+                    # nothing is in flight between two recipients: this is the
+                    # safe place to stop, every copy made so far is complete
+                    break
                 try:
                     copy = await _distribute_project_copy(
                         db_session, project, member, owner_role_id, name, reset_mac_addresses
@@ -1145,7 +1151,12 @@ async def _run_distribution(
                     registry.record_result(
                         job, {"username": member.username, "project": None, "error": {"message": str(e)}}
                     )
-        registry.complete(job)
+        # the cancel request may also land during the very last copy: the
+        # loop above ends without checking again
+        if job.cancel_requested:
+            registry.cancelled(job)
+        else:
+            registry.complete(job)
     except Exception as e:
         registry.fail(job, str(e))
 
@@ -1235,6 +1246,23 @@ async def get_project_distributions(
     return [job.asdict() for job in jobs if current_user.is_superadmin or job.created_by == current_user.username]
 
 
+def _get_owned_distribution(project: Project, distribution_id: UUID, current_user: schemas.User) -> Distribution:
+    """
+    Look up one distribution job of the project, checking the caller is the
+    user who started it (or a superadmin).
+    """
+
+    registry = DistributionRegistry.instance()
+    job = registry.get(str(distribution_id))
+    if job is None or job.project_id != str(project.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not find this distribution")
+    if not current_user.is_superadmin and job.created_by != current_user.username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
+        )
+    return job
+
+
 @router.get(
     "/{project_id}/distributions/{distribution_id}",
     response_model=schemas.ProjectDistribution,
@@ -1252,14 +1280,36 @@ async def get_project_distribution(
     Required privilege: Project.Audit
     """
 
-    registry = DistributionRegistry.instance()
-    job = registry.get(str(distribution_id))
-    if job is None or job.project_id != str(project.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not find this distribution")
-    if not current_user.is_superadmin and job.created_by != current_user.username:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
-        )
+    return _get_owned_distribution(project, distribution_id, current_user).asdict()
+
+
+@router.delete(
+    "/{project_id}/distributions/{distribution_id}",
+    response_model=schemas.ProjectDistribution,
+    responses={
+        **responses,
+        409: {"model": schemas.ErrorMessage, "description": "The distribution is not running anymore"},
+    },
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def cancel_project_distribution(
+    distribution_id: UUID,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+) -> dict:
+    """
+    Cancel a running distribution: the copy in flight still completes, the
+    remaining recipients are skipped. The job switches to "cancelling" right
+    away, then to "cancelled" once the current copy is done. Copies already
+    made are real projects and are kept. Cancelling a job that already
+    finished is rejected with 409.
+
+    Required privilege: Project.Audit, and only the user who started the distribution (or a superadmin)
+    """
+
+    job = _get_owned_distribution(project, distribution_id, current_user)
+    if not DistributionRegistry.instance().request_cancel(job):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This distribution already finished")
     return job.asdict()
 
 

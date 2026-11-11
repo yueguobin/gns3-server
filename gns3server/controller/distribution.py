@@ -53,6 +53,9 @@ class Distribution:
     total: int
     status: str = "running"
     error: Optional[str] = None
+    # set by a cancel request: the copy in flight completes, the remaining
+    # recipients are skipped (cancelling never cuts a copy in half)
+    cancel_requested: bool = False
     results: List[dict] = field(default_factory=list)
     created_at: float = field(default_factory=time.monotonic)
     # keeps the background task alive (a task without a reference can be
@@ -114,6 +117,27 @@ class DistributionRegistry:
 
     def complete(self, job: Distribution) -> None:
         job.status = "completed"
+
+    def request_cancel(self, job: Distribution) -> bool:
+        """
+        Ask a running job to stop at the next recipient boundary: the copy in
+        flight completes, the remaining recipients are skipped. Returns False
+        when the job already finished (requesting cancellation again while the
+        job is cancelling is a no-op that keeps returning True).
+        """
+
+        if job.status == "cancelling":
+            return True
+        if job.status != "running":
+            return False
+        job.cancel_requested = True
+        job.status = "cancelling"
+        log.info(f"Cancellation of distribution '{job.distribution_id}' of project '{job.project_id}' requested")
+        return True
+
+    def cancelled(self, job: Distribution) -> None:
+        job.status = "cancelled"
+        log.info(f"Distribution '{job.distribution_id}' of project '{job.project_id}' cancelled")
 
     def fail(self, job: Distribution, error: str) -> None:
         job.status = "failed"

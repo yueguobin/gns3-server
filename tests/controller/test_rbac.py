@@ -27,6 +27,7 @@ from httpx_ws.transport import ASGIWebSocketTransport
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gns3server import schemas
+from gns3server.api.routes.controller import projects as projects_routes
 from gns3server.controller import Controller
 from gns3server.controller.controller_error import ControllerError
 from gns3server.db.models import User
@@ -605,6 +606,27 @@ class TestProjectDistribution:
         raise AssertionError(f"Distribution '{distribution_id}' did not complete in {timeout_seconds} seconds")
 
     @staticmethod
+    async def _wait_for_cancelled(
+        app: FastAPI, client: AsyncClient, project_id: str, distribution_id: str, timeout_seconds: float = 10.0
+    ) -> dict:
+        """
+        Poll a distribution job until it is cancelled and return its final state.
+        """
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            response = await client.get(
+                app.url_path_for("get_project_distribution", project_id=project_id, distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_200_OK
+            job = response.json()
+            if job["status"] == "cancelled":
+                return job
+            assert job["status"] in ("running", "cancelling")
+            await asyncio.sleep(0.05)
+        raise AssertionError(f"Distribution '{distribution_id}' was not cancelled in {timeout_seconds} seconds")
+
+    @staticmethod
     async def _distribute(app: FastAPI, teacher: User, student_username: str) -> tuple[str, str]:
         """
         Create a project as the teacher and distribute it to the student.
@@ -1074,6 +1096,171 @@ class TestProjectDistribution:
                 app.url_path_for("get_project_distribution", project_id=source_id, distribution_id=distribution_id)
             )
             assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    async def test_cancel_distribution_stops_before_next_recipient(
+        self,
+        app: FastAPI,
+        base_client: AsyncClient,
+        db_session: AsyncSession,
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        students = [
+            await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+            for _ in range(3)
+        ]
+
+        # hold the first copy in flight until the test lets it go, so the
+        # cancel request lands while a copy is being made
+        first_copy_started = asyncio.Event()
+        release_first_copy = asyncio.Event()
+        real_copy = projects_routes._distribute_project_copy
+        copies_attempted = 0
+
+        async def blocking_copy(db_session, project, member, owner_role_id, name, reset_mac_addresses):
+            nonlocal copies_attempted
+            copies_attempted += 1
+            if copies_attempted == 1:
+                first_copy_started.set()
+                await release_first_copy.wait()
+            return await real_copy(db_session, project, member, owner_role_id, name, reset_mac_addresses)
+
+        monkeypatch.setattr(projects_routes, "_distribute_project_copy", blocking_copy)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            source_id = response.json()["project_id"]
+
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_users": [student.username for student in students]},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+
+            await first_copy_started.wait()
+
+            # the cancel request lands while the first copy is in flight: the
+            # job switches to cancelling, and a repeated request changes
+            # nothing (it is not an error)
+            cancel_url = app.url_path_for(
+                "cancel_project_distribution", project_id=source_id, distribution_id=distribution_id
+            )
+            response = await teacher_client.delete(cancel_url)
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["status"] == "cancelling"
+            response = await teacher_client.delete(cancel_url)
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["status"] == "cancelling"
+
+            # while the copy in flight is held, the job keeps reporting that
+            # it is cancelling, not cancelled
+            response = await teacher_client.get(
+                app.url_path_for("get_project_distribution", project_id=source_id, distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["status"] == "cancelling"
+
+            release_first_copy.set()
+            job = await TestProjectDistribution._wait_for_cancelled(app, teacher_client, source_id, distribution_id)
+
+        # the copy in flight completed and is a real project, the two
+        # remaining recipients were never started
+        assert job["total"] == 3
+        assert job["completed"] == 1
+        assert [result["username"] for result in job["results"]] == [students[0].username]
+        assert job["results"][0]["error"] is None
+        assert copies_attempted == 1
+        copy_id = job["results"][0]["project"]["project_id"]
+        async with TestProjectOwnership._client_for(app, students[0]) as student_client:
+            response = await student_client.get(app.url_path_for("get_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+
+    async def test_cancel_finished_distribution_is_rejected(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+
+            # a finished job cannot be cancelled
+            response = await teacher_client.delete(
+                app.url_path_for("cancel_project_distribution", project_id=source_id, distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_409_CONFLICT
+
+    async def test_cancel_distribution_of_another_user_is_rejected(
+        self,
+        app: FastAPI,
+        base_client: AsyncClient,
+        db_session: AsyncSession,
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        other_teacher = await TestProjectOwnership._create_user_in_users_group(
+            db_session, f"teacher-{uuid.uuid4().hex[:8]}"
+        )
+
+        # hold the job open so the cancel requests reach a running job
+        copy_started = asyncio.Event()
+        release_copy = asyncio.Event()
+        real_copy = projects_routes._distribute_project_copy
+
+        async def blocking_copy(db_session, project, member, owner_role_id, name, reset_mac_addresses):
+            copy_started.set()
+            await release_copy.wait()
+            return await real_copy(db_session, project, member, owner_role_id, name, reset_mac_addresses)
+
+        monkeypatch.setattr(projects_routes, "_distribute_project_copy", blocking_copy)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            await copy_started.wait()
+
+            # an unknown distribution id is a 404
+            response = await teacher_client.delete(
+                app.url_path_for("cancel_project_distribution", project_id=source_id, distribution_id=str(uuid.uuid4()))
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+            # another user cannot cancel someone else's job
+            async with TestProjectOwnership._client_for(app, other_teacher) as other_client:
+                response = await other_client.delete(
+                    app.url_path_for(
+                        "cancel_project_distribution", project_id=source_id, distribution_id=distribution_id
+                    )
+                )
+                assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            release_copy.set()
+            await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
 
     async def test_group_distribution_validation(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
