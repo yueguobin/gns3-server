@@ -119,6 +119,36 @@ class TestUserQuotaRoutes:
         assert response.json()["default_max_nodes"] == 50
         assert response.json()["default_max_running_nodes"] == 10
 
+    async def test_builtin_group_quotas_editable_but_not_name(
+        self, app: FastAPI, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """
+        A built-in group (the default "Users" group) cannot be renamed,
+        but its quota defaults stay editable — that is where an
+        administrator sets the limit for the users created by default.
+        """
+
+        repo = UsersRepository(db_session)
+        users_group = await repo.get_user_group_by_name("Users")
+        assert users_group.is_builtin
+
+        response = await client.put(
+            app.url_path_for("update_user_group", user_group_id=str(users_group.user_group_id)),
+            json={"default_max_nodes": 100, "default_max_running_nodes": 20},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["name"] == "Users"
+        assert response.json()["default_max_nodes"] == 100
+
+        # renaming a built-in group is refused, alone or alongside quotas,
+        # and an explicit null name counts as touching the name
+        for payload in ({"name": "renamed"}, {"name": "renamed", "default_max_nodes": 5}, {"name": None}):
+            response = await client.put(
+                app.url_path_for("update_user_group", user_group_id=str(users_group.user_group_id)),
+                json=payload,
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN, payload
+
     async def test_me_quotas_superadmin(self, app: FastAPI, client: AsyncClient) -> None:
         """
         A superadmin is never limited: both limits come back null.

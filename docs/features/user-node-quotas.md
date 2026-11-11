@@ -81,7 +81,7 @@ Because the node registration (or the compute accepting a start) happens after t
 |---|---|---|---|
 | PUT | `/v3/access/users/{user_id}` | Set `max_nodes` / `max_running_nodes` (-1 = unlimited, null = inherit the group) | User.Modify |
 | GET | `/v3/access/users/{user_id}` | Read the stored user values | User.Audit |
-| PUT | `/v3/access/groups/{user_group_id}` | Set `default_max_nodes` / `default_max_running_nodes` | Group.Modify |
+| PUT | `/v3/access/groups/{user_group_id}` | Set `default_max_nodes` / `default_max_running_nodes` (built-in groups: quotas editable, the name stays fixed) | Group.Modify |
 | GET | `/v3/access/users/me/quotas` | Effective limits plus current usage for the logged-in user | authenticated |
 
 Example `GET /v3/access/users/me/quotas`:
