@@ -170,11 +170,15 @@ class GroupMCPTools(BaseModel):
     ``candidates`` lists every tool the group's privileges could ever show
     (the flattened privilege view of the group's ACEs): the admin UI offers
     exactly these tools. ``tools`` is the configured whitelist, or None when
-    the group is unconfigured (privilege gating alone decides).
+    the group is unconfigured (privilege gating alone decides). ``bypass`` is
+    True when the whitelist cannot affect anyone right now (no member that is
+    not a superadmin, e.g. the builtin Administrators group): the UI should
+    say so instead of offering the short candidate list.
     """
 
     candidates: List[str]
     tools: Optional[List[str]] = None
+    bypass: bool = False
 
 
 class Credentials(BaseModel):

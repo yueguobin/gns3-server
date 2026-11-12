@@ -94,6 +94,7 @@ class RbacState:
         self._role_privileges: Dict[UUID, Set[str]] = {}
         self._group_members: Dict[UUID, Set[UUID]] = {}
         self._user_names: Dict[UUID, str] = {}
+        self._superadmin_ids: Set[UUID] = set()
         self._aces: List[AceEntry] = []
         self._project_resource_ids: Set[str] = set()
         # pool id (str) -> project resource ids (str)
@@ -119,6 +120,7 @@ class RbacState:
         self._role_privileges = {}
         self._group_members = {}
         self._user_names = {}
+        self._superadmin_ids = set()
         self._aces = []
         self._project_resource_ids = set()
         self._pool_projects = {}
@@ -170,9 +172,12 @@ class RbacState:
         # plain dict for typed access
         users_result = await db_session.execute(select(models.User))
         user_names: Dict[UUID, str] = {}
+        superadmin_ids: Set[UUID] = set()
         for user in users_result.scalars().all():
             values = user.asdict()
             user_names[values["user_id"]] = values["username"]
+            if values["is_superadmin"]:
+                superadmin_ids.add(values["user_id"])
 
         # ACEs, in natural database order (group ACE evaluation order relies on it)
         aces_result = await db_session.execute(select(models.ACE))
@@ -219,6 +224,7 @@ class RbacState:
         self._role_privileges = role_privileges
         self._group_members = group_members
         self._user_names = user_names
+        self._superadmin_ids = superadmin_ids
         self._aces = aces
         self._project_resource_ids = project_resource_ids
         self._pool_projects = pool_projects
@@ -465,6 +471,18 @@ class RbacState:
 
         whitelist = self._mcp_tool_whitelists.get(group_id)
         return set(whitelist) if whitelist is not None else None
+
+    def group_mcp_bypass(self, group_id: UUID) -> bool:
+        """
+        Whether a whitelist for this group cannot affect anyone right now:
+        the group has no member that is not a superadmin (superadmins bypass
+        the whitelist entirely, and an empty group has nobody to restrict).
+        The config stays allowed: adding a regular member later makes it
+        effective again.
+        """
+
+        members = self._group_members.get(group_id, set())
+        return all(user_id in self._superadmin_ids for user_id in members)
 
     def user_mcp_tool_whitelist(self, user_id: UUID) -> Optional[Set[str]]:
         """

@@ -389,6 +389,16 @@ class RbacRepository(BaseRepository):
         await self._rbac_state.ensure_loaded(self._db_session)
         return self._rbac_state.group_mcp_tools(group_id)
 
+    async def get_group_mcp_bypass(self, group_id: UUID) -> bool:
+        """
+        Whether an MCP tool whitelist for this group cannot affect anyone
+        right now: no member that is not a superadmin (see
+        RbacState.group_mcp_bypass).
+        """
+
+        await self._rbac_state.ensure_loaded(self._db_session)
+        return self._rbac_state.group_mcp_bypass(group_id)
+
     async def get_user_mcp_tool_whitelist(self, user_id: UUID) -> Optional[Set[str]]:
         """
         Effective MCP tool whitelist for a user: union of the whitelists of

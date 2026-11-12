@@ -54,6 +54,32 @@ class TestGroupMCPToolsRoutes:
         # and candidates are a subset of every known tool
         assert set(body["candidates"]) <= set(TOOL_SPECS)
 
+    async def test_bypass_when_no_regular_member(
+        self, app: FastAPI, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        """
+        A group without a single non-superadmin member cannot be affected by
+        a whitelist: bypass is True for an empty group and for a group whose
+        members are all superadmins, and flips back when a regular user joins.
+        """
+
+        users_repo = UsersRepository(db_session)
+        group = await users_repo.create_user_group(UserGroupCreate(name="mcp_bypass_group"))
+
+        async def get_bypass() -> bool:
+            response = await client.get(app.url_path_for("get_group_mcp_tools", user_group_id=str(group.user_group_id)))
+            assert response.status_code == status.HTTP_200_OK
+            return response.json()["bypass"]
+
+        assert await get_bypass() is True  # empty group
+
+        admin = await users_repo.get_user_by_username("admin")
+        await users_repo.add_member_to_user_group(group.user_group_id, admin)
+        assert await get_bypass() is True  # superadmin-only group
+
+        await users_repo.add_member_to_user_group(group.user_group_id, test_user)
+        assert await get_bypass() is False  # a regular member joined
+
     async def test_put_rejects_tool_outside_candidates(
         self, app: FastAPI, client: AsyncClient, db_session: AsyncSession
     ) -> None:

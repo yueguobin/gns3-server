@@ -252,6 +252,7 @@ async def get_group_mcp_tools(
     return schemas.GroupMCPTools(
         candidates=_group_tool_candidates(group_privileges),
         tools=sorted(tools) if tools is not None else None,
+        bypass=await rbac_repo.get_group_mcp_bypass(user_group_id),
     )
 
 
@@ -290,7 +291,11 @@ async def update_group_mcp_tools(
         )
 
     await rbac_repo.set_group_mcp_tools(user_group_id, mcp_tools_update.tools)
-    return schemas.GroupMCPTools(candidates=candidates, tools=sorted(set(mcp_tools_update.tools)))
+    return schemas.GroupMCPTools(
+        candidates=candidates,
+        tools=sorted(set(mcp_tools_update.tools)),
+        bypass=await rbac_repo.get_group_mcp_bypass(user_group_id),
+    )
 
 
 @router.delete(
