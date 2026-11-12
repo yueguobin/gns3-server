@@ -1173,6 +1173,7 @@ def _distribution_record_asdict(record: models.DistributionRecord) -> dict:
         "completed": len(record.results or []),
         "results": record.results or [],
         "error": {"message": record.error} if record.error else None,
+        "created_at": record.created_at,
     }
 
 

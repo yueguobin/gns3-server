@@ -183,6 +183,7 @@ class ProjectDistribution(BaseModel):
     completed: int = Field(..., description="Recipients processed so far, successful or not")
     results: List[ProjectDistributionResult] = Field(default_factory=list)
     error: Optional[ErrorMessage] = Field(None, description="Set when the job itself failed")
+    created_at: datetime = Field(..., description="When the distribution was started")
 
 
 class ProjectShare(BaseModel):
