@@ -148,6 +148,9 @@ async def connect_to_db(app: FastAPI) -> None:
                         from gns3server.db_migrations.versions.a7c2e9f4b8d1_add_lab_member_role import (
                             upgrade as upgrade_lab_member_role,
                         )
+                        from gns3server.db_migrations.versions.a43d55900514_add_server_settings_privileges import (
+                            upgrade as upgrade_server_privileges,
+                        )
                         from gns3server.db_migrations.versions.b5f3a8c1d902_restrict_default_projects_ace_scope import (
                             upgrade as upgrade_projects_ace_scope,
                         )
@@ -183,6 +186,7 @@ async def connect_to_db(app: FastAPI) -> None:
                             upgrade_user_preferences()
                             upgrade_lab_member_role()
                             upgrade_user_quotas()
+                            upgrade_server_privileges()
 
                     await conn.run_sync(upgrade_inventory)
                     await conn.run_sync(run_stamp, alembic_cfg)
