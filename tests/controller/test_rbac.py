@@ -19,6 +19,7 @@ import asyncio
 import time
 import uuid
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 from fastapi import FastAPI, status
@@ -30,8 +31,10 @@ from gns3server import schemas
 from gns3server.api.routes.controller import projects as projects_routes
 from gns3server.controller import Controller
 from gns3server.controller.controller_error import ControllerError
+from gns3server.controller.distribution import DistributionRegistry
 from gns3server.db.models import User
 from gns3server.db.project_acl import ensure_all_project_aces, ensure_project_owner_ace
+from gns3server.db.repositories.distribution_records import DistributionRecordsRepository
 from gns3server.db.repositories.pools import ResourcePoolsRepository
 from gns3server.db.repositories.rbac import RbacRepository
 from gns3server.db.repositories.users import UsersRepository
@@ -1496,6 +1499,68 @@ class TestProjectDistribution:
                 json={"name": "copy", "target_group": empty_group.name},
             )
             assert response.status_code == status.HTTP_409_CONFLICT
+
+    async def test_distribution_history_survives_a_controller_restart(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, _ = await self._distribute(app, test_user, student.username)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            # what a controller restart does to the live registry: the jobs
+            # are gone, the persisted records stay
+            DistributionRegistry.instance()._jobs.clear()
+
+            response = await teacher_client.get(app.url_path_for("get_project_distributions", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            history = response.json()
+            assert len(history) == 1
+            entry = history[0]
+            assert entry["status"] == "completed"
+            assert entry["total"] == 1 and entry["completed"] == 1
+            assert entry["created_by"] == test_user.username
+            assert entry["results"][0]["username"] == student.username
+            assert entry["results"][0]["project"] is not None
+
+            # one distribution also stays readable on its own endpoint
+            response = await teacher_client.get(
+                app.url_path_for(
+                    "get_project_distribution", project_id=source_id, distribution_id=entry["distribution_id"]
+                )
+            )
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["status"] == "completed"
+
+    async def test_distribution_interrupted_by_a_restart_is_closed_out(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+
+        # records left "running" and "cancelling" by a restart: their jobs
+        # are not in the live registry and will never update the rows again
+        records_repo = DistributionRecordsRepository(db_session)
+        running_id = uuid.uuid4()
+        cancelling_id = uuid.uuid4()
+        await records_repo.create_record(running_id, UUID(source_id), "lab1", test_user.username, 2)
+        await records_repo.create_record(cancelling_id, UUID(source_id), "lab2", test_user.username, 2)
+        await records_repo.update_record(cancelling_id, "cancelling", None, True, [])
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.get(app.url_path_for("get_project_distributions", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            entries = {entry["distribution_id"]: entry for entry in response.json()}
+            interrupted = entries[str(running_id)]
+            assert interrupted["status"] == "failed"
+            assert interrupted["error"] is not None
+            cancelled = entries[str(cancelling_id)]
+            assert cancelled["status"] == "cancelled"
 
 
 class TestProjectShare:

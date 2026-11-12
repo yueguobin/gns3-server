@@ -70,6 +70,7 @@ from gns3server.controller.link import _UNSET
 from gns3server.controller.marker_replay import SharkdError, SharkdMissingError
 from gns3server.controller.project import Project
 from gns3server.db.project_acl import ensure_project_owner_ace, project_ace_path, upsert_project_share_ace
+from gns3server.db.repositories.distribution_records import DistributionRecordsRepository
 from gns3server.db.repositories.pools import ResourcePoolsRepository
 from gns3server.db.repositories.rbac import RbacRepository
 from gns3server.db.repositories.templates import TemplatesRepository
@@ -1156,6 +1157,44 @@ async def duplicate_project(
     return new_project.asdict()
 
 
+def _distribution_record_asdict(record: models.DistributionRecord) -> dict:
+    """
+    A persisted distribution record in the response shape of a live
+    distribution job.
+    """
+
+    return {
+        "distribution_id": record.distribution_id,
+        "project_id": record.project_id,
+        "name": record.name,
+        "created_by": record.created_by,
+        "status": record.status,
+        "total": record.total,
+        "completed": len(record.results or []),
+        "results": record.results or [],
+        "error": {"message": record.error} if record.error else None,
+    }
+
+
+async def _persist_distribution_job(db_session: AsyncSession, job: Distribution) -> None:
+    """
+    Write the current state of a distribution job through to its database
+    record. The copies are the real work: a persistence failure is logged
+    and never stops the job.
+    """
+
+    try:
+        updated = await DistributionRecordsRepository(db_session).update_record(
+            UUID(job.distribution_id), job.status, job.error, job.cancel_requested, list(job.results)
+        )
+        if not updated:
+            log.warning(f"Distribution '{job.distribution_id}' of project '{job.project_id}' has no record to update")
+    except Exception as e:
+        log.error(f"Could not persist the distribution '{job.distribution_id}' of project '{job.project_id}': {e}")
+        # leave the session usable for the copies still to be made
+        await db_session.rollback()
+
+
 async def _run_distribution(
     engine: Any,
     job: Distribution,
@@ -1169,7 +1208,9 @@ async def _run_distribution(
     Create one copy per recipient in the background, recording a result per
     recipient as it completes. A failing recipient never stops the job. A
     cancel request stops it at the next recipient boundary: the copy in
-    flight completes, the remaining recipients are skipped.
+    flight completes, the remaining recipients are skipped. Every state
+    change is written through to the distribution record, so a crash leaves
+    a trace of how far the job got.
     """
 
     registry = DistributionRegistry.instance()
@@ -1192,14 +1233,21 @@ async def _run_distribution(
                     registry.record_result(
                         job, {"username": member.username, "project": None, "error": {"message": str(e)}}
                     )
-        # the cancel request may also land during the very last copy: the
-        # loop above ends without checking again
-        if job.cancel_requested:
-            registry.cancelled(job)
-        else:
-            registry.complete(job)
+                await _persist_distribution_job(db_session, job)
+            # the cancel request may also land during the very last copy: the
+            # loop above ends without checking again
+            if job.cancel_requested:
+                registry.cancelled(job)
+            else:
+                registry.complete(job)
+            await _persist_distribution_job(db_session, job)
     except Exception as e:
         registry.fail(job, str(e))
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as db_session:
+                await _persist_distribution_job(db_session, job)
+        except Exception as persist_error:
+            log.error(f"Could not persist the failed distribution '{job.distribution_id}': {persist_error}")
 
 
 @router.post(
@@ -1252,6 +1300,11 @@ async def distribute_project(
     registry.prune()
     assert current_user.username is not None  # an authenticated user always has a name
     job = registry.create(str(project.id), project_data.name, current_user.username, total=len(names))
+    # the durable record is created with the job: from here on the
+    # distribution is visible in the history even if the controller dies
+    await DistributionRecordsRepository(db_session).create_record(
+        UUID(job.distribution_id), project.id, job.name, job.created_by, job.total
+    )
     job.task = asyncio.create_task(
         _run_distribution(
             # the bound engine outlives the request-scoped session
@@ -1275,18 +1328,28 @@ async def distribute_project(
 async def get_project_distributions(
     project: Project = Depends(dep_project),
     current_user: schemas.User = Depends(get_current_active_user),
+    db_session: AsyncSession = Depends(get_db_session),
 ) -> List[dict]:
     """
-    Return the recent distributions of a project (the caller's own, plus
-    every one for a superadmin).
+    Return the distribution history of a project from the persisted records
+    (the caller's own, plus every one for a superadmin): who distributed the
+    project, to which recipients and when, across controller restarts.
 
     Required privilege: Project.Audit
     """
 
     registry = DistributionRegistry.instance()
     registry.prune()
-    jobs = registry.get_for_project(str(project.id))
-    return [job.asdict() for job in jobs if current_user.is_superadmin or job.created_by == current_user.username]
+    records_repo = DistributionRecordsRepository(db_session)
+    # a record still marked running whose job is not in the live registry was
+    # cut short by a controller restart: close it out before listing
+    await records_repo.mark_interrupted([UUID(distribution_id) for distribution_id in registry.live_ids()])
+    records = await records_repo.get_records_for_project(project.id)
+    return [
+        _distribution_record_asdict(record)
+        for record in records
+        if current_user.is_superadmin or record.created_by == current_user.username
+    ]
 
 
 def _get_owned_distribution(project: Project, distribution_id: UUID, current_user: schemas.User) -> Distribution:
@@ -1315,15 +1378,34 @@ async def get_project_distribution(
     distribution_id: UUID,
     project: Project = Depends(dep_project),
     current_user: schemas.User = Depends(get_current_active_user),
+    db_session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     """
     Return the state of one distribution job: the progress and the
-    per-recipient results recorded so far.
+    per-recipient results recorded so far. A live job is served from the
+    registry (fresher than the persisted record); once its job is gone the
+    persisted record is returned, so a distribution stays readable across
+    controller restarts.
 
     Required privilege: Project.Audit
     """
 
-    return _get_owned_distribution(project, distribution_id, current_user).asdict()
+    job = DistributionRegistry.instance().get(str(distribution_id))
+    if job is not None and job.project_id == str(project.id):
+        if not current_user.is_superadmin and job.created_by != current_user.username:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
+            )
+        return job.asdict()
+
+    record = await DistributionRecordsRepository(db_session).get_record(distribution_id)
+    if record is None or str(record.project_id) != str(project.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not find this distribution")
+    if not current_user.is_superadmin and record.created_by != current_user.username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
+        )
+    return _distribution_record_asdict(record)
 
 
 @router.delete(

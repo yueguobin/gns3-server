@@ -19,6 +19,7 @@ from .acl import ACE
 from .api_keys import ApiKey
 from .base import Base
 from .computes import Compute
+from .distribution_records import DistributionRecord
 from .images import Image, ImageSyncJob
 from .llm_model_configs import LLMModelConfig
 from .pools import Resource, ResourcePool
@@ -45,6 +46,7 @@ __all__ = [
     "Base",
     "CloudTemplate",
     "Compute",
+    "DistributionRecord",
     "DockerTemplate",
     "DynamipsTemplate",
     "EthernetHubTemplate",

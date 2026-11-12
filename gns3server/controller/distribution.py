@@ -22,9 +22,10 @@ A distribution creates one project copy per recipient in the background
 (a whole class can mean minutes of file copies). The job state lives in
 this process-wide registry, like the rest of the controller state: the
 client polls the job to follow the progress and read the per-recipient
-results. Restarting the controller loses the job records (the copies
-already created are real projects and stay), which is the documented
-trade-off until distribution records are persisted.
+results. Every state change is also written through to the
+distribution_records table (see the API routes), so the history survives a
+controller restart; this registry only holds the live jobs and frees the
+finished ones after the retention period.
 """
 
 import asyncio
@@ -109,6 +110,15 @@ class DistributionRegistry:
     def get_for_project(self, project_id: str) -> List[Distribution]:
         jobs = [job for job in self._jobs.values() if job.project_id == project_id]
         return sorted(jobs, key=lambda job: job.created_at, reverse=True)
+
+    def live_ids(self) -> List[str]:
+        """
+        IDs of the jobs in this registry (running or recently finished).
+        A record still marked running in the database but absent from this
+        list was cut short by a controller restart.
+        """
+
+        return list(self._jobs.keys())
 
     def record_result(self, job: Distribution, result: dict) -> None:
         job.results.append(result)
