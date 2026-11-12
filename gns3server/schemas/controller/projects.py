@@ -140,6 +140,10 @@ class Project(ProjectBase):
     status: Optional[ProjectStatus] = None
     filename: Optional[str] = None
     created_by: Optional[str] = Field(None, description="Username of the user who created the project")
+    share_count: Optional[int] = Field(
+        None,
+        description="Number of shares on this project, only returned to the project owner and superadmins",
+    )
 
 
 class ProjectDistributionResult(BaseModel):

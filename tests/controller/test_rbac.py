@@ -1894,6 +1894,134 @@ class TestProjectShare:
             assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
+class TestProjectShareCount:
+    """
+    The project list and the single project response carry a share_count for
+    the project owner and superadmins only. It matches the number of rows the
+    /shares endpoint lists: the owner ACE is not a share and a group share
+    counts as one. Every other user gets no share_count at all.
+    """
+
+    @staticmethod
+    def _share_count_in(projects_json, project_id: str):
+        entry = next(p for p in projects_json if p["project_id"] == project_id)
+        return entry.get("share_count")
+
+    async def test_share_count_visible_to_owner_and_superadmin_only(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        project_id = await TestProjectShare._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            share_ace_id = response.json()[0]["ace_id"]
+
+            # the list and the single project agree with the /shares listing
+            response = await teacher_client.get(app.url_path_for("get_projects"))
+            assert self._share_count_in(response.json(), project_id) == 1
+
+            response = await teacher_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.json()["share_count"] == 1
+
+        # the shared user sees the project, but no share_count on it: the list
+        # omits the field (exclude_unset) while the single project endpoint
+        # always serializes every field, so it carries null instead
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.get(app.url_path_for("get_projects"))
+            assert project_id in {p["project_id"] for p in response.json()}
+            assert self._share_count_in(response.json(), project_id) is None
+
+            response = await student_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["share_count"] is None
+
+        # a superadmin sees the share count of every project
+        admin = await UsersRepository(db_session).get_user_by_username("admin")
+        async with TestProjectOwnership._client_for(app, admin) as admin_client:
+            response = await admin_client.get(app.url_path_for("get_projects"))
+            assert self._share_count_in(response.json(), project_id) == 1
+
+            response = await admin_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.json()["share_count"] == 1
+
+        # removing the share drops the count back to zero
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.delete(
+                app.url_path_for("delete_project_share", project_id=project_id, ace_id=share_ace_id)
+            )
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+            response = await teacher_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.json()["share_count"] == 0
+
+    async def test_share_count_zero_without_shares(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        project_id = await TestProjectShare._create_project(app, test_user)
+
+        # the owner ACE of the creator is not a share
+        async with TestProjectOwnership._client_for(app, test_user) as owner_client:
+            response = await owner_client.get(app.url_path_for("get_projects"))
+            assert self._share_count_in(response.json(), project_id) == 0
+
+    async def test_share_count_counts_a_group_as_one_and_never_stacks(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        users_repo = UsersRepository(db_session)
+        group = await users_repo.create_user_group(schemas.UserGroupCreate(name=f"team-{uuid.uuid4().hex[:8]}"))
+        member = await TestProjectOwnership._create_user_in_users_group(db_session, f"peer-{uuid.uuid4().hex[:8]}")
+        await users_repo.add_member_to_user_group(group.user_group_id, member)
+
+        project_id = await TestProjectShare._create_project(app, test_user)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            # one group ACE covers all the members: one share
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_group": group.name},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            group_share_ace_id = response.json()[0]["ace_id"]
+
+            # sharing again with the group replaces the role, it does not stack
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_group": group.name, "role": "User"},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+
+            response = await teacher_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.json()["share_count"] == 1
+
+            # a user share adds a second one, deleting the group share leaves one
+            response = await teacher_client.post(
+                app.url_path_for("share_project", project_id=project_id),
+                json={"target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+
+            response = await teacher_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.json()["share_count"] == 2
+
+            response = await teacher_client.delete(
+                app.url_path_for("delete_project_share", project_id=project_id, ace_id=group_share_ace_id)
+            )
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+            response = await teacher_client.get(app.url_path_for("get_project", project_id=project_id))
+            assert response.json()["share_count"] == 1
+
+
 # class TestProjectsWithRbac:
 #
 #     async def test_admin_create_project(self, app: FastAPI, client: AsyncClient):

@@ -132,7 +132,13 @@ async def get_projects(
 
     if current_user.is_superadmin:
         # super admin sees all projects
-        return [p.asdict() for p in controller.projects.values() if name is None or p.name == name]
+        visible = [p for p in controller.projects.values() if name is None or p.name == name]
+        counts = await rbac_repo.get_project_share_counts({p.id: p.created_by for p in visible})
+        for p in visible:
+            project_dict = p.asdict()
+            project_dict["share_count"] = counts.get(p.id, 0)
+            projects.append(project_dict)
+        return projects
 
     # Batch ACE + resource pool check (3 DB queries regardless of project count)
     all_project_ids = list(controller.projects.keys())
@@ -143,13 +149,24 @@ async def get_projects(
     # A project is visible through its ACE (owner ACE or an explicit share) or
     # through a resource pool. There is no created_by fallback: projects without
     # an owner ACE stay restricted to superadmins.
+    visible = []
     for p in controller.projects.values():
         if name is not None and p.name != name:
             continue
         if p.id in direct_ace_ids or p.id in pool_accessible_ids:
             if p.id not in seen_project_ids:
-                projects.append(p.asdict())
+                visible.append(p)
                 seen_project_ids.add(p.id)
+
+    # Share counts are the owner's business (and superadmins'): the field is
+    # left unset for everybody else and excluded from the response.
+    owned = {p.id: p.created_by for p in visible if p.created_by == current_user.username}
+    counts = await rbac_repo.get_project_share_counts(owned) if owned else {}
+    for p in visible:
+        project_dict = p.asdict()
+        if p.id in owned:
+            project_dict["share_count"] = counts.get(p.id, 0)
+        projects.append(project_dict)
 
     return projects
 
@@ -189,15 +206,27 @@ async def create_project(
     responses=GET_RESPONSES,
     dependencies=[Depends(has_privilege("Project.Audit"))],
 )
-def get_project(response: Response, project: Project = Depends(dep_project)) -> schemas.Project:
+async def get_project(
+    response: Response,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+) -> schemas.Project:
     """
     Return a project.
 
-    Required privilege: Project.Audit
+    Required privilege: Project.Audit. The share count is only returned to the
+    project owner and superadmins.
     """
 
     project_dict = project.asdict()
+    # the ETag covers the project itself: share_count is a per-user view on a
+    # separate sub-resource (the /shares endpoints) and must not change it,
+    # otherwise If-Match on PUT would fail for owners
     set_etag(response, project_dict)
+    if current_user.is_superadmin or project.created_by == current_user.username:
+        counts = await rbac_repo.get_project_share_counts({project.id: project.created_by})
+        project_dict["share_count"] = counts.get(project.id, 0)
     return project_dict
 
 
