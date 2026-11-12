@@ -97,6 +97,10 @@ responses: dict[int | str, dict[str, Any]] = {
 
 router = APIRouter(responses=responses)
 
+# the cross-project distribution history: the backing view of a distribution
+# management page, independent of any one project
+distributions_router = APIRouter(responses=responses)
+
 # Role put on the owner ACE of a distributed copy, and name of the snapshot
 # shipped with the copy so the recipient can reset the lab on their own.
 DISTRIBUTION_DEFAULT_ROLE = "Lab member"
@@ -1476,6 +1480,103 @@ async def cancel_project_distribution(
     # the job already finished (or only its record is left): remove the
     # record from the history, and with it the registry entry so the job
     # does not resurface during the retention window
+    registry.remove(str(distribution_id))
+    await DistributionRecordsRepository(db_session).delete_record(distribution_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _annotate_source_project(entry: dict) -> dict:
+    """
+    Add the name of the distributed (source) project to a history entry, so
+    the cross-project listing reads without joining the projects first. The
+    name is None when the project no longer exists on the server (its
+    directory was removed directly — an API deletion takes the records with
+    it).
+    """
+
+    controller = Controller.instance()
+    try:
+        entry["project_name"] = controller.get_project(str(entry["project_id"])).name
+    except ControllerNotFoundError:
+        entry["project_name"] = None
+    return entry
+
+
+@distributions_router.get(
+    "",
+    response_model=List[schemas.ProjectDistribution],
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def list_distributions(
+    current_user: schemas.User = Depends(get_current_active_user),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> List[dict]:
+    """
+    Return the distribution history across every project (the caller's own,
+    plus every one for a superadmin): the backing view of a distribution
+    management page. Each entry carries the name of the distributed project
+    (``project_name``, None when that project no longer exists on the
+    server) and the per-recipient results with their ``project_exists``
+    flags, so dead entries can be cleaned up knowingly.
+
+    Required privilege: Project.Audit on /distributions
+    """
+
+    registry = DistributionRegistry.instance()
+    records_repo = DistributionRecordsRepository(db_session)
+    await records_repo.mark_interrupted([UUID(distribution_id) for distribution_id in registry.live_ids()])
+    if current_user.is_superadmin:
+        records = await records_repo.get_all_records()
+    else:
+        assert current_user.username is not None  # an authenticated user always has a name
+        records = await records_repo.get_records_by_creator(current_user.username)
+    return [_annotate_source_project(_distribution_record_asdict(record)) for record in records]
+
+
+@distributions_router.delete(
+    "/{distribution_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        **responses,
+        409: {
+            "model": schemas.ErrorMessage,
+            "description": "The distribution is running: cancel it on its project instead",
+        },
+    },
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def delete_distribution(
+    distribution_id: UUID,
+    current_user: schemas.User = Depends(get_current_active_user),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    """
+    Remove one record from the distribution history. Unlike the per-project
+    endpoint this works whatever happened to the project (its directory may
+    have been removed directly, leaving the record unreachable there), and a
+    running distribution is refused with 409 — cancel it on its project.
+    Only the user who started the distribution (or a superadmin) can remove
+    its record. The copies themselves are never touched.
+
+    Required privilege: Project.Audit on /distributions
+    """
+
+    registry = DistributionRegistry.instance()
+    job = registry.get(str(distribution_id))
+    if job is not None and job.status in ("running", "cancelling"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This distribution is still running: cancel it on its project",
+        )
+
+    record = await DistributionRecordsRepository(db_session).get_record(distribution_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not find this distribution")
+    if not current_user.is_superadmin and record.created_by != current_user.username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
+        )
+
     registry.remove(str(distribution_id))
     await DistributionRecordsRepository(db_session).delete_record(distribution_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

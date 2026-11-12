@@ -119,6 +119,20 @@ class DistributionRecordsRepository(BaseRepository):
         result = await self._db_session.execute(query)
         return list(result.scalars().all())
 
+    async def get_records_by_creator(self, created_by: str) -> List[models.DistributionRecord]:
+        query = (
+            select(models.DistributionRecord)
+            .where(models.DistributionRecord.created_by == created_by)
+            .order_by(models.DistributionRecord.created_at.desc())
+        )
+        result = await self._db_session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_all_records(self) -> List[models.DistributionRecord]:
+        query = select(models.DistributionRecord).order_by(models.DistributionRecord.created_at.desc())
+        result = await self._db_session.execute(query)
+        return list(result.scalars().all())
+
     async def mark_interrupted(self, live_distribution_ids: List[UUID]) -> int:
         """
         Close out the records left "running" or "cancelling" by a controller

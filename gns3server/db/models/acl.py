@@ -72,6 +72,9 @@ def create_default_aces(target, connection, **kw):
     # (see gns3server.db.project_acl).
     default_aces = (
         ("/projects", False),
+        # the cross-project distribution history: no per-record ACEs, access
+        # beyond it is scoped by the creator check in the routes
+        ("/distributions", True),
         ("/templates", True),
         ("/computes", True),
         ("/symbols", True),
