@@ -98,6 +98,15 @@ TOOL_ENDPOINTS: dict[str, list[tuple[str, str]]] = {
     "project_lock": [("POST", "/projects/{project_id}/lock")],
     "project_unlock": [("POST", "/projects/{project_id}/unlock")],
     "project_locked": [("GET", "/projects/{project_id}/locked")],
+    "project_privileges": [("GET", "/projects/{project_id}/me/privileges")],
+    "project_distribute": [("POST", "/projects/{project_id}/distribute")],
+    "project_distribution_list": [("GET", "/projects/{project_id}/distributions")],
+    "project_distribution_cancel": [("DELETE", "/projects/{project_id}/distributions/{distribution_id}")],
+    "distribution_list": [("GET", "/distributions")],
+    "distribution_delete": [("DELETE", "/distributions/{distribution_id}")],
+    "project_share": [("POST", "/projects/{project_id}/share")],
+    "project_share_list": [("GET", "/projects/{project_id}/shares")],
+    "project_share_delete": [("DELETE", "/projects/{project_id}/shares/{ace_id}")],
     "node_list": [("GET", "/projects/{project_id}/nodes")],
     "node_get": [("GET", "/projects/{project_id}/nodes/{node_id}")],
     "node_create": [
@@ -175,6 +184,8 @@ TOOL_ENDPOINTS: dict[str, list[tuple[str, str]]] = {
     "image_prune": [("DELETE", "/images/prune")],
     "server_version": [("GET", "/version")],
     "server_statistics": [("GET", "/statistics")],
+    "user_privileges": [("GET", "/access/users/me/privileges")],
+    "user_quotas": [("GET", "/access/users/me/quotas")],
     # netmiko reaches the console TCP port directly (no RBAC there); the
     # topology read that resolves devices goes through the nodes endpoint
     "device_config_send": [("GET", "/projects/{project_id}/nodes")],
