@@ -351,8 +351,14 @@ def _server_url() -> str:
 
 
 def _create_mcp_server() -> MCPServer:
-    """Create the MCP server (transport security is applied when the HTTP app is built)."""
-    return MCPServer("GNS3 MCP Server")
+    """Create the MCP server (transport security is applied when the HTTP app is built).
+
+    The server is privilege gated: tools are hidden from users who lack the
+    privileges their endpoints require (see gns3server.agent.mcp.tool_access).
+    """
+    from .tool_access import PrivilegeGatedMCPServer
+
+    return PrivilegeGatedMCPServer("GNS3 MCP Server")
 
 
 def _transport_security() -> TransportSecuritySettings:
