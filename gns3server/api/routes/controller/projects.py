@@ -1007,6 +1007,7 @@ async def _distribute_project_copy(
     owner_role_id: UUID,
     name: str,
     reset_mac_addresses: Optional[bool],
+    lock_topology: Optional[bool],
 ) -> dict:
     """
     Duplicate a project on behalf of another user: the copy is owned by that
@@ -1022,17 +1023,27 @@ async def _distribute_project_copy(
     await ensure_project_owner_ace(db_session, new_project.id, new_project.created_by, role_id=owner_role_id)
 
     # Ship the copy with a snapshot of the template state so the recipient can
-    # reset the lab to its initial state (Snapshot.Restore). Snapshots of the
-    # source project are already part of the copy.
-    if TEMPLATE_SNAPSHOT_NAME not in [snapshot.name for snapshot in new_project.snapshots.values()]:
-        reopen = new_project.status == "closed"
-        if reopen:
-            await new_project.open()
-        try:
+    # reset the lab to its initial state (Snapshot.Restore), and lock its nodes
+    # and drawings when asked. The lock is advisory (a client hint): the
+    # reduced owner role is the enforcement. Locking happens before the
+    # snapshot, so the state a recipient restores is the locked one.
+    #
+    # Both checks need the copy open: the snapshot is taken through the open
+    # project, and the inherited snapshots are only visible then — Project
+    # __init__ does not load the snapshot config, open() does. A copy that
+    # inherits a "template state" snapshot from the source keeps it instead of
+    # failing on the name collision a second snapshot would raise.
+    reopen = new_project.status == "closed"
+    if reopen:
+        await new_project.open()
+    try:
+        if lock_topology:
+            new_project.lock()
+        if TEMPLATE_SNAPSHOT_NAME not in [snapshot.name for snapshot in new_project.snapshots.values()]:
             await new_project.snapshot(TEMPLATE_SNAPSHOT_NAME)
-        finally:
-            if reopen:
-                await new_project.close()
+    finally:
+        if reopen:
+            await new_project.close()
     return new_project.asdict()
 
 
@@ -1123,6 +1134,7 @@ async def _run_distribution(
     recipients: List[Tuple[models.User, str]],
     owner_role_id: UUID,
     reset_mac_addresses: Optional[bool],
+    lock_topology: Optional[bool],
 ) -> None:
     """
     Create one copy per recipient in the background, recording a result per
@@ -1143,7 +1155,7 @@ async def _run_distribution(
                     break
                 try:
                     copy = await _distribute_project_copy(
-                        db_session, project, member, owner_role_id, name, reset_mac_addresses
+                        db_session, project, member, owner_role_id, name, reset_mac_addresses, lock_topology
                     )
                     registry.record_result(job, {"username": member.username, "project": copy, "error": None})
                 except Exception as e:
@@ -1183,8 +1195,9 @@ async def distribute_project(
     Distribute a project: create one copy per recipient (a single user, every
     listed user, or every member of a user group) in the background. Each
     copy is owned by its recipient, its owner ACE carries a reduced role
-    (``owner_role``, the built-in "Lab member" role by default) and it ships
-    with a snapshot of the template state. Returns the distribution job:
+    (``owner_role``, the built-in "Lab member" role by default), it ships
+    with a snapshot of the template state, and its nodes and drawings are
+    locked by default (``lock_topology``). Returns the distribution job:
     poll ``GET /projects/{project_id}/distributions/{distribution_id}`` for
     the progress and the per-recipient results.
 
@@ -1219,6 +1232,7 @@ async def distribute_project(
             names,
             owner_role_id,
             project_data.reset_mac_addresses,
+            project_data.lock_topology,
         )
     )
     return job.asdict()

@@ -881,6 +881,179 @@ class TestProjectDistribution:
             )
             assert response.status_code == status.HTTP_200_OK
 
+    @staticmethod
+    async def _create_source_with_drawing(app: FastAPI, teacher: User) -> tuple[str, str]:
+        """
+        Create a project with one drawing. No nodes means no compute involved:
+        the distribution stays on the fast directory-copy path.
+        """
+
+        async with TestProjectOwnership._client_for(app, teacher) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            source_id = response.json()["project_id"]
+
+            response = await teacher_client.post(
+                app.url_path_for("create_drawing", project_id=source_id),
+                json={"svg": '<svg><rect width="200" height="100"></rect></svg>', "x": -128, "y": -10},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            return source_id, response.json()["drawing_id"]
+
+    @staticmethod
+    async def _distribute_from(
+        app: FastAPI, teacher: User, source_id: str, student_username: str, **extra_fields
+    ) -> str:
+        """
+        Distribute an existing project to one user and return the copy id.
+        """
+
+        async with TestProjectOwnership._client_for(app, teacher) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": f"lab-copy-{uuid.uuid4()}", "target_user": student_username, **extra_fields},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            assert job["total"] == 1
+            results = job["results"]
+            assert len(results) == 1
+            assert results[0]["error"] is None
+            return results[0]["project"]["project_id"]
+
+    async def test_distributed_copy_locks_items_by_default(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, _ = await self._create_source_with_drawing(app, test_user)
+        copy_id = await self._distribute_from(app, test_user, source_id, student.username)
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            # the copy ships locked: the client hides move and delete from the
+            # start, instead of letting a drag end in a 403 and a ghost move
+            response = await student_client.post(app.url_path_for("open_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            response = await student_client.get(app.url_path_for("get_drawings", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            drawings = response.json()
+            assert len(drawings) == 1
+            assert drawings[0]["locked"] is True
+
+        # the source is untouched: the teacher keeps editing their lab
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(app.url_path_for("open_project", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            response = await teacher_client.get(app.url_path_for("get_drawings", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            drawings = response.json()
+            assert len(drawings) == 1
+            assert drawings[0]["locked"] is False
+
+    async def test_distributed_copy_unlocked_when_lock_topology_is_false(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, _ = await self._create_source_with_drawing(app, test_user)
+        copy_id = await self._distribute_from(app, test_user, source_id, student.username, lock_topology=False)
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.post(app.url_path_for("open_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            response = await student_client.get(app.url_path_for("get_drawings", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            drawings = response.json()
+            assert len(drawings) == 1
+            assert drawings[0]["locked"] is False
+
+    async def test_distribution_keeps_source_locks_in_the_copy(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, _ = await self._create_source_with_drawing(app, test_user)
+
+        # the teacher locks their source before distributing a modify-capable
+        # role: the locks ride along with the copy
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(app.url_path_for("open_project", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            response = await teacher_client.post(app.url_path_for("lock_project", project_id=source_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        copy_id = await self._distribute_from(app, test_user, source_id, student.username, lock_topology=False)
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.post(app.url_path_for("open_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            response = await student_client.get(app.url_path_for("get_drawings", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            drawings = response.json()
+            assert len(drawings) == 1
+            assert drawings[0]["locked"] is True
+
+    async def test_distribution_with_nodes_locks_and_restore_keeps_locked(
+        self,
+        app: FastAPI,
+        base_client: AsyncClient,
+        db_session: AsyncSession,
+        test_user: User,
+        compute,
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        # a node on a remote compute sends the copy through the export/import
+        # fallback path: the lock must hold on both duplication paths
+        compute_response = MagicMock()
+        compute_response.json = {"console": 2048}
+        compute.post = AsyncioMagicMock(return_value=compute_response)
+        compute.delete = AsyncioMagicMock()
+        # the export step lists the files the remote compute holds for the
+        # project (a real compute answers a list, the bare mock answers None)
+        compute.list_files = AsyncioMagicMock(return_value=[])
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("create_node", project_id=source_id),
+                json={"name": "r1", "node_type": "vpcs", "compute_id": "example.com", "properties": {}},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+
+        copy_id = await self._distribute_from(app, test_user, source_id, student.username)
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.post(app.url_path_for("open_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            response = await student_client.get(app.url_path_for("get_nodes", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            nodes = response.json()
+            assert len(nodes) == 1
+            assert nodes[0]["locked"] is True
+
+            # the lock is part of the template state: restoring the snapshot
+            # (the way a recipient resets the lab) brings the items back
+            # locked
+            response = await student_client.get(app.url_path_for("get_snapshots", project_id=copy_id))
+            snapshot_id = next(s["snapshot_id"] for s in response.json() if s["name"] == "template state")
+            response = await student_client.post(
+                app.url_path_for("restore_snapshot", project_id=copy_id, snapshot_id=snapshot_id)
+            )
+            assert response.status_code == status.HTTP_200_OK
+            response = await student_client.get(app.url_path_for("get_nodes", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            nodes = response.json()
+            assert len(nodes) == 1
+            assert nodes[0]["locked"] is True
+
     async def test_distribute_project_to_group(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
     ) -> None:
@@ -1118,13 +1291,16 @@ class TestProjectDistribution:
         real_copy = projects_routes._distribute_project_copy
         copies_attempted = 0
 
-        async def blocking_copy(db_session, project, member, owner_role_id, name, reset_mac_addresses):
+        # pass-through signature: the wrapper only counts and holds calls, so
+        # a new parameter on the wrapped function cannot break it again
+        async def blocking_copy(*args, **kwargs):
             nonlocal copies_attempted
             copies_attempted += 1
             if copies_attempted == 1:
                 first_copy_started.set()
-                await release_first_copy.wait()
-            return await real_copy(db_session, project, member, owner_role_id, name, reset_mac_addresses)
+                # bounded so a failed test cannot leave the job waiting forever
+                await asyncio.wait_for(release_first_copy.wait(), timeout=30)
+            return await real_copy(*args, **kwargs)
 
         monkeypatch.setattr(projects_routes, "_distribute_project_copy", blocking_copy)
 
@@ -1142,7 +1318,8 @@ class TestProjectDistribution:
             assert response.status_code == status.HTTP_202_ACCEPTED
             distribution_id = response.json()["distribution_id"]
 
-            await first_copy_started.wait()
+            # bounded: a broken copy call must fail the test, not hang it
+            await asyncio.wait_for(first_copy_started.wait(), timeout=10)
 
             # the cancel request lands while the first copy is in flight: the
             # job switches to cancelling, and a repeated request changes
@@ -1224,10 +1401,11 @@ class TestProjectDistribution:
         release_copy = asyncio.Event()
         real_copy = projects_routes._distribute_project_copy
 
-        async def blocking_copy(db_session, project, member, owner_role_id, name, reset_mac_addresses):
+        # pass-through signature: see test_cancel_distribution_stops_before_next_recipient
+        async def blocking_copy(*args, **kwargs):
             copy_started.set()
-            await release_copy.wait()
-            return await real_copy(db_session, project, member, owner_role_id, name, reset_mac_addresses)
+            await asyncio.wait_for(release_copy.wait(), timeout=30)
+            return await real_copy(*args, **kwargs)
 
         monkeypatch.setattr(projects_routes, "_distribute_project_copy", blocking_copy)
 
@@ -1242,7 +1420,7 @@ class TestProjectDistribution:
             )
             assert response.status_code == status.HTTP_202_ACCEPTED
             distribution_id = response.json()["distribution_id"]
-            await copy_started.wait()
+            await asyncio.wait_for(copy_started.wait(), timeout=10)
 
             # an unknown distribution id is a 404
             response = await teacher_client.delete(
