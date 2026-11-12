@@ -1520,6 +1520,7 @@ class TestProjectDistribution:
             assert entry["status"] == "completed"
             assert entry["total"] == 1 and entry["completed"] == 1
             assert entry["created_by"] == test_user.username
+            assert entry["created_at"] is not None
             assert entry["results"][0]["username"] == student.username
             assert entry["results"][0]["project"] is not None
 

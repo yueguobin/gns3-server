@@ -58,7 +58,9 @@ class Distribution:
     # recipients are skipped (cancelling never cuts a copy in half)
     cancel_requested: bool = False
     results: List[dict] = field(default_factory=list)
-    created_at: float = field(default_factory=time.monotonic)
+    # wall clock: surfaced in the API responses and interchangeable with the
+    # timestamp of a persisted record
+    created_at: float = field(default_factory=time.time)
     # keeps the background task alive (a task without a reference can be
     # garbage collected before it finishes)
     task: Optional[asyncio.Task] = None
@@ -74,6 +76,7 @@ class Distribution:
             "completed": len(self.results),
             "results": self.results,
             "error": {"message": self.error} if self.error else None,
+            "created_at": self.created_at,
         }
 
 
@@ -159,7 +162,7 @@ class DistributionRegistry:
         Drop the finished jobs older than the retention period.
         """
 
-        cutoff = time.monotonic() - JOB_RETENTION_SECONDS
+        cutoff = time.time() - JOB_RETENTION_SECONDS
         stale = [
             distribution_id
             for distribution_id, job in self._jobs.items()
