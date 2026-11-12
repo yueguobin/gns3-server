@@ -22,26 +22,32 @@ depends_on = None
 
 def upgrade() -> None:
 
-    op.create_table(
-        "distribution_records",
-        sa.Column("distribution_id", models.GUID(), nullable=False),
-        sa.Column("project_id", models.GUID(), nullable=False),
-        sa.Column("name", sa.String(), nullable=True),
-        sa.Column("created_by", sa.String(), nullable=False),
-        sa.Column("total", sa.Integer(), nullable=False),
-        sa.Column("status", sa.String(), nullable=False),
-        sa.Column("error", sa.Text(), nullable=True),
-        sa.Column("cancel_requested", sa.Boolean(), nullable=False),
-        sa.Column("results", sa.JSON(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), server_default=sa.func.current_timestamp(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), server_default=sa.func.current_timestamp(), nullable=False),
-        sa.PrimaryKeyConstraint("distribution_id"),
-    )
-    op.create_index("ix_distribution_records_project_id", "distribution_records", ["project_id"])
+    if sa.inspect(op.get_bind()).has_table("distribution_records"):
+        # the table already exists (created from code on a fresh database)
+        pass
+    else:
+        op.create_table(
+            "distribution_records",
+            sa.Column("distribution_id", models.GUID(), nullable=False),
+            sa.Column("project_id", models.GUID(), nullable=False),
+            sa.Column("name", sa.String(), nullable=True),
+            sa.Column("created_by", sa.String(), nullable=False),
+            sa.Column("total", sa.Integer(), nullable=False),
+            sa.Column("status", sa.String(), nullable=False),
+            sa.Column("error", sa.Text(), nullable=True),
+            sa.Column("cancel_requested", sa.Boolean(), nullable=False),
+            sa.Column("results", sa.JSON(), nullable=False),
+            sa.Column("created_at", sa.DateTime(), server_default=sa.func.current_timestamp(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), server_default=sa.func.current_timestamp(), nullable=False),
+            sa.PrimaryKeyConstraint("distribution_id"),
+        )
+        op.create_index("ix_distribution_records_project_id", "distribution_records", ["project_id"])
 
     # grant the "User" role to the "Users" group on the cross-project
     # distribution listing, like the other default resource paths (the
-    # after_create seeding only runs on a new database)
+    # after_create seeding only runs on a new database). The insert is
+    # idempotent so it also re-seeds unversioned databases whose ACLs
+    # were wiped before the startup chain runs.
     connection = op.get_bind()
     connection.execute(
         sa.text(

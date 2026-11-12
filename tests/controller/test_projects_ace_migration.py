@@ -17,7 +17,7 @@ def test_default_aces_are_seeded_without_propagation_on_projects():
     engine = sa.create_engine("sqlite://")
     with engine.connect() as connection:
         Base.metadata.create_all(connection)
-        assert connection.scalar(sa.text("SELECT COUNT(*) FROM acl")) == 7
+        assert connection.scalar(sa.text("SELECT COUNT(*) FROM acl")) == 8
         propagate = dict(connection.exec_driver_sql("SELECT path, propagate FROM acl").all())
         # the collection ACE must not grant access to the projects themselves
         assert propagate["/projects"] == 0
@@ -76,7 +76,7 @@ async def test_default_projects_ace_is_restricted_on_upgrade(tmp_path, monkeypat
     await connect_to_db(app)
     try:
         async with app.state._db_engine.connect() as connection:
-            assert await connection.scalar(sa.text("SELECT COUNT(*) FROM acl")) == 7
+            assert await connection.scalar(sa.text("SELECT COUNT(*) FROM acl")) == 8
             propagate = await connection.scalar(sa.text("SELECT propagate FROM acl WHERE path = '/projects'"))
             assert propagate == 0
     finally:
