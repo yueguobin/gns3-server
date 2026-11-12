@@ -37,7 +37,7 @@ that test until the spec here is updated.
 
 import logging
 import time
-from typing import Any, FrozenSet
+from typing import Any, FrozenSet, Optional
 from uuid import UUID
 
 from mcp.server.mcpserver import MCPServer
@@ -49,8 +49,10 @@ log = logging.getLogger(__name__)
 # Cache the flattened privilege set per user for a short while: the RBAC
 # snapshot itself is in-memory, but the lookup still needs a DB session.
 # A short TTL keeps revocations effective without a round-trip per call.
+# The third tuple element is the group whitelist: the union of the MCP
+# tool whitelists of the user's groups (None = unrestricted).
 _PRIVILEGE_CACHE_TTL_S = 5.0
-_privilege_cache: dict[str, tuple[float, FrozenSet[str], bool]] = {}
+_privilege_cache: dict[str, tuple[float, FrozenSet[str], bool, Optional[FrozenSet[str]]]] = {}
 
 
 # A tool with no entry here is visible to every authenticated user.
@@ -177,8 +179,13 @@ def tool_visible(name: str, privileges: FrozenSet[str], is_superadmin: bool) -> 
     return required <= privileges
 
 
-async def resolve_user_privileges(username: str) -> tuple[FrozenSet[str], bool] | None:
-    """Flattened privilege set and superadmin flag for a user, with a short TTL cache.
+async def resolve_user_privileges(username: str) -> tuple[FrozenSet[str], bool, Optional[FrozenSet[str]]] | None:
+    """Flattened privilege set, superadmin flag and group whitelist for a user.
+
+    The whitelist is the union of the MCP tool whitelists of the groups the
+    user belongs to (see the /access/groups/{id}/mcp_tools endpoints); None
+    means unrestricted (no group has a configured whitelist). Cached for a
+    short TTL.
 
     Returns None when the user or the database is unavailable; callers
     should fail open (show the tool) and let the REST endpoints decide —
@@ -188,7 +195,7 @@ async def resolve_user_privileges(username: str) -> tuple[FrozenSet[str], bool] 
     cached = _privilege_cache.get(username)
     now = time.monotonic()
     if cached is not None and cached[0] > now:
-        return cached[1], cached[2]
+        return cached[1], cached[2], cached[3]
 
     from . import _app  # late import: the module owning the starlette app
 
@@ -206,16 +213,18 @@ async def resolve_user_privileges(username: str) -> tuple[FrozenSet[str], bool] 
             if user is None:
                 return None
             if user.is_superadmin:
-                result: tuple[FrozenSet[str], bool] = (frozenset(), True)
+                result: tuple[FrozenSet[str], bool, Optional[FrozenSet[str]]] = (frozenset(), True, None)
             else:
                 rbac_repo = RbacRepository(db_session)
-                names = await rbac_repo.get_user_privileges(UUID(str(user.user_id)))
-                result = (frozenset(names), False)
+                user_id = UUID(str(user.user_id))
+                names = await rbac_repo.get_user_privileges(user_id)
+                whitelist = await rbac_repo.get_user_mcp_tool_whitelist(user_id)
+                result = (frozenset(names), False, frozenset(whitelist) if whitelist is not None else None)
     except Exception as e:
         log.warning("Could not resolve MCP privileges for user %s (%s); failing open", username, e)
         return None
 
-    _privilege_cache[username] = (now + _PRIVILEGE_CACHE_TTL_S, result[0], result[1])
+    _privilege_cache[username] = (now + _PRIVILEGE_CACHE_TTL_S, result[0], result[1], result[2])
     return result
 
 
@@ -241,7 +250,11 @@ class PrivilegeGatedMCPServer(MCPServer):
         resolved = await resolve_user_privileges(username)
         if resolved is None:
             return True
-        privileges, is_superadmin = resolved
+        privileges, is_superadmin, whitelist = resolved
+        if is_superadmin:
+            return True
+        if whitelist is not None and name not in whitelist:
+            return False  # outside every group whitelist: hidden like a missing privilege
         return tool_visible(name, privileges, is_superadmin)
 
     async def list_tools(self) -> list[Any]:

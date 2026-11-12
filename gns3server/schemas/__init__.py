@@ -83,6 +83,8 @@ from .controller.projects import (
 from .controller.templates import Template, TemplateCreate, TemplateUpdate, TemplateUsage
 from .controller.users import (
     Credentials,
+    GroupMCPTools,
+    GroupMCPToolsUpdate,
     LoggedInUserUpdate,
     User,
     UserCreate,
@@ -292,6 +294,8 @@ __all__ = [
     "FrameRelaySwitch",
     "FrameRelaySwitchCreate",
     "FrameRelaySwitchUpdate",
+    "GroupMCPTools",
+    "GroupMCPToolsUpdate",
     "IOUCreate",
     "IOULicense",
     "IOUStart",

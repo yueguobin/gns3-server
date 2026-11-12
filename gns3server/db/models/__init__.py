@@ -38,7 +38,7 @@ from .templates import (
     VMwareTemplate,
     VPCSTemplate,
 )
-from .users import User, UserGroup, UserPreferences
+from .users import MCPToolWhitelist, User, UserGroup, UserPreferences
 
 __all__ = [
     "ACE",
@@ -55,6 +55,7 @@ __all__ = [
     "Image",
     "ImageSyncJob",
     "LLMModelConfig",
+    "MCPToolWhitelist",
     "Privilege",
     "QemuTemplate",
     "Resource",

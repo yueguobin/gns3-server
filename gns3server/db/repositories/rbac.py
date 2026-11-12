@@ -370,3 +370,63 @@ class RbacRepository(BaseRepository):
 
         await self._rbac_state.ensure_loaded(self._db_session)
         return self._rbac_state.effective_role_id(user_id, path, privilege_name)
+
+    async def get_group_privileges(self, group_id: UUID) -> Set[str]:
+        """
+        Names of all privileges granted to a group through the roles carried
+        by its allowed ACEs (flattened view, ignores resource paths).
+        """
+
+        await self._rbac_state.ensure_loaded(self._db_session)
+        return self._rbac_state.group_privilege_names(group_id)
+
+    async def get_group_mcp_tools(self, group_id: UUID) -> Optional[Set[str]]:
+        """
+        Whitelisted MCP tool names for a group, or None when the group has
+        no whitelist configured (every tool stays allowed).
+        """
+
+        await self._rbac_state.ensure_loaded(self._db_session)
+        return self._rbac_state.group_mcp_tools(group_id)
+
+    async def get_user_mcp_tool_whitelist(self, user_id: UUID) -> Optional[Set[str]]:
+        """
+        Effective MCP tool whitelist for a user: union of the whitelists of
+        the groups the user belongs to. None means unrestricted (at least
+        one of the user's groups, or no group at all, has no whitelist).
+        """
+
+        await self._rbac_state.ensure_loaded(self._db_session)
+        return self._rbac_state.user_mcp_tool_whitelist(user_id)
+
+    async def set_group_mcp_tools(self, group_id: UUID, tool_names: List[str]) -> None:
+        """
+        Replace the MCP tool whitelist of a group.
+
+        An empty list means "hide every MCP tool": it is stored as a single
+        sentinel row with an empty tool name, so a configured-but-empty
+        whitelist stays distinct from no whitelist at all (absence of rows).
+        """
+
+        await self._db_session.execute(
+            delete(models.MCPToolWhitelist).where(models.MCPToolWhitelist.user_group_id == group_id)
+        )
+        unique_names = sorted(set(tool_names))
+        if not unique_names:
+            unique_names = [""]  # sentinel: configured, allows nothing
+        for tool_name in unique_names:
+            self._db_session.add(models.MCPToolWhitelist(user_group_id=group_id, tool_name=tool_name))
+        await self._db_session.commit()
+        self._rbac_state.mark_dirty()
+
+    async def clear_group_mcp_tools(self, group_id: UUID) -> bool:
+        """
+        Remove the MCP tool whitelist of a group (back to allow-all).
+        Returns whether any row was deleted.
+        """
+
+        query = delete(models.MCPToolWhitelist).where(models.MCPToolWhitelist.user_group_id == group_id)
+        result = await self._db_session.execute(query)
+        await self._db_session.commit()
+        self._rbac_state.mark_dirty()
+        return cast(CursorResult, result).rowcount > 0

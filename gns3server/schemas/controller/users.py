@@ -153,6 +153,30 @@ class UserGroup(DateTimeModelMixin, UserGroupBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class GroupMCPToolsUpdate(BaseModel):
+    """
+    Replacement whitelist of MCP tool names for a user group. An empty list
+    hides every MCP tool from the group members (only the privilege gating
+    still applies to the tools listed nowhere).
+    """
+
+    tools: List[str]
+
+
+class GroupMCPTools(BaseModel):
+    """
+    MCP tool configuration of a user group.
+
+    ``candidates`` lists every tool the group's privileges could ever show
+    (the flattened privilege view of the group's ACEs): the admin UI offers
+    exactly these tools. ``tools`` is the configured whitelist, or None when
+    the group is unconfigured (privilege gating alone decides).
+    """
+
+    candidates: List[str]
+    tools: Optional[List[str]] = None
+
+
 class Credentials(BaseModel):
     username: str
     password: str

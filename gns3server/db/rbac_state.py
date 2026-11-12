@@ -98,6 +98,9 @@ class RbacState:
         self._project_resource_ids: Set[str] = set()
         # pool id (str) -> project resource ids (str)
         self._pool_projects: Dict[str, Set[str]] = {}
+        # group id -> MCP tool names whitelisted for that group (a group
+        # missing from the dict has no whitelist: every tool is allowed)
+        self._mcp_tool_whitelists: Dict[UUID, Set[str]] = {}
 
     @classmethod
     def instance(cls) -> "RbacState":
@@ -119,6 +122,7 @@ class RbacState:
         self._aces = []
         self._project_resource_ids = set()
         self._pool_projects = {}
+        self._mcp_tool_whitelists = {}
 
     def mark_dirty(self) -> None:
         """
@@ -188,6 +192,16 @@ class RbacState:
                 )
             )
 
+        # group id -> whitelisted MCP tool names (absent = no whitelist). A
+        # sentinel row with an empty tool name marks a configured-but-empty
+        # whitelist (hide every tool): the key exists, the set stays empty.
+        whitelist_result = await db_session.execute(select(models.MCPToolWhitelist))
+        mcp_tool_whitelists: Dict[UUID, Set[str]] = {}
+        for entry in whitelist_result.scalars().all():
+            names = mcp_tool_whitelists.setdefault(entry.user_group_id, set())
+            if entry.tool_name:
+                names.add(entry.tool_name)
+
         # all registered project resources, pooled or not: the pool gate in
         # user_has_privilege checks paths against every project resource
         resources_result = await db_session.execute(
@@ -208,6 +222,7 @@ class RbacState:
         self._aces = aces
         self._project_resource_ids = project_resource_ids
         self._pool_projects = pool_projects
+        self._mcp_tool_whitelists = mcp_tool_whitelists
         self._loaded = True
         log.debug(f"RBAC snapshot reloaded: {len(aces)} ACE(s), {len(role_privileges)} role(s)")
 
@@ -427,6 +442,44 @@ class RbacState:
             if ace.user_id == user_id or (ace.group_id is not None and ace.group_id in groups):
                 names.update(self._role_privileges.get(ace.role_id, ()))
         return names
+
+    def group_privilege_names(self, group_id: UUID) -> Set[str]:
+        """
+        Names of all privileges granted to a group through the roles carried
+        by its allowed ACEs. Same flattened view as user_privilege_names,
+        scoped to a single group: this is the candidate set an admin sees
+        when configuring the group's MCP tool whitelist.
+        """
+
+        names: Set[str] = set()
+        for ace in self._aces:
+            if ace.allowed and ace.group_id == group_id:
+                names.update(self._role_privileges.get(ace.role_id, ()))
+        return names
+
+    def group_mcp_tools(self, group_id: UUID) -> Optional[Set[str]]:
+        """
+        Whitelisted MCP tool names for a group, or None when the group has
+        no whitelist configured (every tool stays allowed).
+        """
+
+        whitelist = self._mcp_tool_whitelists.get(group_id)
+        return set(whitelist) if whitelist is not None else None
+
+    def user_mcp_tool_whitelist(self, user_id: UUID) -> Optional[Set[str]]:
+        """
+        Effective MCP tool whitelist for a user: the union of the
+        whitelists of the groups the user belongs to. A group without a
+        configured whitelist does not restrict its members, so as soon as
+        one of the user's groups is unconfigured the result is None (no
+        restriction). Users in no group at all are unrestricted too.
+        """
+
+        groups = {group_id for group_id, members in self._group_members.items() if user_id in members}
+        configured = [self._mcp_tool_whitelists[g] for g in groups if g in self._mcp_tool_whitelists]
+        if len(configured) < len(groups):
+            return None
+        return set().union(*configured) if configured else None
 
     def _direct_project_ids(
         self, user_aces_all: List[AceEntry], group_aces: List[AceEntry], privilege_name: str, all_project_ids: List[str]

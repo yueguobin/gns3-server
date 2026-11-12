@@ -240,11 +240,33 @@ def test_tool_visible_semantics() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gated_server_applies_group_whitelist(monkeypatch) -> None:
+    from gns3server.agent.mcp import tool_access
+
+    async def fake_resolve(username):
+        # privileges allow project tools, whitelist only allows project_get
+        return frozenset({"Project.Audit"}), False, frozenset({"project_get", "project_list"})
+
+    monkeypatch.setattr(tool_access, "resolve_user_privileges", fake_resolve)
+    monkeypatch.setattr(tool_access, "_current_username", lambda: "alice")
+
+    names = {tool.name for tool in await mcp.list_tools()}
+    assert "project_get" in names  # privileged and whitelisted
+    assert "project_stats" not in names  # privileged but not whitelisted
+    assert "node_list" not in names  # whitelisted out too (and no privilege anyway)
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    with pytest.raises(ToolError):
+        await mcp.call_tool("project_stats", {})
+
+
+@pytest.mark.asyncio
 async def test_gated_server_filters_list_and_call(monkeypatch) -> None:
     from gns3server.agent.mcp import tool_access
 
     async def fake_resolve(username):
-        return frozenset({"Project.Audit"}), False
+        return frozenset({"Project.Audit"}), False, None
 
     monkeypatch.setattr(tool_access, "resolve_user_privileges", fake_resolve)
     monkeypatch.setattr(tool_access, "_current_username", lambda: "alice")

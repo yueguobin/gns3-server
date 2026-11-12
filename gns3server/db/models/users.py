@@ -103,6 +103,24 @@ def create_default_user_groups(target, connection, **kw):
     log.debug("The default user groups have been created in the database")
 
 
+class MCPToolWhitelist(BaseTable):
+    """
+    Admin-defined per-group whitelist of MCP tool names.
+
+    A group with no rows in this table exposes every MCP tool its members
+    may see through the normal privilege gating; rows narrow that set to
+    the listed tools. Kept in the RBAC in-memory snapshot like the other
+    RBAC tables.
+    """
+
+    __tablename__ = "mcp_tool_whitelist"
+
+    user_group_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("user_groups.user_group_id", ondelete="CASCADE"), primary_key=True
+    )
+    tool_name: Mapped[str] = mapped_column(String, primary_key=True)
+
+
 class UserPreferences(BaseTable):
     """
     Arbitrary JSON document stored per user, owned by the client (e.g. the web UI
