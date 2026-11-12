@@ -574,6 +574,7 @@ class TestProjectDistribution:
     LAB_MEMBER_PRIVILEGES = {
         "Project.Allocate",
         "Project.Audit",
+        "Project.Marker",
         "Snapshot.Audit",
         "Snapshot.Restore",
         "Node.Audit",
@@ -581,6 +582,7 @@ class TestProjectDistribution:
         "Node.PowerMgmt",
         "Link.Audit",
         "Link.Capture",
+        "Link.Marker",
         "Drawing.Audit",
     }
 

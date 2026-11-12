@@ -9,6 +9,7 @@ from gns3server.db.tasks import connect_to_db
 LAB_MEMBER_PRIVILEGES = {
     "Project.Allocate",
     "Project.Audit",
+    "Project.Marker",
     "Snapshot.Audit",
     "Snapshot.Restore",
     "Node.Audit",
@@ -16,6 +17,7 @@ LAB_MEMBER_PRIVILEGES = {
     "Node.PowerMgmt",
     "Link.Audit",
     "Link.Capture",
+    "Link.Marker",
     "Drawing.Audit",
 }
 
