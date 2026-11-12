@@ -170,6 +170,19 @@ def tool_required_privileges(name: str) -> FrozenSet[str]:
     return TOOL_SPECS.get(name, frozenset())
 
 
+def all_tool_descriptions() -> dict[str, str]:
+    """
+    Description of every registered MCP tool, straight from the tool
+    definitions (the docstrings of the @mcp.tool functions). Consumers that
+    present tool lists to humans (e.g. the group whitelist admin UI) read
+    this instead of keeping their own copy.
+    """
+
+    from . import mcp  # late import: the package owns the server instance
+
+    return {tool.name: tool.description or "" for tool in mcp._tool_manager.list_tools()}
+
+
 def tool_visible(name: str, privileges: FrozenSet[str], is_superadmin: bool) -> bool:
     """Decide visibility from a flattened, path-agnostic privilege set."""
 

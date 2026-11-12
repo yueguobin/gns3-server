@@ -173,12 +173,15 @@ class GroupMCPTools(BaseModel):
     the group is unconfigured (privilege gating alone decides). ``bypass`` is
     True when the whitelist cannot affect anyone right now (no member that is
     not a superadmin, e.g. the builtin Administrators group): the UI should
-    say so instead of offering the short candidate list.
+    say so instead of offering the short candidate list. ``descriptions``
+    maps every candidate name to the description shipped with the MCP tool
+    definition, so the UI does not need its own translation table.
     """
 
     candidates: List[str]
     tools: Optional[List[str]] = None
     bypass: bool = False
+    descriptions: Dict[str, str] = Field(default_factory=dict)
 
 
 class Credentials(BaseModel):

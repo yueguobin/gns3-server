@@ -53,6 +53,9 @@ class TestGroupMCPToolsRoutes:
         assert "server_version" in body["candidates"]
         # and candidates are a subset of every known tool
         assert set(body["candidates"]) <= set(TOOL_SPECS)
+        # every candidate carries the description from the tool definition
+        assert set(body["descriptions"]) == set(body["candidates"])
+        assert body["descriptions"]["server_version"]
 
     async def test_bypass_when_no_regular_member(
         self, app: FastAPI, client: AsyncClient, db_session: AsyncSession, test_user: User

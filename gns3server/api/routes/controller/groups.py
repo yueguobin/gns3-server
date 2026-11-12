@@ -249,10 +249,15 @@ async def get_group_mcp_tools(
 
     group_privileges = await rbac_repo.get_group_privileges(user_group_id)
     tools = await rbac_repo.get_group_mcp_tools(user_group_id)
+    candidates = _group_tool_candidates(group_privileges)
+    from gns3server.agent.mcp.tool_access import all_tool_descriptions
+
+    descriptions = all_tool_descriptions()
     return schemas.GroupMCPTools(
-        candidates=_group_tool_candidates(group_privileges),
+        candidates=candidates,
         tools=sorted(tools) if tools is not None else None,
         bypass=await rbac_repo.get_group_mcp_bypass(user_group_id),
+        descriptions={name: descriptions.get(name, "") for name in candidates},
     )
 
 
