@@ -17,7 +17,7 @@
 
 import logging
 import uuid
-from typing import List, Optional, Set, Union, cast
+from typing import Dict, List, Optional, Set, Union, cast
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
@@ -330,6 +330,18 @@ class RbacRepository(BaseRepository):
 
         await self._rbac_state.ensure_loaded(self._db_session)
         return self._rbac_state.accessible_project_ids(user_id, privilege_name, all_project_ids)
+
+    async def get_project_share_counts(self, owners: Dict[str, Optional[str]]) -> Dict[str, int]:
+        """
+        Count the share ACEs of the given projects.
+
+        ``owners`` maps project ids to the username of their creator. Returns
+        the project ids with at least one share (see the /shares endpoints for
+        what counts as a share).
+        """
+
+        await self._rbac_state.ensure_loaded(self._db_session)
+        return self._rbac_state.project_share_counts(owners)
 
     async def check_user_has_privilege(self, user_id: UUID, path: str, privilege_name: str) -> bool:
         """

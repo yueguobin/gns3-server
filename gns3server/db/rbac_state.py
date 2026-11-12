@@ -93,6 +93,7 @@ class RbacState:
         self._dirty: bool = False
         self._role_privileges: Dict[UUID, Set[str]] = {}
         self._group_members: Dict[UUID, Set[UUID]] = {}
+        self._user_names: Dict[UUID, str] = {}
         self._aces: List[AceEntry] = []
         self._project_resource_ids: Set[str] = set()
         # pool id (str) -> project resource ids (str)
@@ -114,6 +115,7 @@ class RbacState:
         self._dirty = False
         self._role_privileges = {}
         self._group_members = {}
+        self._user_names = {}
         self._aces = []
         self._project_resource_ids = set()
         self._pool_projects = {}
@@ -158,6 +160,16 @@ class RbacState:
         for group in result.scalars().all():
             group_members[group.user_group_id] = {user.user_id for user in group.users}
 
+        # user id -> username: owner ACEs carry no marker, they are identified
+        # by matching the ACE user against the project creator's username.
+        # User uses legacy Column declarations (like ACE), so go through the
+        # plain dict for typed access
+        users_result = await db_session.execute(select(models.User))
+        user_names: Dict[UUID, str] = {}
+        for user in users_result.scalars().all():
+            values = user.asdict()
+            user_names[values["user_id"]] = values["username"]
+
         # ACEs, in natural database order (group ACE evaluation order relies on it)
         aces_result = await db_session.execute(select(models.ACE))
         aces: List[AceEntry] = []
@@ -192,6 +204,7 @@ class RbacState:
 
         self._role_privileges = role_privileges
         self._group_members = group_members
+        self._user_names = user_names
         self._aces = aces
         self._project_resource_ids = project_resource_ids
         self._pool_projects = pool_projects
@@ -505,3 +518,32 @@ class RbacState:
         )
         pool_accessible_ids = self._pooled_project_ids(user_aces, group_aces, user_decided)
         return direct_ace_ids, pool_accessible_ids
+
+    def project_share_counts(self, owners: Dict[str, Optional[str]]) -> Dict[str, int]:
+        """
+        Count the share ACEs of the given projects.
+
+        ``owners`` maps project ids to the username of their creator. A share
+        is any ACE on /projects/<id> except the owner ACE of the creator (the
+        same definition as the /projects/<id>/shares endpoint); a group share
+        counts as one share. Projects without a resolvable owner have no owner
+        ACE, so every ACE on their path counts. Returns only the projects with
+        at least one share.
+        """
+
+        ids_by_name = {username: user_id for user_id, username in self._user_names.items()}
+        entries = {}
+        for project_id, username in owners.items():
+            owner_user_id = ids_by_name.get(username) if username else None
+            entries[f"/projects/{project_id}"] = (project_id, owner_user_id)
+
+        counts: Dict[str, int] = {}
+        for ace in self._aces:
+            entry = entries.get(ace.path)
+            if entry is None:
+                continue
+            project_id, owner_user_id = entry
+            if ace.user_id is not None and ace.user_id == owner_user_id:
+                continue  # the owner ACE is not a share
+            counts[project_id] = counts.get(project_id, 0) + 1
+        return counts
