@@ -169,6 +169,9 @@ async def connect_to_db(app: FastAPI) -> None:
                         from gns3server.db_migrations.versions.e2a7c9d4b601_add_cdrom_interfaces import (
                             upgrade as upgrade_cdrom_interfaces,
                         )
+                        from gns3server.db_migrations.versions.ed99f4cfc26f_add_marker_privileges import (
+                            upgrade as upgrade_marker_privileges,
+                        )
                         from gns3server.db_migrations.versions.f3a7c1e9b5d2_add_user_node_quotas import (
                             upgrade as upgrade_user_quotas,
                         )
@@ -187,6 +190,7 @@ async def connect_to_db(app: FastAPI) -> None:
                             upgrade_lab_member_role()
                             upgrade_user_quotas()
                             upgrade_server_privileges()
+                            upgrade_marker_privileges()
 
                     await conn.run_sync(upgrade_inventory)
                     await conn.run_sync(run_stamp, alembic_cfg)

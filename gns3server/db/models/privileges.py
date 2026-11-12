@@ -67,6 +67,7 @@ def create_default_roles(target, connection, **kw):
         {"description": "Create or delete a project", "name": "Project.Allocate"},
         {"description": "View a project", "name": "Project.Audit"},
         {"description": "Update a project", "name": "Project.Modify"},
+        {"description": "Manage project-level marker definitions", "name": "Project.Marker"},
         {"description": "Create or delete project snapshots", "name": "Snapshot.Allocate"},
         {"description": "Restore a snapshot", "name": "Snapshot.Restore"},
         {"description": "View a snapshot", "name": "Snapshot.Audit"},
@@ -79,6 +80,7 @@ def create_default_roles(target, connection, **kw):
         {"description": "View a link", "name": "Link.Audit"},
         {"description": "Update a link", "name": "Link.Modify"},
         {"description": "Capture packets on a link", "name": "Link.Capture"},
+        {"description": "Manage traffic markers on a link", "name": "Link.Marker"},
         {"description": "Create or delete a drawing", "name": "Drawing.Allocate"},
         {"description": "View a drawing", "name": "Drawing.Audit"},
         {"description": "Update a drawing", "name": "Drawing.Modify"},
@@ -147,6 +149,7 @@ def add_privileges_to_default_roles(target, connection, **kw):
         "Project.Allocate",
         "Project.Audit",
         "Project.Modify",
+        "Project.Marker",
         "Snapshot.Allocate",
         "Snapshot.Audit",
         "Snapshot.Restore",
@@ -159,6 +162,7 @@ def add_privileges_to_default_roles(target, connection, **kw):
         "Link.Audit",
         "Link.Modify",
         "Link.Capture",
+        "Link.Marker",
         "Drawing.Allocate",
         "Drawing.Audit",
         "Drawing.Modify",
@@ -224,12 +228,14 @@ def add_privileges_to_default_roles(target, connection, **kw):
 
     # add required privileges to the "Lab member" role: users who received a
     # distributed lab project can use it (open it, console, power, capture,
-    # restore a snapshot) but cannot modify the lab topology. Project.Allocate
-    # is needed to open the project and lets the recipient delete their copy;
-    # creating other projects is ruled by the collection ACE on /projects.
+    # restore a snapshot, manage their own markers) but cannot modify the lab
+    # topology. Project.Allocate is needed to open the project and lets the
+    # recipient delete their copy; creating other projects is ruled by the
+    # collection ACE on /projects.
     lab_member_privileges = (
         "Project.Allocate",
         "Project.Audit",
+        "Project.Marker",
         "Snapshot.Audit",
         "Snapshot.Restore",
         "Node.Audit",
@@ -237,6 +243,7 @@ def add_privileges_to_default_roles(target, connection, **kw):
         "Node.PowerMgmt",
         "Link.Audit",
         "Link.Capture",
+        "Link.Marker",
         "Drawing.Audit",
     )
 

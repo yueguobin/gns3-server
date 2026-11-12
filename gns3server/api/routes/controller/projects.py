@@ -503,7 +503,7 @@ def get_marker_definitions(project: Project = Depends(dep_project)) -> dict:
     response_model=schemas.MarkerDefinition,
     response_model_exclude_unset=True,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(has_privilege("Project.Modify"))],
+    dependencies=[Depends(has_privilege("Project.Marker"))],
 )
 async def create_marker_definition(
     def_data: schemas.MarkerDefinitionCreate, project: Project = Depends(dep_project)
@@ -511,7 +511,7 @@ async def create_marker_definition(
     """
     Create a project-level marker definition and fan out to every link.
 
-    Required privilege: Project.Modify
+    Required privilege: Project.Marker
     """
 
     if def_data.name and def_data.name.lower().startswith("global"):
@@ -533,7 +533,7 @@ async def create_marker_definition(
     "/{project_id}/marker-definitions/{def_name}",
     response_model=schemas.MarkerDefinition,
     response_model_exclude_unset=True,
-    dependencies=[Depends(has_privilege("Project.Modify"))],
+    dependencies=[Depends(has_privilege("Project.Marker"))],
 )
 async def update_marker_definition(
     def_name: str, def_data: schemas.MarkerDefinitionCreate, project: Project = Depends(dep_project)
@@ -541,7 +541,7 @@ async def update_marker_definition(
     """
     Update a marker definition and sync all inherited copies on every link.
 
-    Required privilege: Project.Modify
+    Required privilege: Project.Marker
     """
 
     await project.update_marker_definition(
@@ -559,7 +559,7 @@ async def update_marker_definition(
 @router.post(
     "/{project_id}/marker-definitions/{def_name}/pause",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(has_privilege("Project.Modify"))],
+    dependencies=[Depends(has_privilege("Project.Marker"))],
 )
 async def pause_marker_definition(def_name: str, project: Project = Depends(dep_project)) -> None:
     """
@@ -568,7 +568,7 @@ async def pause_marker_definition(def_name: str, project: Project = Depends(dep_
     rebuild). The definition's ``paused`` flag is persisted, so links created
     later inherit it already paused.
 
-    Required privilege: Project.Modify
+    Required privilege: Project.Marker
     """
 
     await project.pause_marker_definition(def_name)
@@ -577,12 +577,12 @@ async def pause_marker_definition(def_name: str, project: Project = Depends(dep_
 @router.post(
     "/{project_id}/marker-definitions/{def_name}/resume",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(has_privilege("Project.Modify"))],
+    dependencies=[Depends(has_privilege("Project.Marker"))],
 )
 async def resume_marker_definition(def_name: str, project: Project = Depends(dep_project)) -> None:
     """Resume a paused definition (toggle on every inherited copy).
 
-    Required privilege: Project.Modify
+    Required privilege: Project.Marker
     """
 
     await project.resume_marker_definition(def_name)
@@ -591,13 +591,13 @@ async def resume_marker_definition(def_name: str, project: Project = Depends(dep
 @router.delete(
     "/{project_id}/marker-definitions/{def_name}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(has_privilege("Project.Modify"))],
+    dependencies=[Depends(has_privilege("Project.Marker"))],
 )
 async def delete_marker_definition(def_name: str, project: Project = Depends(dep_project)) -> None:
     """
     Delete a marker definition and remove all inherited copies from every link.
 
-    Required privilege: Project.Modify
+    Required privilege: Project.Marker
     """
 
     await project.delete_marker_definition(def_name)
