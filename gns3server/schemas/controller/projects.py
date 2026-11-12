@@ -152,7 +152,12 @@ class ProjectDistributionResult(BaseModel):
     """
 
     username: str = Field(..., description="User the copy was distributed to")
-    project: Optional[Project] = Field(None, description="The distributed copy, set on success")
+    project: Optional[Project] = Field(None, description="The distributed copy as it was created, set on success")
+    project_exists: Optional[bool] = Field(
+        None,
+        description="Whether the distributed copy still exists on the server, set on success "
+        "(the copy may have been deleted since, by the API or by removing its directory)",
+    )
     error: Optional[ErrorMessage] = Field(None, description="The error, set when the copy could not be created")
 
 

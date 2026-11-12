@@ -31,7 +31,7 @@ import gns3server.utils.zipfile_zstd as zipfile
 
 log = logging.getLogger()
 
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from uuid import UUID
 
 from fastapi import (
@@ -307,6 +307,7 @@ async def delete_project(
     project: Project = Depends(dep_project),
     current_user: schemas.User = Depends(get_current_active_user),
     rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+    db_session: AsyncSession = Depends(get_db_session),
 ) -> None:
     """
     Delete a project.
@@ -330,6 +331,9 @@ async def delete_project(
     await project.delete()
     controller.remove_project(project)
     await rbac_repo.delete_all_ace_starting_with_path(f"/projects/{project.id}")
+    # the distribution history of a deleted project is unreachable from the
+    # API (every route hangs off the project): drop it with the project
+    await DistributionRecordsRepository(db_session).delete_records_for_project(project.id)
 
 
 @router.get(
@@ -1171,10 +1175,33 @@ def _distribution_record_asdict(record: models.DistributionRecord) -> dict:
         "status": record.status,
         "total": record.total,
         "completed": len(record.results or []),
-        "results": record.results or [],
+        "results": _annotate_copy_existence(cast(List[dict], record.results or [])),
         "error": {"message": record.error} if record.error else None,
         "created_at": record.created_at,
     }
+
+
+def _annotate_copy_existence(results: List[dict]) -> List[dict]:
+    """
+    Flag, per recipient, whether the distributed copy still exists on the
+    server. A copy can vanish outside the API (its directory removed
+    directly), so the check is against the controller's view of the projects
+    directory, not a database state.
+    """
+
+    controller = Controller.instance()
+    for result in results:
+        copy = result.get("project")
+        if copy is None:
+            continue
+        try:
+            copy_project = controller.get_project(str(copy["project_id"]))
+        except ControllerNotFoundError:
+            result["project_exists"] = False
+            continue
+        # the directory observer takes a moment to drop a removed project
+        result["project_exists"] = os.path.exists(copy_project.path)
+    return results
 
 
 async def _persist_distribution_job(db_session: AsyncSession, job: Distribution) -> None:
@@ -1353,21 +1380,35 @@ async def get_project_distributions(
     ]
 
 
-def _get_owned_distribution(project: Project, distribution_id: UUID, current_user: schemas.User) -> Distribution:
+async def _get_owned_distribution_or_record(
+    project: Project,
+    distribution_id: UUID,
+    current_user: schemas.User,
+    db_session: AsyncSession,
+) -> Tuple[Optional[Distribution], Optional[models.DistributionRecord]]:
     """
-    Look up one distribution job of the project, checking the caller is the
-    user who started it (or a superadmin).
+    Look up one distribution of the project — the live job (fresher than the
+    last write-through) or, once its job is gone, its persisted record —
+    checking the caller is the user who started it (or a superadmin).
+    Exactly one of the two returns is set.
     """
 
-    registry = DistributionRegistry.instance()
-    job = registry.get(str(distribution_id))
-    if job is None or job.project_id != str(project.id):
+    job = DistributionRegistry.instance().get(str(distribution_id))
+    if job is not None and job.project_id == str(project.id):
+        if not current_user.is_superadmin and job.created_by != current_user.username:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
+            )
+        return job, None
+
+    record = await DistributionRecordsRepository(db_session).get_record(distribution_id)
+    if record is None or str(record.project_id) != str(project.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not find this distribution")
-    if not current_user.is_superadmin and job.created_by != current_user.username:
+    if not current_user.is_superadmin and record.created_by != current_user.username:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
         )
-    return job
+    return None, record
 
 
 @router.get(
@@ -1384,28 +1425,18 @@ async def get_project_distribution(
     """
     Return the state of one distribution job: the progress and the
     per-recipient results recorded so far. A live job is served from the
-    registry (fresher than the persisted record); once its job is gone the
-    persisted record is returned, so a distribution stays readable across
-    controller restarts.
+    registry; once its job is gone the persisted record is returned, so a
+    distribution stays readable across controller restarts.
 
     Required privilege: Project.Audit
     """
 
-    job = DistributionRegistry.instance().get(str(distribution_id))
-    if job is not None and job.project_id == str(project.id):
-        if not current_user.is_superadmin and job.created_by != current_user.username:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
-            )
-        return job.asdict()
-
-    record = await DistributionRecordsRepository(db_session).get_record(distribution_id)
-    if record is None or str(record.project_id) != str(project.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Could not find this distribution")
-    if not current_user.is_superadmin and record.created_by != current_user.username:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
-        )
+    job, record = await _get_owned_distribution_or_record(project, distribution_id, current_user, db_session)
+    if job is not None:
+        job_dict = job.asdict()
+        job_dict["results"] = _annotate_copy_existence(job_dict["results"])
+        return job_dict
+    assert record is not None  # one of the two is set
     return _distribution_record_asdict(record)
 
 
@@ -1414,7 +1445,7 @@ async def get_project_distribution(
     response_model=schemas.ProjectDistribution,
     responses={
         **responses,
-        409: {"model": schemas.ErrorMessage, "description": "The distribution is not running anymore"},
+        204: {"description": "The finished distribution was removed from the history"},
     },
     dependencies=[Depends(has_privilege("Project.Audit"))],
 )
@@ -1422,21 +1453,32 @@ async def cancel_project_distribution(
     distribution_id: UUID,
     project: Project = Depends(dep_project),
     current_user: schemas.User = Depends(get_current_active_user),
-) -> dict:
+    db_session: AsyncSession = Depends(get_db_session),
+) -> Union[dict, Response]:
     """
-    Cancel a running distribution: the copy in flight still completes, the
-    remaining recipients are skipped. The job switches to "cancelling" right
-    away, then to "cancelled" once the current copy is done. Copies already
-    made are real projects and are kept. Cancelling a job that already
-    finished is rejected with 409.
+    Delete a distribution. A running (or cancelling) one is cancelled: the
+    copy in flight still completes, the remaining recipients are skipped,
+    the job switches to "cancelling" right away and to "cancelled" once the
+    current copy is done, and the job state is returned. A finished one has
+    its record removed from the history (204): the copies already made are
+    real projects and are not touched.
 
     Required privilege: Project.Audit, and only the user who started the distribution (or a superadmin)
     """
 
-    job = _get_owned_distribution(project, distribution_id, current_user)
-    if not DistributionRegistry.instance().request_cancel(job):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This distribution already finished")
-    return job.asdict()
+    registry = DistributionRegistry.instance()
+    job, record = await _get_owned_distribution_or_record(project, distribution_id, current_user, db_session)
+    if job is not None and registry.request_cancel(job):
+        job_dict = job.asdict()
+        job_dict["results"] = _annotate_copy_existence(job_dict["results"])
+        return job_dict
+
+    # the job already finished (or only its record is left): remove the
+    # record from the history, and with it the registry entry so the job
+    # does not resurface during the retention window
+    registry.remove(str(distribution_id))
+    await DistributionRecordsRepository(db_session).delete_record(distribution_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _ensure_project_share_manager(project: Project, current_user: schemas.User) -> None:

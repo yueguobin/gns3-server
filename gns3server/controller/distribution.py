@@ -157,6 +157,16 @@ class DistributionRegistry:
         job.error = error
         log.error(f"Distribution '{job.distribution_id}' of project '{job.project_id}' failed: {error}")
 
+    def remove(self, distribution_id: str) -> None:
+        """
+        Drop a finished job from the registry: its record was deleted, so the
+        job must not resurface through the single-distribution endpoint
+        during the retention window. Only call this on a job that already
+        finished (running jobs are cancelled, not removed).
+        """
+
+        self._jobs.pop(distribution_id, None)
+
     def prune(self) -> None:
         """
         Drop the finished jobs older than the retention period.
