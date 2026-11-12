@@ -6,7 +6,7 @@
 
 A group distribution is a fan-out, not a share: each member works on their own copy in isolation, and a restore resets only their copy. Sharing one project between several users is a different need, covered by [project sharing](project-sharing.md) and resource pools.
 
-The copy also ships with a "template state" snapshot, so a recipient can reset the lab to its initial state on their own (`Snapshot.Restore`).
+The copy also ships with a "template state" snapshot, so a recipient can reset the lab to its initial state on their own (`Snapshot.Restore`), and by default its nodes and drawings arrive locked: the client hides the move and delete actions from the start, so a recipient never begins a drag that can only end in a denial. The source project stays untouched and editable.
 
 ## Terms
 
@@ -58,6 +58,7 @@ sequenceDiagram
     loop every recipient
         J->>J: duplicate on behalf
         J->>R: owner ACE, role = Lab member
+        J->>J: lock nodes and drawings
         J->>J: snapshot "template state"
         J->>J: record result (copy or error)
     end
@@ -92,6 +93,7 @@ Request fields of `ProjectDistribute`:
 | `target_users` | list of strings, optional | Every listed user receives their own copy, named `name-username`. Unknown name: 404 before the job starts; an empty list: 422 |
 | `target_group` | string, optional | Every member of the group receives their own copy, named `name-username`. Missing group: 404, empty group: 409 |
 | `owner_role` | string, optional | Role of the owner ACE on the copies. Default: `Lab member`. Missing role: 404 |
+| `lock_topology` | bool, optional | Lock every node and drawing in each copy (`true` by default). Advisory: it tells the client to hide move and delete actions, while the owner role remains the enforcement. Pass `false` when distributing a role that may edit the topology |
 
 Exactly one of `target_user`, `target_users` or `target_group` must be set (combining them, or none: 422). Recipients and role are resolved before the job starts, so a bad request distributes nothing.
 
@@ -109,7 +111,9 @@ A group distribution reaches the members of the group at the time of the call. M
 
 `owner_role` accepts any existing role, custom ones included. An ACE on `/projects/<project_id>` can only reach project-scoped paths, so even a generous role cannot unlock user, compute or server administration through a copy.
 
-Snapshots of the source project ride along with the copy. If the source already has a "template state" snapshot, the copy keeps it instead of creating a second one.
+Each copy arrives locked (`lock_topology`, `true` by default): every node and drawing carries the advisory `locked` flag, so the client hides move and delete actions from the start instead of letting a drag end in a denial and a ghost move. The lock is taken before the "template state" snapshot, so restoring the snapshot brings the items back locked. Locks the teacher put on the source ride along with the copy, even with `lock_topology` set to `false`. A role that carries `Node.Modify` and `Drawing.Modify` can also unlock the items again: the flag advises, the role decides.
+
+Snapshots of the source project ride along with the copy. If the source already has a "template state" snapshot, the copy keeps it instead of creating a second one. Such an inherited snapshot was taken on the source, before the distribution lock: restoring it restores the lock state of that moment, so the advisory flags can disappear with a restore while the reduced role keeps enforcing. In the usual case — a source without a "template state" snapshot — the copy takes its own snapshot, after locking.
 
 Each copy is a full directory copy of the source project, and recipients are processed one at a time. Base disk images are never copied: a QEMU node cloned from a template keeps only its overlay in the project directory, and every copy shares the base image through its qcow2 backing file. The cost therefore scales with the total size of the node overlays times the number of recipients — overlays grow as the source lab is booted and configured — and the per-copy "template state" snapshot writes the project content a second time as an uncompressed zip. A topology using remote computes falls back to the slower export/import path instead of the directory copy.
 

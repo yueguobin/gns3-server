@@ -106,6 +106,13 @@ class ProjectDistribute(ProjectBase):
     owner_role: Optional[str] = Field(
         None, description="Role of the owner ACE put on a distributed copy (default: the built-in Lab member role)"
     )
+    lock_topology: Optional[bool] = Field(
+        True,
+        description=(
+            "Lock all nodes and drawings in each distributed copy (advisory: the client hides move and delete "
+            "actions, enforcement stays with the owner role). Default: true"
+        ),
+    )
 
     @model_validator(mode="after")
     def check_distribution_targets(self) -> "ProjectDistribute":
