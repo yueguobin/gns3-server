@@ -1435,6 +1435,61 @@ class TestProjectDistribution:
 
         assert await records_repo.get_records_for_project(UUID(source_id)) == []
 
+    async def test_global_distribution_history(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, _ = await self._distribute(app, test_user, student.username)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.get(app.url_path_for("get_project", project_id=source_id))
+            source_name = response.json()["name"]
+
+            # the cross-project listing returns the caller's own entries,
+            # with the name of the distributed project
+            response = await teacher_client.get(app.url_path_for("list_distributions"))
+            assert response.status_code == status.HTTP_200_OK
+            entries = response.json()
+            assert all(entry["created_by"] == test_user.username for entry in entries)
+            mine = [entry for entry in entries if entry["project_id"] == source_id]
+            assert mine and mine[0]["project_name"] == source_name
+
+        # another user does not see the teacher's entries
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.get(app.url_path_for("list_distributions"))
+            assert response.status_code == status.HTTP_200_OK
+            assert source_id not in {entry["project_id"] for entry in response.json()}
+
+        # a superadmin sees everyone's entries
+        admin = await UsersRepository(db_session).get_user_by_username("admin")
+        async with TestProjectOwnership._client_for(app, admin) as admin_client:
+            response = await admin_client.get(app.url_path_for("list_distributions"))
+            assert response.status_code == status.HTTP_200_OK
+            assert source_id in {entry["project_id"] for entry in response.json()}
+
+    async def test_global_delete_of_an_orphaned_record(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        # a record whose project vanished without the API (its directory was
+        # removed directly): unreachable from the per-project endpoints
+        orphan_id = uuid.uuid4()
+        records_repo = DistributionRecordsRepository(db_session)
+        await records_repo.create_record(orphan_id, uuid.uuid4(), "lab1", test_user.username, 1)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.get(app.url_path_for("list_distributions"))
+            entries = {entry["distribution_id"]: entry for entry in response.json()}
+            assert entries[str(orphan_id)]["project_name"] is None
+
+            response = await teacher_client.delete(app.url_path_for("delete_distribution", distribution_id=orphan_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+            response = await teacher_client.get(app.url_path_for("list_distributions"))
+            assert str(orphan_id) not in {entry["distribution_id"] for entry in response.json()}
+
     async def test_cancel_distribution_of_another_user_is_rejected(
         self,
         app: FastAPI,

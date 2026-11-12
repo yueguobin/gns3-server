@@ -189,6 +189,11 @@ class ProjectDistribution(BaseModel):
     results: List[ProjectDistributionResult] = Field(default_factory=list)
     error: Optional[ErrorMessage] = Field(None, description="Set when the job itself failed")
     created_at: datetime = Field(..., description="When the distribution was started")
+    project_name: Optional[str] = Field(
+        None,
+        description="Name of the distributed (source) project, set by the cross-project listing; "
+        "None when that project no longer exists on the server",
+    )
 
 
 class ProjectShare(BaseModel):

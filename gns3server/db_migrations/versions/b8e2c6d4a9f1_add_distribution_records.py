@@ -6,6 +6,8 @@ Create Date: 2026-11-12 10:00:00.000000
 
 """
 
+import uuid
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -37,8 +39,32 @@ def upgrade() -> None:
     )
     op.create_index("ix_distribution_records_project_id", "distribution_records", ["project_id"])
 
+    # grant the "User" role to the "Users" group on the cross-project
+    # distribution listing, like the other default resource paths (the
+    # after_create seeding only runs on a new database)
+    connection = op.get_bind()
+    connection.execute(
+        sa.text(
+            "INSERT INTO acl (ace_id, ace_type, path, propagate, allowed, role_id, group_id)"
+            " SELECT :ace_id, 'group', '/distributions', 1, 1,"
+            " (SELECT role_id FROM roles WHERE name = 'User'),"
+            " (SELECT user_group_id FROM user_groups WHERE name = 'Users')"
+            " WHERE NOT EXISTS ("
+            " SELECT 1 FROM acl WHERE path = '/distributions'"
+            " AND group_id = (SELECT user_group_id FROM user_groups WHERE name = 'Users'))"
+        ),
+        {"ace_id": uuid.uuid4().hex},
+    )
+
 
 def downgrade() -> None:
 
+    connection = op.get_bind()
+    connection.execute(
+        sa.text(
+            "DELETE FROM acl WHERE path = '/distributions' AND ace_type = 'group'"
+            " AND group_id = (SELECT user_group_id FROM user_groups WHERE name = 'Users')"
+        )
+    )
     op.drop_index("ix_distribution_records_project_id", table_name="distribution_records")
     op.drop_table("distribution_records")
