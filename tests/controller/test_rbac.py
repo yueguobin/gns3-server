@@ -1362,7 +1362,7 @@ class TestProjectDistribution:
             response = await student_client.get(app.url_path_for("get_project", project_id=copy_id))
             assert response.status_code == status.HTTP_200_OK
 
-    async def test_cancel_finished_distribution_is_rejected(
+    async def test_deleting_a_finished_distribution_removes_its_record(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
     ) -> None:
         await TestProjectOwnership._seed_collection_ace(db_session)
@@ -1381,11 +1381,59 @@ class TestProjectDistribution:
             distribution_id = response.json()["distribution_id"]
             await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
 
-            # a finished job cannot be cancelled
+            # deleting a finished distribution removes it from the history
             response = await teacher_client.delete(
                 app.url_path_for("cancel_project_distribution", project_id=source_id, distribution_id=distribution_id)
             )
-            assert response.status_code == status.HTTP_409_CONFLICT
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+            response = await teacher_client.get(app.url_path_for("get_project_distributions", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json() == []
+
+            response = await teacher_client.get(
+                app.url_path_for("get_project_distribution", project_id=source_id, distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_distribution_history_flags_deleted_copies(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, copy_id = await self._distribute(app, test_user, student.username)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.get(app.url_path_for("get_project_distributions", project_id=source_id))
+            entry = response.json()[0]
+            assert entry["results"][0]["project_exists"] is True
+
+        # the recipient deletes their copy: the history entry stays and now
+        # flags the copy as gone (a directory removal has the same effect)
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.delete(app.url_path_for("delete_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.get(app.url_path_for("get_project_distributions", project_id=source_id))
+            entry = response.json()[0]
+            assert entry["results"][0]["project_exists"] is False
+
+    async def test_deleting_a_project_removes_its_distribution_history(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, _ = await self._distribute(app, test_user, student.username)
+
+        records_repo = DistributionRecordsRepository(db_session)
+        assert await records_repo.get_records_for_project(UUID(source_id))
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.delete(app.url_path_for("delete_project", project_id=source_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        assert await records_repo.get_records_for_project(UUID(source_id)) == []
 
     async def test_cancel_distribution_of_another_user_is_rejected(
         self,

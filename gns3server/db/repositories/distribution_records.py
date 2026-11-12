@@ -19,7 +19,7 @@ import logging
 from typing import Any, List, Optional, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import gns3server.db.models as models
@@ -87,6 +87,28 @@ class DistributionRecordsRepository(BaseRepository):
         query = select(models.DistributionRecord).where(models.DistributionRecord.distribution_id == distribution_id)
         result = await self._db_session.execute(query)
         return result.scalars().first()
+
+    async def delete_record(self, distribution_id: UUID) -> bool:
+        """
+        Delete one record (manual cleanup of the history by its creator or a
+        superadmin). Returns False when no record matches.
+        """
+
+        query = delete(models.DistributionRecord).where(models.DistributionRecord.distribution_id == distribution_id)
+        result = await self._db_session.execute(query)
+        await self._db_session.commit()
+        return cast(CursorResult, result).rowcount > 0
+
+    async def delete_records_for_project(self, project_id: UUID) -> int:
+        """
+        Delete every record of a project (the project itself is being
+        deleted). Returns the number of records deleted.
+        """
+
+        query = delete(models.DistributionRecord).where(models.DistributionRecord.project_id == project_id)
+        result = await self._db_session.execute(query)
+        await self._db_session.commit()
+        return cast(CursorResult, result).rowcount
 
     async def get_records_for_project(self, project_id: UUID) -> List[models.DistributionRecord]:
         query = (
