@@ -49,7 +49,7 @@ flowchart LR
 
 Only disk images become overlays. The rest of the QEMU node directory (config files, logs), the Docker persistent volumes, and the IOL/Dynamips configuration files are small and copied verbatim: a recipient's Docker node or router starts with exactly the configuration the teacher prepared, and their changes stay in their own copy.
 
-The overlay stores an absolute backing path, so the chain is only valid on the controller host. A project with nodes on a remote compute falls back to the previous full export/import copy for that distribution. The project is still frozen after a fallback distribution: the copies are independent full copies, but the lifecycle stays the same for every distribution — one rule, no per-recipient exception to remember.
+The overlay stores an absolute backing path, so the chain is only valid on the controller host. A project with nodes on a remote compute falls back to the full export/import copy for that distribution. The job exports the project once and every recipient imports that archive, so the project files are downloaded once, not once per recipient; only the upload to the computes happens per copy. The project is still frozen after a fallback distribution: the copies are independent full copies, but the lifecycle stays the same for every distribution — one rule, no per-recipient exception to remember.
 
 ## Business Process
 

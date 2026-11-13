@@ -2241,7 +2241,9 @@ class Project:
         while self._loading:
             await asyncio.sleep(0.5)
 
-    async def duplicate(self, name=None, reset_mac_addresses=True, user=None, overlay_from_master=False):
+    async def duplicate(
+        self, name=None, reset_mac_addresses=True, user=None, overlay_from_master=False, archive_path=None
+    ):
         """
         Duplicate a project
 
@@ -2257,6 +2259,9 @@ class Project:
             disks become thin overlays pointing at this project's disks, and
             the copy is marked with this project's id. The project must not
             be a distributed copy itself.
+        :param archive_path: A portable archive of this project to import the
+            copy from. A distribution job exports it once and passes it to
+            every recipient, instead of exporting again per recipient.
         """
 
         if self._distribution_master_id:
@@ -2294,37 +2299,19 @@ class Project:
         try:
             begin = time.time()
 
-            # use the parent directory of the project we are duplicating as a
-            # temporary directory to avoid no space left issues when '/tmp'
-            # is located on another partition.
-            working_dir = os.path.abspath(os.path.join(self.path, os.pardir))
-
-            with tempfile.TemporaryDirectory(dir=working_dir) as tmpdir:
-                # Do not compress the exported project when duplicating
-                with aiozipstream.ZipFile(compression=zipfile.ZIP_STORED) as zstream:
-                    await export_project(
-                        zstream, self, tmpdir, keep_compute_ids=True, include_snapshots=True, allow_all_nodes=True
-                    )
-
-                    # export the project to a temporary location
-                    project_path = os.path.join(tmpdir, "project.gns3p")
-                    log.info(f"Exporting project to '{project_path}'")
-                    async with aiofiles.open(project_path, "wb") as f:
-                        async for chunk in zstream:
-                            await f.write(chunk)
-
-                    new_project_id = str(uuid.uuid4())
-                    # import the duplicated project
-                    with open(project_path, "rb") as f:
-                        project = await import_project(
-                            self._controller,
-                            new_project_id,
-                            f,
-                            name=name,
-                            reset_mac_addresses=reset_mac_addresses,
-                            keep_compute_ids=True,
-                            user=user,
-                        )
+            if archive_path is None:
+                # use the parent directory of the project we are duplicating
+                # as a temporary directory to avoid no space left issues when
+                # '/tmp' is located on another partition.
+                working_dir = os.path.abspath(os.path.join(self.path, os.pardir))
+                with tempfile.TemporaryDirectory(dir=working_dir) as tmpdir:
+                    archive_path = os.path.join(tmpdir, "project.gns3p")
+                    await self.export_archive(archive_path)
+                    project = await self._import_duplicate(archive_path, name, reset_mac_addresses, user)
+            else:
+                # a distribution job exported the project once and reuses the
+                # archive for every recipient
+                project = await self._import_duplicate(archive_path, name, reset_mac_addresses, user)
 
             log.info(f"Project '{project.name}' duplicated in {time.time() - begin:.4f} seconds")
         except (ValueError, OSError, UnicodeEncodeError) as e:
@@ -2334,6 +2321,46 @@ class Project:
             await self.close()
 
         return project
+
+    async def export_archive(self, path):
+        """
+        Write a portable archive of the project to ``path``, keeping the
+        compute ids and the snapshots like the fallback duplication path.
+        A distribution on a project with remote computes exports once and
+        imports this archive for every recipient.
+        """
+
+        # Do not compress the exported project when duplicating
+        with aiozipstream.ZipFile(compression=zipfile.ZIP_STORED) as zstream:
+            await export_project(
+                zstream,
+                self,
+                os.path.dirname(path),
+                keep_compute_ids=True,
+                include_snapshots=True,
+                allow_all_nodes=True,
+            )
+            log.info(f"Exporting project to '{path}'")
+            async with aiofiles.open(path, "wb") as f:
+                async for chunk in zstream:
+                    await f.write(chunk)
+
+    async def _import_duplicate(self, archive_path, name, reset_mac_addresses, user):
+        """
+        Import a copy of the project from a portable archive.
+        """
+
+        new_project_id = str(uuid.uuid4())
+        with open(archive_path, "rb") as f:
+            return await import_project(
+                self._controller,
+                new_project_id,
+                f,
+                name=name,
+                reset_mac_addresses=reset_mac_addresses,
+                keep_compute_ids=True,
+                user=user,
+            )
 
     async def _fast_duplication(
         self, name=None, location=None, reset_mac_addresses=True, user=None, overlay_from_master=False

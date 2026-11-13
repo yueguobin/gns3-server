@@ -1074,6 +1074,7 @@ async def _distribute_project_copy(
     reset_mac_addresses: Optional[bool],
     lock_topology: Optional[bool],
     overlay_from_master: bool,
+    archive_path: Optional[str] = None,
 ) -> dict:
     """
     Duplicate a project on behalf of another user: the copy is owned by that
@@ -1081,6 +1082,8 @@ async def _distribute_project_copy(
     snapshot of the template state. With ``overlay_from_master`` the QEMU
     disks of the copy are thin overlays pointing at the template's disks
     (local computes only), so the copy costs seconds instead of a full copy.
+    ``archive_path`` is the export the fallback path imports the copy from:
+    the job exports the project once and every recipient reuses it.
     """
 
     new_project = await project.duplicate(
@@ -1088,6 +1091,7 @@ async def _distribute_project_copy(
         reset_mac_addresses=reset_mac_addresses,
         user=target.username,
         overlay_from_master=overlay_from_master,
+        archive_path=archive_path,
     )
     # the export/import fallback carries the topology file of the frozen
     # template verbatim: a copy is never frozen, whatever the duplication path
@@ -1333,6 +1337,11 @@ async def _run_distribution(
     flight completes, the remaining recipients are skipped. Every state
     change is written through to the distribution record, so a crash leaves
     a trace of how far the job got.
+
+    The copies are thin overlay copies on a local-only project. A project
+    with remote computes falls back to export/import copies, and the project
+    is exported once for the whole job: every recipient imports that archive
+    instead of downloading the project files again.
     """
 
     registry = DistributionRegistry.instance()
@@ -1340,36 +1349,53 @@ async def _run_distribution(
         # the background task outlives the request: it needs its own session
         async with AsyncSession(engine, expire_on_commit=False) as db_session:
             project = Controller.instance().get_project(project_id)
-            for member, name in recipients:
+            # the archive lives under the projects directory, like the
+            # per-recipient fallback export, to avoid no space left issues
+            # when '/tmp' is located on another partition
+            working_dir = os.path.abspath(os.path.join(project.path, os.pardir))
+            with tempfile.TemporaryDirectory(dir=working_dir) as tmpdir:
+                archive_path = None
+                if not overlay_from_master:
+                    archive_path = os.path.join(tmpdir, "project.gns3p")
+                    previous_status = project.status
+                    if previous_status == "closed":
+                        await project.open()
+                    try:
+                        await project.export_archive(archive_path)
+                    finally:
+                        if previous_status == "closed":
+                            await project.close()
+                for member, name in recipients:
+                    if job.cancel_requested:
+                        # nothing is in flight between two recipients: this is the
+                        # safe place to stop, every copy made so far is complete
+                        break
+                    try:
+                        copy = await _distribute_project_copy(
+                            db_session,
+                            project,
+                            member,
+                            owner_role_id,
+                            name,
+                            reset_mac_addresses,
+                            lock_topology,
+                            overlay_from_master,
+                            archive_path,
+                        )
+                        registry.record_result(job, {"username": member.username, "project": copy, "error": None})
+                    except Exception as e:
+                        log.error(f"Could not distribute a copy to '{member.username}': {e}")
+                        registry.record_result(
+                            job, {"username": member.username, "project": None, "error": {"message": str(e)}}
+                        )
+                    await _persist_distribution_job(db_session, job)
+                # the cancel request may also land during the very last copy: the
+                # loop above ends without checking again
                 if job.cancel_requested:
-                    # nothing is in flight between two recipients: this is the
-                    # safe place to stop, every copy made so far is complete
-                    break
-                try:
-                    copy = await _distribute_project_copy(
-                        db_session,
-                        project,
-                        member,
-                        owner_role_id,
-                        name,
-                        reset_mac_addresses,
-                        lock_topology,
-                        overlay_from_master,
-                    )
-                    registry.record_result(job, {"username": member.username, "project": copy, "error": None})
-                except Exception as e:
-                    log.error(f"Could not distribute a copy to '{member.username}': {e}")
-                    registry.record_result(
-                        job, {"username": member.username, "project": None, "error": {"message": str(e)}}
-                    )
+                    registry.cancelled(job)
+                else:
+                    registry.complete(job)
                 await _persist_distribution_job(db_session, job)
-            # the cancel request may also land during the very last copy: the
-            # loop above ends without checking again
-            if job.cancel_requested:
-                registry.cancelled(job)
-            else:
-                registry.complete(job)
-            await _persist_distribution_job(db_session, job)
     except Exception as e:
         registry.fail(job, str(e))
         try:

@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gns3server import schemas
 from gns3server.api.routes.controller import projects as projects_routes
 from gns3server.controller import Controller, qemu_overlay
+from gns3server.controller import project as project_module
 from gns3server.controller.controller_error import ControllerError
 from gns3server.controller.distribution import DistributionRegistry
 from gns3server.db.models import User
@@ -1084,6 +1085,63 @@ class TestProjectDistribution:
             nodes = response.json()
             assert len(nodes) == 1
             assert nodes[0]["locked"] is True
+
+    async def test_remote_distribution_exports_the_project_once(
+        self,
+        app: FastAPI,
+        base_client: AsyncClient,
+        db_session: AsyncSession,
+        test_user: User,
+        compute,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        students = [
+            await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+            for _ in range(2)
+        ]
+
+        # count the exports of the job: the fallback path used to export the
+        # project once per recipient
+        real_export = project_module.export_project
+        export_calls = []
+
+        async def counting_export(*args, **kwargs):
+            export_calls.append(1)
+            return await real_export(*args, **kwargs)
+
+        monkeypatch.setattr(project_module, "export_project", counting_export)
+
+        # a node on a remote compute sends the copies through export/import
+        compute_response = MagicMock()
+        compute_response.json = {"console": 2048}
+        compute.post = AsyncioMagicMock(return_value=compute_response)
+        compute.delete = AsyncioMagicMock()
+        compute.list_files = AsyncioMagicMock(return_value=[])
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("create_node", project_id=source_id),
+                json={"name": "r1", "node_type": "vpcs", "compute_id": "example.com", "properties": {}},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_users": [student.username for student in students]},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+
+        assert job["total"] == 2
+        assert [result["error"] for result in job["results"]] == [None, None]
+        # one export for the job, not one per recipient
+        assert len(export_calls) == 1
 
     async def test_distribute_project_to_group(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
