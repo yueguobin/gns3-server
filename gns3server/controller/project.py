@@ -617,6 +617,22 @@ class Project:
             return self._get_closed_data("computes", "compute_id").values()
         return self._project_created_on_compute
 
+    def has_remote_compute(self):
+        """
+        Whether a node of the project runs on a remote compute (anything but
+        the local compute). Unlike ``computes``, this works the same on an
+        open project (compute objects) and on a closed one, whose nodes are
+        read from the topology file.
+        """
+
+        if self._status == "closed":
+            try:
+                nodes = self._get_closed_data("nodes", "node_id").values()
+            except ControllerNotFoundError:
+                return False
+            return any(node.get("compute_id", "local") != "local" for node in nodes)
+        return any(compute.id != "local" for compute in self._project_created_on_compute)
+
     def remove_allocated_node_name(self, name):
         """
         Removes an allocated node name
@@ -2549,12 +2565,69 @@ class Project:
 
     def dump(self):
         """
-        Dump topology to disk
+        Dump topology to disk. A closed project has no in-memory topology
+        (close() clears it), so only its project-level fields are written:
+        rewriting the whole file from memory would drop its marker
+        definitions (the nodes, links and drawings are re-read from the file,
+        the marker definitions are only loaded by open()).
         """
+        if self._status == "closed":
+            self._dump_closed_meta()
+            return
         try:
             topo = project_to_topology(self)
             path = self._topology_file()
             log.debug(f"Write topology file '{path}'")
+            with open(path + ".tmp", "w+", encoding="utf-8") as f:
+                json.dump(topo, f, indent=4, sort_keys=True)
+            shutil.move(path + ".tmp", path)
+        except OSError as e:
+            raise ControllerError(f"Could not write topology: {e}")
+
+    def _dump_closed_meta(self):
+        """
+        Write the project-level fields of a closed project into its topology
+        file, keeping everything already on disk (topology content and marker
+        definitions).
+        """
+
+        path = self._topology_file()
+        try:
+            with open(path, encoding="utf-8") as f:
+                topo = json.load(f)
+        except (OSError, ValueError) as e:
+            raise ControllerError(f"Could not load topology: {e}")
+        topo.update(
+            {
+                "project_id": self._id,
+                "name": self._name,
+                "auto_start": self._auto_start,
+                "auto_open": self._auto_open,
+                "auto_close": self._auto_close,
+                "scene_width": self._scene_width,
+                "scene_height": self._scene_height,
+                "zoom": self._zoom,
+                "show_layers": self._show_layers,
+                "snap_to_grid": self._snap_to_grid,
+                "show_grid": self._show_grid,
+                "grid_size": self._grid_size,
+                "drawing_grid_size": self._drawing_grid_size,
+                "show_interface_labels": self._show_interface_labels,
+                "variables": self._variables,
+                "supplier": self._supplier,
+                "created_by": self._created_by,
+            }
+        )
+        if self._frozen:
+            topo["frozen"] = True
+        else:
+            topo.pop("frozen", None)
+        if self._distribution_master_id:
+            topo["distribution_master_id"] = self._distribution_master_id
+        else:
+            topo.pop("distribution_master_id", None)
+        log.debug(f"Write topology file '{path}' (project fields only)")
+        try:
             with open(path + ".tmp", "w+", encoding="utf-8") as f:
                 json.dump(topo, f, indent=4, sort_keys=True)
             shutil.move(path + ".tmp", path)

@@ -16,6 +16,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import asyncio
+import json
 import os
 import time
 import uuid
@@ -1142,6 +1143,90 @@ class TestProjectDistribution:
         assert [result["error"] for result in job["results"]] == [None, None]
         # one export for the job, not one per recipient
         assert len(export_calls) == 1
+
+    async def test_distributing_a_closed_project_keeps_its_marker_definitions(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User, controller
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("create_marker_definition", project_id=source_id),
+                json={"name": "dns", "bpf": "udp port 53"},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            response = await teacher_client.post(app.url_path_for("close_project", project_id=source_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+            # freezing a closed project rewrites only its project fields: the
+            # marker definitions live on disk and must survive the dump
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            assert job["results"][0]["error"] is None
+
+        with open(controller.get_project(source_id).topology_file) as f:
+            topology = json.load(f)
+        assert "dns" in topology["marker_definitions"]
+
+        # the copy was made from the closed template and carries the marker
+        copy_id = job["results"][0]["project"]["project_id"]
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.post(app.url_path_for("open_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            response = await student_client.get(app.url_path_for("get_marker_definitions", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert "dns" in response.json()
+
+    async def test_distributing_a_closed_remote_project_is_not_an_error(
+        self,
+        app: FastAPI,
+        base_client: AsyncClient,
+        db_session: AsyncSession,
+        test_user: User,
+        compute,
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        compute_response = MagicMock()
+        compute_response.json = {"console": 2048}
+        compute.post = AsyncioMagicMock(return_value=compute_response)
+        compute.delete = AsyncioMagicMock()
+        compute.list_files = AsyncioMagicMock(return_value=[])
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("create_node", project_id=source_id),
+                json={"name": "r1", "node_type": "vpcs", "compute_id": "example.com", "properties": {}},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            response = await teacher_client.post(app.url_path_for("close_project", project_id=source_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+            # a closed project answers its computes from the topology file:
+            # deciding the copy mode must not choke on them (it used to read
+            # compute.id off plain dicts)
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_user": student.username},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            assert job["results"][0]["error"] is None
 
     async def test_distribute_project_to_group(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User

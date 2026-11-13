@@ -1454,7 +1454,9 @@ async def distribute_project(
 
     # the overlays' backing files must live on the same machine as the
     # copies: only an all-local project can be distributed the thin way
-    overlay_from_master = all(compute.id == "local" for compute in project.computes)
+    # (has_remote_compute also works on a closed project, whose computes
+    # would come back as plain dicts)
+    overlay_from_master = not project.has_remote_compute()
 
     # freeze the template before the first copy is made: from here on its
     # content is the reference every recipient depends on
