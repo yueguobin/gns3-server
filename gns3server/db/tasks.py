@@ -145,29 +145,8 @@ async def connect_to_db(app: FastAPI) -> None:
                         from gns3server.db_migrations.versions.a6c8e1b2d490_add_second_qemu_cdrom import (
                             upgrade as upgrade_cdrom,
                         )
-                        from gns3server.db_migrations.versions.a7c2e9f4b8d1_add_lab_member_role import (
-                            upgrade as upgrade_lab_member_role,
-                        )
-                        from gns3server.db_migrations.versions.a43d55900514_add_server_settings_privileges import (
-                            upgrade as upgrade_server_privileges,
-                        )
-                        from gns3server.db_migrations.versions.b5f3a8c1d902_restrict_default_projects_ace_scope import (
-                            upgrade as upgrade_projects_ace_scope,
-                        )
-                        from gns3server.db_migrations.versions.b8e2c6d4a9f1_add_distribution_records import (
-                            upgrade as upgrade_distribution_records,
-                        )
-                        from gns3server.db_migrations.versions.c3e7f1a9b5d2_add_mcp_tool_whitelist_table import (
-                            upgrade as upgrade_mcp_tool_whitelist,
-                        )
-                        from gns3server.db_migrations.versions.c5e9a3f7d821_seed_default_aces import (
-                            upgrade as upgrade_default_aces,
-                        )
-                        from gns3server.db_migrations.versions.c8d4b6e2f913_add_notification_audit_privilege import (
-                            upgrade as upgrade_notification_privilege,
-                        )
-                        from gns3server.db_migrations.versions.d4f1b8c2a6e3_add_user_preferences_table import (
-                            upgrade as upgrade_user_preferences,
+                        from gns3server.db_migrations.versions.b7d4c3f2a1e9_multiuser_rbac_distribution_quotas_mcp import (
+                            upgrade as upgrade_multiuser,
                         )
                         from gns3server.db_migrations.versions.d9e8a2b7c401_image_inventory_reconciliation import (
                             upgrade,
@@ -175,30 +154,16 @@ async def connect_to_db(app: FastAPI) -> None:
                         from gns3server.db_migrations.versions.e2a7c9d4b601_add_cdrom_interfaces import (
                             upgrade as upgrade_cdrom_interfaces,
                         )
-                        from gns3server.db_migrations.versions.ed99f4cfc26f_add_marker_privileges import (
-                            upgrade as upgrade_marker_privileges,
-                        )
-                        from gns3server.db_migrations.versions.f3a7c1e9b5d2_add_user_node_quotas import (
-                            upgrade as upgrade_user_quotas,
-                        )
 
                         with Operations.context(MigrationContext.configure(connection)):
                             upgrade()
                             upgrade_cdrom()
                             upgrade_cdrom_interfaces()
                             # this database is stamped to head without running the
-                            # migrations: seed the default ACEs here as well
-                            upgrade_default_aces()
-                            # ... and apply the later changes on top of the seed
-                            upgrade_projects_ace_scope()
-                            upgrade_notification_privilege()
-                            upgrade_user_preferences()
-                            upgrade_lab_member_role()
-                            upgrade_user_quotas()
-                            upgrade_server_privileges()
-                            upgrade_marker_privileges()
-                            upgrade_distribution_records()
-                            upgrade_mcp_tool_whitelist()
+                            # migrations: apply the consolidated multi-user
+                            # migration (seed the default ACEs, the built-in
+                            # privileges and roles, and create the new tables)
+                            upgrade_multiuser()
 
                     await conn.run_sync(upgrade_inventory)
                     await conn.run_sync(run_stamp, alembic_cfg)
