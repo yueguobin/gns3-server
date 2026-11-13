@@ -334,7 +334,7 @@ async def delete_project(
     if project.frozen:
         # the copies of a distributed template keep overlay disks pointing
         # at its files: the template cannot vanish while they exist
-        live_usernames = await _live_distribution_copies(project, db_session)
+        live_usernames = await _live_distribution_copies(project)
         if live_usernames:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1210,28 +1210,47 @@ async def duplicate_project(
     return new_project.asdict()
 
 
-async def _live_distribution_copies(project: Project, db_session: AsyncSession) -> List[str]:
+async def _live_distribution_copies(project: Project) -> List[str]:
     """
     Usernames whose distributed copy of this project still exists on the
-    server, across every distribution ever made from it. A copy counts as
-    gone once its directory no longer exists (deleted through the API or
-    removed directly on disk).
+    server, across every distribution ever made from it. The copies tell it
+    themselves: each one carries the id of its template, so the check does
+    not depend on the distribution records (a record can be deleted, and a
+    crash can drop one before it records a copy). A copy counts as gone once
+    its directory no longer exists (deleted through the API or removed
+    directly on disk).
     """
 
     controller = Controller.instance()
-    records = await DistributionRecordsRepository(db_session).get_records_for_project(project.id)
     live_usernames = []
-    for record in records:
-        for result in cast(List[dict], record.results or []):
-            copy = result.get("project")
-            if copy is None:
-                continue
-            try:
-                copy_project = controller.get_project(str(copy["project_id"]))
-            except ControllerNotFoundError:
-                continue
-            if os.path.exists(copy_project.path):
-                live_usernames.append(str(result.get("username") or copy["project_id"]))
+    for candidate in controller.projects.values():
+        if candidate.distribution_master_id is None:
+            continue
+        if str(candidate.distribution_master_id) != str(project.id):
+            continue
+        if os.path.exists(candidate.path):
+            live_usernames.append(candidate.created_by or str(candidate.id))
+    return live_usernames
+
+
+def _record_live_copies(results: List[dict]) -> List[str]:
+    """
+    Usernames whose copy recorded in a distribution's results still exists
+    on the server.
+    """
+
+    controller = Controller.instance()
+    live_usernames = []
+    for result in results:
+        copy = result.get("project")
+        if copy is None:
+            continue
+        try:
+            copy_project = controller.get_project(str(copy["project_id"]))
+        except ControllerNotFoundError:
+            continue
+        if os.path.exists(copy_project.path):
+            live_usernames.append(str(result.get("username") or copy["project_id"]))
     return live_usernames
 
 
@@ -1549,6 +1568,10 @@ async def get_project_distribution(
     responses={
         **responses,
         204: {"description": "The finished distribution was removed from the history"},
+        409: {
+            "model": schemas.ErrorMessage,
+            "description": "The distribution is running or still has existing copies",
+        },
     },
     dependencies=[Depends(has_privilege("Project.Audit"))],
 )
@@ -1564,7 +1587,9 @@ async def cancel_project_distribution(
     the job switches to "cancelling" right away and to "cancelled" once the
     current copy is done, and the job state is returned. A finished one has
     its record removed from the history (204): the copies already made are
-    real projects and are not touched.
+    real projects and are not touched. A record whose copies still exist is
+    refused with 409: the record is how those copies are found for a bulk
+    cleanup.
 
     Required privilege: Project.Audit, and only the user who started the distribution (or a superadmin)
     """
@@ -1575,6 +1600,19 @@ async def cancel_project_distribution(
         job_dict = job.asdict()
         job_dict["results"] = _annotate_copy_existence(job_dict["results"])
         return job_dict
+
+    # removing the record is how the copies stop being reachable for a bulk
+    # cleanup: refuse it while a copy still exists
+    results = cast(List[dict], job.results if job is not None else (record.results if record is not None else []))
+    live_usernames = _record_live_copies(results)
+    if live_usernames:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This distribution still has {len(live_usernames)} existing copy/copies "
+                f"(users: {', '.join(sorted(live_usernames))}): delete the copies before removing its record"
+            ),
+        )
 
     # the job already finished (or only its record is left): remove the
     # record from the history, and with it the registry entry so the job
@@ -1710,7 +1748,7 @@ async def list_distributions(
         **responses,
         409: {
             "model": schemas.ErrorMessage,
-            "description": "The distribution is running: cancel it on its project instead",
+            "description": "The distribution is running, or still has existing copies",
         },
     },
     dependencies=[Depends(has_privilege("Project.Audit"))],
@@ -1726,7 +1764,9 @@ async def delete_distribution(
     have been removed directly, leaving the record unreachable there), and a
     running distribution is refused with 409 — cancel it on its project.
     Only the user who started the distribution (or a superadmin) can remove
-    its record. The copies themselves are never touched.
+    its record. The copies themselves are never touched, and a record whose
+    copies still exist is refused with 409: the record is how those copies
+    are found for a bulk cleanup.
 
     Required privilege: Project.Audit on /distributions
     """
@@ -1745,6 +1785,17 @@ async def delete_distribution(
     if not current_user.is_superadmin and record.created_by != current_user.username:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="This distribution was started by another user"
+        )
+    # a finished job in the registry is fresher than its last write-through
+    results = job.results if job is not None else cast(List[dict], record.results or [])
+    live_usernames = _record_live_copies(results)
+    if live_usernames:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This distribution still has {len(live_usernames)} existing copy/copies "
+                f"(users: {', '.join(sorted(live_usernames))}): delete the copies before removing its record"
+            ),
         )
 
     registry.remove(str(distribution_id))
@@ -2036,8 +2087,6 @@ async def unlock_project(project: Project = Depends(dep_project)) -> None:
 async def unfreeze_project(
     project: Project = Depends(dep_project),
     current_user: schemas.User = Depends(get_current_active_user),
-    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
-    db_session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     """
     Unfreeze a distributed template so it can be modified (and distributed
@@ -2057,7 +2106,7 @@ async def unfreeze_project(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the project owner or a superadmin can unfreeze this project",
         )
-    live_usernames = await _live_distribution_copies(project, db_session)
+    live_usernames = await _live_distribution_copies(project)
     if live_usernames:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

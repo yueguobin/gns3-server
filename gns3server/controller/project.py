@@ -2426,11 +2426,13 @@ class Project:
             if user:
                 topology["created_by"] = user
 
+            # a copy is never a frozen template: the flag belongs to the
+            # source project only, also when a frozen template is duplicated
+            topology.pop("frozen", None)
             if overlay_from_master:
                 # the copy depends on this project: mark it so it cannot be
                 # duplicated or exported, and the template cannot vanish
                 # while copies exist
-                topology.pop("frozen", None)
                 topology["distribution_master_id"] = self._id
 
             # regenerate IDs for the duplicated project

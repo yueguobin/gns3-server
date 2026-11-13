@@ -1405,9 +1405,23 @@ class TestProjectDistribution:
             )
             assert response.status_code == status.HTTP_202_ACCEPTED
             distribution_id = response.json()["distribution_id"]
-            await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            copy_id = job["results"][0]["project"]["project_id"]
 
-            # deleting a finished distribution removes it from the history
+            # the record is how the copies are found for a bulk cleanup: it
+            # cannot be removed while a copy still exists
+            response = await teacher_client.delete(
+                app.url_path_for("cancel_project_distribution", project_id=source_id, distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_409_CONFLICT
+            assert student.username in response.json()["message"]
+
+            # once the recipient deleted their copy the record can go, and
+            # the distribution leaves the history
+            async with TestProjectOwnership._client_for(app, student) as student_client:
+                response = await student_client.delete(app.url_path_for("delete_project", project_id=copy_id))
+                assert response.status_code == status.HTTP_204_NO_CONTENT
+
             response = await teacher_client.delete(
                 app.url_path_for("cancel_project_distribution", project_id=source_id, distribution_id=distribution_id)
             )
@@ -1421,6 +1435,106 @@ class TestProjectDistribution:
                 app.url_path_for("get_project_distribution", project_id=source_id, distribution_id=distribution_id)
             )
             assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_plain_duplicate_of_a_frozen_template_is_not_frozen(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        source_id, _ = await self._distribute(app, test_user, student.username)
+
+        # the teacher can duplicate the frozen template: the duplicate is a
+        # normal project, not a second frozen template
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("duplicate_project", project_id=source_id),
+                json={"name": f"variant-{uuid.uuid4()}"},
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            duplicate = response.json()
+            assert duplicate["frozen"] is False
+            assert duplicate["distribution_master_id"] is None
+
+            # and it is editable right away
+            response = await teacher_client.put(
+                app.url_path_for("update_project", project_id=duplicate["project_id"]),
+                json={"name": "variant-renamed"},
+            )
+            assert response.status_code == status.HTTP_200_OK
+
+    async def test_unfreeze_does_not_depend_on_distribution_records(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_user": student.username},
+            )
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            copy_id = job["results"][0]["project"]["project_id"]
+
+            # a record can vanish behind the API (a direct database cleanup,
+            # or a crash before the write-through): the copy marker is the
+            # authority, so the template stays locked
+            await DistributionRecordsRepository(db_session).delete_record(UUID(distribution_id))
+            response = await teacher_client.post(app.url_path_for("unfreeze_project", project_id=source_id))
+            assert response.status_code == status.HTTP_409_CONFLICT
+            assert student.username in response.json()["message"]
+
+        # once the copy is gone, the marker scan finds nothing left
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.delete(app.url_path_for("delete_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(app.url_path_for("unfreeze_project", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["frozen"] is False
+
+    async def test_global_delete_of_a_record_with_live_copies_is_refused(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_user": student.username},
+            )
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            copy_id = job["results"][0]["project"]["project_id"]
+
+            # the global history endpoint is protected the same way as the
+            # per-project one: the record locates the copies for a cleanup
+            response = await teacher_client.delete(
+                app.url_path_for("delete_distribution", distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_409_CONFLICT
+            assert student.username in response.json()["message"]
+
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.delete(app.url_path_for("delete_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.delete(
+                app.url_path_for("delete_distribution", distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_204_NO_CONTENT
 
     async def test_distribution_history_flags_deleted_copies(
         self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
