@@ -722,6 +722,7 @@ class Node:
         :param kwargs: Node properties
         """
 
+        self.project.check_mutable(f"updating node '{self._name}'")
         # When updating properties used only on controller we don't need to call the compute
         update_compute = False
         old_json = self.asdict()
@@ -955,6 +956,9 @@ class Node:
         """
         Start a node
         """
+        # running a node writes its disks: forbidden on a frozen template
+        # whose distributed copies depend on them
+        self.project.check_mutable(f"starting node '{self._name}'")
         # Starting an already started node is a no-op on the compute side
         # and takes no additional quota slot.
         reservation = reserve_start(self.project) if self._status != "started" else None
@@ -1096,6 +1100,7 @@ class Node:
         """
         Suspend a node
         """
+        self.project.check_mutable(f"suspending node '{self._name}'")
         try:
             await self.post("/suspend", timeout=240)
         except TimeoutError:
@@ -1108,6 +1113,7 @@ class Node:
         """
         # A reload ends with the node started: reserve a running slot
         # unless it already holds one.
+        self.project.check_mutable(f"reloading node '{self._name}'")
         reservation = reserve_start(self.project) if self._status != "started" else None
         try:
             await self.post("/reload", timeout=240)

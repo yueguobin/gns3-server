@@ -67,7 +67,7 @@ TOOL_SPECS: dict[str, FrozenSet[str]] = {
     "project_delete": frozenset({"Project.Allocate"}),
     "project_open": frozenset({"Project.Allocate"}),
     "project_close": frozenset({"Project.Allocate"}),
-    "project_duplicate": frozenset({"Project.Audit"}),
+    "project_duplicate": frozenset({"Project.Duplicate"}),
     "project_stats": frozenset({"Project.Audit"}),
     "project_readme_get": frozenset({"Project.Audit"}),
     "project_readme_update": frozenset({"Project.Modify"}),

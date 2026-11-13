@@ -140,6 +140,14 @@ class Project(ProjectBase):
     status: Optional[ProjectStatus] = None
     filename: Optional[str] = None
     created_by: Optional[str] = Field(None, description="Username of the user who created the project")
+    frozen: Optional[bool] = Field(
+        None,
+        description="The project is a distributed template: modification is frozen until every copy is deleted",
+    )
+    distribution_master_id: Optional[UUID] = Field(
+        None,
+        description="Project id of the distributed template this copy was created from, if this is a distributed copy",
+    )
     share_count: Optional[int] = Field(
         None,
         description="Number of shares on this project, only returned to the project owner and superadmins",

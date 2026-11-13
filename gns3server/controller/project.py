@@ -17,6 +17,7 @@
 
 import asyncio
 import copy
+import functools
 import json
 import logging
 import os
@@ -48,6 +49,7 @@ from .export_project import export_project
 from .import_project import import_project, regenerate_topology_ids, update_snapshots
 from .link import _UNSET
 from .node import Node
+from .qemu_overlay import create_overlay_disks
 from .quota_usage import QUOTA_COUNTED_TYPES, reserve_create, reserve_import
 from .snapshot import Snapshot
 from .topology import load_topology, project_to_topology
@@ -84,6 +86,25 @@ def _is_iol_docker_kwargs(kwargs) -> bool:
     return is_iol_runner_environment(environment)
 
 
+def frozen_guard(action):
+    """
+    Use this decorator to raise an error if the project is frozen: a project
+    that was distributed keeps its copies' QEMU overlay disks pointing at its
+    own files, so it must not be modified until every copy is gone. Opening
+    the project replays its existing content and is always allowed.
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            self.check_mutable(action)
+            return func(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 class Project:
     """
     A project inside a controller
@@ -116,6 +137,8 @@ class Project:
         variables=None,
         supplier=None,
         created_by=None,
+        frozen=False,
+        distribution_master_id=None,
     ):
 
         self._controller = controller
@@ -137,6 +160,12 @@ class Project:
         self._variables = variables
         self._supplier = supplier
         self._created_by = created_by
+        # a distributed (template) project is frozen: the overlay disks of its
+        # copies point at its files, so it must not change until they are gone
+        self._frozen = frozen
+        # set on a distributed copy: the project id of the template it was
+        # created from (the copy cannot be duplicated or exported)
+        self._distribution_master_id = distribution_master_id
         self._snapshots_config_file = "snapshots.conf"
 
         self._loading = False
@@ -204,6 +233,7 @@ class Project:
 
         self._controller.notification.controller_emit(action, event)
 
+    @frozen_guard("updating the project")
     async def update(self, **kwargs):
         """
         Update the project
@@ -415,6 +445,44 @@ class Project:
         self._created_by = created_by
 
     @property
+    def frozen(self):
+        """
+        Whether the project is a distributed template frozen for modification.
+        """
+        return self._frozen
+
+    @frozen.setter
+    def frozen(self, val):
+        self._frozen = val
+
+    @property
+    def distribution_master_id(self):
+        """
+        Project id of the template this distributed copy was created from,
+        or None for a regular project.
+        """
+        return self._distribution_master_id
+
+    @distribution_master_id.setter
+    def distribution_master_id(self, val):
+        self._distribution_master_id = val
+
+    def check_mutable(self, action: str) -> None:
+        """
+        Raise when the project is a frozen template: its copies' QEMU overlay
+        disks point at its files, so any modification (running a node,
+        changing the topology, restoring a snapshot) would change or break
+        what every recipient sees. Freezing and unfreezing go through the
+        distribution endpoints, not through this check.
+        """
+
+        if self._frozen and not self._loading:
+            raise ControllerForbiddenError(
+                f"Project '{self._name}' is a distributed template and is frozen: {action} is not allowed "
+                "until every distributed copy is deleted"
+            )
+
+    @property
     def auto_start(self):
         """
         Should project auto start when opened
@@ -608,6 +676,7 @@ class Project:
         return new_name
 
     @open_required
+    @frozen_guard("adding a node")
     async def add_node_from_template(self, template, x=0, y=0, name=None, compute_id=None):
         """
         Create a node from a template.
@@ -666,6 +735,7 @@ class Project:
         return node
 
     @open_required
+    @frozen_guard("adding a node")
     async def add_node(self, compute, name, node_id, dump=True, node_type=None, allow_missing_image=False, **kwargs):
         """
         Create a node or return an existing node
@@ -745,6 +815,7 @@ class Project:
                 await self.delete_link(link.id, force_delete=True)
 
     @open_required
+    @frozen_guard("deleting a node")
     async def delete_node(self, node_id):
         node = self.get_node(node_id)
         if node.locked:
@@ -813,6 +884,7 @@ class Project:
         return self._drawings
 
     @open_required
+    @frozen_guard("adding a drawing")
     async def add_drawing(self, drawing_id=None, dump=True, **kwargs):
         """
         Create an drawing or return an existing drawing
@@ -842,6 +914,7 @@ class Project:
             )
 
     @open_required
+    @frozen_guard("deleting a drawing")
     async def delete_drawing(self, drawing_id):
         drawing = self.get_drawing(drawing_id)
         if drawing.locked:
@@ -1136,6 +1209,7 @@ class Project:
             self.dump()
 
     @open_required
+    @frozen_guard("adding a link")
     async def add_link(self, link_id=None, dump=True):
         """
         Create a link. By default the link is empty
@@ -1180,6 +1254,7 @@ class Project:
         return None
 
     @open_required
+    @frozen_guard("deleting a link")
     async def delete_link(self, link_id, force_delete=False):
         link = self.get_link(link_id)
         del self._links[link.id]
@@ -2166,7 +2241,7 @@ class Project:
         while self._loading:
             await asyncio.sleep(0.5)
 
-    async def duplicate(self, name=None, reset_mac_addresses=True, user=None):
+    async def duplicate(self, name=None, reset_mac_addresses=True, user=None, overlay_from_master=False):
         """
         Duplicate a project
 
@@ -2178,7 +2253,22 @@ class Project:
         :param name: Name of the new project. A new one will be generated in case of conflicts
         :param reset_mac_addresses: Reset MAC addresses for the new project
         :param user: The user duplicating the project. The new project is owned by this user
+        :param overlay_from_master: Create the copy for distribution: its QEMU
+            disks become thin overlays pointing at this project's disks, and
+            the copy is marked with this project's id. The project must not
+            be a distributed copy itself.
         """
+
+        if self._distribution_master_id:
+            raise ControllerForbiddenError(
+                "A distributed copy cannot be duplicated: ask the template owner for a new copy instead"
+            )
+        if overlay_from_master:
+            for compute in self.computes:
+                if compute.id != "local":
+                    raise ControllerError(
+                        "Projects with nodes on a remote compute cannot be distributed as overlay copies"
+                    )
 
         # If the project was not open we open it temporary
         previous_status = self._status
@@ -2189,7 +2279,9 @@ class Project:
         assert self._status != "closed"
 
         try:
-            proj = await self._fast_duplication(name, reset_mac_addresses=reset_mac_addresses, user=user)
+            proj = await self._fast_duplication(
+                name, reset_mac_addresses=reset_mac_addresses, user=user, overlay_from_master=overlay_from_master
+            )
             if proj:
                 if previous_status == "closed":
                     await self.close()
@@ -2243,7 +2335,9 @@ class Project:
 
         return project
 
-    async def _fast_duplication(self, name=None, location=None, reset_mac_addresses=True, user=None):
+    async def _fast_duplication(
+        self, name=None, location=None, reset_mac_addresses=True, user=None, overlay_from_master=False
+    ):
         """
         Fast duplication of a project.
 
@@ -2253,6 +2347,9 @@ class Project:
         :param location: Parent directory of the new project
         :param reset_mac_addresses: Reset MAC addresses for the duplicated project
         :param user: The user duplicating the project. The new project is owned by this user
+        :param overlay_from_master: Skip the QEMU disks and the snapshots, and
+            create thin overlay disks pointing at this project's disks
+            instead (distribution copy)
         """
 
         # We don't duplicate a running project
@@ -2279,11 +2376,39 @@ class Project:
                 new_project_path = p_work.joinpath(location)
             else:
                 new_project_path = p_work.joinpath(new_project_id)
-            # copy dir
+            # copy dir: a distribution copy does not carry the snapshots (it
+            # takes its own from its initial overlay state) and its QEMU
+            # disks are replaced by overlays right after the copy
+            ignore = None
+            if overlay_from_master:
+                ignored_dirs = {
+                    os.path.normcase(os.path.join(self.path, "snapshots")),
+                    os.path.normcase(os.path.join(self.path, "project-files", "qemu")),
+                }
+
+                def ignore(directory, names):
+                    skipped = []
+                    for entry in names:
+                        full_path = os.path.join(directory, entry)
+                        if os.path.isdir(full_path) and os.path.normcase(full_path) in ignored_dirs:
+                            skipped.append(entry)
+                    return skipped
+
             await wait_run_in_executor(
-                shutil.copytree, self.path, new_project_path.as_posix(), symlinks=True, ignore_dangling_symlinks=True
+                shutil.copytree,
+                self.path,
+                new_project_path.as_posix(),
+                symlinks=True,
+                ignore_dangling_symlinks=True,
+                ignore=ignore,
             )
             log.info(f"Project content copied from '{self.path}' to '{new_project_path}' in {time.time() - t0}s")
+
+            if overlay_from_master:
+                # create the thin disks before the node ids are regenerated:
+                # the overlays land in the (still old) copied node directories
+                # and follow them to their new ids
+                create_overlay_disks(self.path, new_project_path.as_posix())
 
             # Read the topology file using the actual filename (self._filename), not self.name
             # This handles the case where a project has been renamed but we need to read the actual file
@@ -2301,6 +2426,13 @@ class Project:
             if user:
                 topology["created_by"] = user
 
+            if overlay_from_master:
+                # the copy depends on this project: mark it so it cannot be
+                # duplicated or exported, and the template cannot vanish
+                # while copies exist
+                topology.pop("frozen", None)
+                topology["distribution_master_id"] = self._id
+
             # regenerate IDs for the duplicated project
             regenerate_topology_ids(topology, new_project_path, reset_mac_addresses)
 
@@ -2315,7 +2447,7 @@ class Project:
             if os.path.isdir(snapshots_dir):
                 await update_snapshots(snapshots_dir, new_project_path, project_name, new_project_id)
 
-            # Remove the old .gns3 file (which has the original project name)
+            # Remove the old .gns3 file (which has the original file name)
             os.remove(old_gns3_file)
             project = await self.controller.load_project(dot_gns3_path, load=False)
         finally:
@@ -2334,6 +2466,7 @@ class Project:
         return False
 
     @open_required
+    @frozen_guard("locking the topology")
     def lock(self):
         """
         Lock all drawings and nodes
@@ -2350,6 +2483,7 @@ class Project:
         self.dump()
 
     @open_required
+    @frozen_guard("unlocking the topology")
     def unlock(self):
         """
         Unlock all drawings and nodes
@@ -2399,6 +2533,7 @@ class Project:
             raise ControllerError(f"Could not write topology: {e}")
 
     @open_required
+    @frozen_guard("starting the nodes")
     async def start_all(self):
         """
         Start all nodes (except always-running types like Ethernet switch, Cloud, NAT, etc.)
@@ -2454,6 +2589,7 @@ class Project:
         await pool.join()
 
     @open_required
+    @frozen_guard("duplicating a node")
     async def duplicate_node(self, node, x, y, z):
         """
         Duplicate a node
@@ -2465,6 +2601,10 @@ class Project:
         :returns: New node
         """
 
+        # a locked node cannot be updated or deleted: duplicating it would
+        # bypass the lock (the copy comes out unlocked)
+        if node.locked:
+            raise ControllerError(f"Node {node.name} cannot be duplicated because it is locked")
         data = copy.deepcopy(node.asdict(topology_dump=True))
         # Some properties like internal ID should not be duplicated
         for unique_property in (
@@ -2528,6 +2668,8 @@ class Project:
             "supplier": self._supplier,
             "variables": self._variables,
             "created_by": self._created_by,
+            "frozen": self._frozen,
+            "distribution_master_id": self._distribution_master_id,
             "marker_definitions": self._marker_definitions,
         }
 

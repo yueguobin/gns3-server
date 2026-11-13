@@ -331,6 +331,19 @@ async def delete_project(
             detail="Only the project owner or a superadmin can delete this project",
         )
 
+    if project.frozen:
+        # the copies of a distributed template keep overlay disks pointing
+        # at its files: the template cannot vanish while they exist
+        live_usernames = await _live_distribution_copies(project, db_session)
+        if live_usernames:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"This distributed template still has {len(live_usernames)} existing copy/copies "
+                    f"(users: {', '.join(sorted(live_usernames))}): delete the copies before the template"
+                ),
+            )
+
     controller = Controller.instance()
     await project.delete()
     controller.remove_project(project)
@@ -826,7 +839,7 @@ async def project_marker_ws_notifications(
     "/{project_id}/export",
     response_class=StreamingResponse,
     responses={200: binary_response(ZIP_MEDIA_TYPE, "Portable project archive")},
-    dependencies=[Depends(has_privilege("Project.Audit"))],
+    dependencies=[Depends(has_privilege("Project.Export"))],
 )
 async def export_project(
     project: Project = Depends(dep_project),
@@ -840,9 +853,14 @@ async def export_project(
     """
     Export a project as a portable archive.
 
-    Required privilege: Project.Audit
+    Required privilege: Project.Export
     """
 
+    if project.distribution_master_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A distributed copy cannot be exported: its disks may be thin overlays of the template project",
+        )
     if project.is_running():
         raise ControllerError("Project must be stopped in order to export it")
 
@@ -937,6 +955,15 @@ async def import_project(
     # Importing over an existing project destroys it, so like deletion it is
     # reserved to the project owner and to superadmins.
     existing_project = controller.projects.get(str(project_id))
+    if existing_project is not None and (
+        existing_project.frozen or existing_project.distribution_master_id is not None
+    ):
+        # importing replaces every file: it would change what the copies of a
+        # frozen template see, or break the overlays of a distributed copy
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Importing over a distributed template or copy is not allowed",
+        )
     if not current_user.is_superadmin:
         path = f"/projects/{project_id}" if existing_project is not None else "/projects"
         if not await rbac_repo.check_user_has_privilege(current_user.user_id, path, "Project.Allocate"):
@@ -1046,18 +1073,27 @@ async def _distribute_project_copy(
     name: str,
     reset_mac_addresses: Optional[bool],
     lock_topology: Optional[bool],
+    overlay_from_master: bool,
 ) -> dict:
     """
     Duplicate a project on behalf of another user: the copy is owned by that
     user, its owner ACE carries the given (reduced) role, and it ships with a
-    snapshot of the template state.
+    snapshot of the template state. With ``overlay_from_master`` the QEMU
+    disks of the copy are thin overlays pointing at the template's disks
+    (local computes only), so the copy costs seconds instead of a full copy.
     """
 
     new_project = await project.duplicate(
         name=name,
         reset_mac_addresses=reset_mac_addresses,
         user=target.username,
+        overlay_from_master=overlay_from_master,
     )
+    # the export/import fallback carries the topology file of the frozen
+    # template verbatim: a copy is never frozen, whatever the duplication path
+    if new_project.frozen:
+        new_project.frozen = False
+        new_project.dump()
     await ensure_project_owner_ace(db_session, new_project.id, new_project.created_by, role_id=owner_role_id)
 
     # Ship the copy with a snapshot of the template state so the recipient can
@@ -1127,7 +1163,7 @@ async def _duplicable_pool_memberships(
         **responses,
         409: {"model": schemas.ErrorMessage, "description": "Could not duplicate project"},
     },
-    dependencies=[Depends(has_privilege("Project.Audit"))],
+    dependencies=[Depends(has_privilege("Project.Duplicate"))],
 )
 async def duplicate_project(
     project_data: schemas.ProjectDuplicate,
@@ -1139,9 +1175,18 @@ async def duplicate_project(
 ) -> schemas.Project:
     """
     Duplicate a project: the copy belongs to the user who duplicated it.
+    A distributed copy cannot be duplicated: its disks may be thin overlays
+    of the template project. A frozen template can be duplicated (the copy
+    is a normal independent project).
 
-    Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
+    Required privilege: Project.Duplicate, plus Project.Allocate somewhere the copy can live
     """
+
+    if project.distribution_master_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A distributed copy cannot be duplicated: ask the template owner for a new copy instead",
+        )
 
     pool_memberships = await _duplicable_pool_memberships(current_user, project, rbac_repo, pools_repo)
 
@@ -1163,6 +1208,31 @@ async def duplicate_project(
             await pools_repo.add_resource_to_pool(pool.resource_pool_id, resource)
 
     return new_project.asdict()
+
+
+async def _live_distribution_copies(project: Project, db_session: AsyncSession) -> List[str]:
+    """
+    Usernames whose distributed copy of this project still exists on the
+    server, across every distribution ever made from it. A copy counts as
+    gone once its directory no longer exists (deleted through the API or
+    removed directly on disk).
+    """
+
+    controller = Controller.instance()
+    records = await DistributionRecordsRepository(db_session).get_records_for_project(project.id)
+    live_usernames = []
+    for record in records:
+        for result in cast(List[dict], record.results or []):
+            copy = result.get("project")
+            if copy is None:
+                continue
+            try:
+                copy_project = controller.get_project(str(copy["project_id"]))
+            except ControllerNotFoundError:
+                continue
+            if os.path.exists(copy_project.path):
+                live_usernames.append(str(result.get("username") or copy["project_id"]))
+    return live_usernames
 
 
 def _distribution_record_asdict(record: models.DistributionRecord) -> dict:
@@ -1235,6 +1305,7 @@ async def _run_distribution(
     owner_role_id: UUID,
     reset_mac_addresses: Optional[bool],
     lock_topology: Optional[bool],
+    overlay_from_master: bool,
 ) -> None:
     """
     Create one copy per recipient in the background, recording a result per
@@ -1257,7 +1328,14 @@ async def _run_distribution(
                     break
                 try:
                     copy = await _distribute_project_copy(
-                        db_session, project, member, owner_role_id, name, reset_mac_addresses, lock_topology
+                        db_session,
+                        project,
+                        member,
+                        owner_role_id,
+                        name,
+                        reset_mac_addresses,
+                        lock_topology,
+                        overlay_from_master,
                     )
                     registry.record_result(job, {"username": member.username, "project": copy, "error": None})
                 except Exception as e:
@@ -1306,12 +1384,21 @@ async def distribute_project(
     copy is owned by its recipient, its owner ACE carries a reduced role
     (``owner_role``, the built-in "Lab member" role by default), it ships
     with a snapshot of the template state, and its nodes and drawings are
-    locked by default (``lock_topology``). Returns the distribution job:
-    poll ``GET /projects/{project_id}/distributions/{distribution_id}`` for
-    the progress and the per-recipient results.
+    locked by default (``lock_topology``). The copies' QEMU disks are thin
+    overlays of the project's disks (a project with nodes on a remote
+    compute falls back to full copies), and the project is frozen as a
+    template: it cannot be modified until every copy is deleted. Returns the
+    distribution job: poll ``GET /projects/{project_id}/distributions/{distribution_id}``
+    for the progress and the per-recipient results.
 
     Required privilege: Project.Audit, plus Project.Allocate somewhere the copy can live
     """
+
+    if project.distribution_master_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A distributed copy cannot be distributed: distribute the template project instead",
+        )
 
     # Resolve the recipient(s) and the role of their owner ACE before the job
     # starts: a bad request must not distribute anything.
@@ -1319,6 +1406,17 @@ async def distribute_project(
         UsersRepository(db_session), rbac_repo, project_data
     )
     await _duplicable_pool_memberships(current_user, project, rbac_repo, pools_repo)
+
+    # the overlays' backing files must live on the same machine as the
+    # copies: only an all-local project can be distributed the thin way
+    overlay_from_master = all(compute.id == "local" for compute in project.computes)
+
+    # freeze the template before the first copy is made: from here on its
+    # content is the reference every recipient depends on
+    if not project.frozen:
+        project.frozen = True
+        project.dump()
+        project.emit_controller_notification("project.updated", project.asdict())
 
     # a single recipient keeps the given name, a fan-out names every copy
     # after the lab and its recipient (lab1-alice)
@@ -1347,6 +1445,7 @@ async def distribute_project(
             owner_role_id,
             project_data.reset_mac_addresses,
             project_data.lock_topology,
+            overlay_from_master,
         )
     )
     return job.asdict()
@@ -1483,6 +1582,77 @@ async def cancel_project_distribution(
     registry.remove(str(distribution_id))
     await DistributionRecordsRepository(db_session).delete_record(distribution_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete(
+    "/{project_id}/distributions/{distribution_id}/copies",
+    response_model=schemas.ProjectDistribution,
+    responses={
+        **responses,
+        409: {
+            "model": schemas.ErrorMessage,
+            "description": "The distribution is still running: cancel it first",
+        },
+    },
+    dependencies=[Depends(has_privilege("Project.Audit"))],
+)
+async def delete_distribution_copies(
+    distribution_id: UUID,
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    """
+    Delete every copy of this distribution that still exists on the server,
+    recipient by recipient (each copy is closed and removed through the
+    regular project deletion). A copy a recipient already deleted, or whose
+    directory was removed directly on disk, is skipped. The distribution
+    record is kept: it still tells who received a copy and when. Once every
+    copy of every distribution of the project is gone the template can be
+    unfrozen and modified again.
+
+    Required privilege: Project.Audit, and only the user who started the distribution (or a superadmin)
+    """
+
+    registry = DistributionRegistry.instance()
+    job, record = await _get_owned_distribution_or_record(project, distribution_id, current_user, db_session)
+    if job is not None:
+        if job.status in ("running", "cancelling"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The distribution is still running: cancel it before deleting its copies",
+            )
+        results = list(job.results)
+    else:
+        assert record is not None  # one of the two is set
+        results = list(record.results or [])
+
+    controller = Controller.instance()
+    for result in results:
+        copy = result.get("project")
+        if copy is None:
+            continue  # this recipient failed: no copy to delete
+        try:
+            copy_project = controller.get_project(str(copy["project_id"]))
+        except ControllerNotFoundError:
+            continue
+        if not os.path.exists(copy_project.path):
+            continue  # already gone (deleted by the recipient or on disk)
+        log.info(f"Deleting the distributed copy of '{result.get('username')}' ({copy['project_id']})")
+        await copy_project.delete()
+        controller.remove_project(copy_project)
+        await rbac_repo.delete_all_ace_starting_with_path(f"/projects/{copy_project.id}")
+
+    # the per-recipient results keep their history: which copies existed and
+    # were deleted is visible through the project_exists flags
+    if job is not None:
+        job_dict = job.asdict()
+    else:
+        assert record is not None  # one of the two is set
+        job_dict = _distribution_record_asdict(record)
+    job_dict["results"] = _annotate_copy_existence(job_dict["results"])
+    return job_dict
 
 
 def _annotate_source_project(entry: dict) -> dict:
@@ -1849,6 +2019,57 @@ async def unlock_project(project: Project = Depends(dep_project)) -> None:
     """
 
     project.unlock()
+
+
+@router.post(
+    "/{project_id}/unfreeze",
+    response_model=schemas.Project,
+    responses={
+        **responses,
+        409: {
+            "model": schemas.ErrorMessage,
+            "description": "The project is not frozen or distributed copies still exist",
+        },
+    },
+    dependencies=[Depends(has_privilege("Project.Modify"))],
+)
+async def unfreeze_project(
+    project: Project = Depends(dep_project),
+    current_user: schemas.User = Depends(get_current_active_user),
+    rbac_repo: RbacRepository = Depends(get_repository(RbacRepository)),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    """
+    Unfreeze a distributed template so it can be modified (and distributed
+    again) — only when every copy made from it is gone. Reserved to the
+    project owner and to superadmins, like deletion: unfreezing paves the
+    way to changing what future recipients will get.
+
+    Required privilege: Project.Modify, owner or superadmin
+    """
+
+    if not project.frozen:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This project is not a frozen distributed template"
+        )
+    if not current_user.is_superadmin and project.created_by != current_user.username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the project owner or a superadmin can unfreeze this project",
+        )
+    live_usernames = await _live_distribution_copies(project, db_session)
+    if live_usernames:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This distributed template still has {len(live_usernames)} existing copy/copies "
+                f"(users: {', '.join(sorted(live_usernames))}): delete the copies before unfreezing"
+            ),
+        )
+    project.frozen = False
+    project.dump()
+    project.emit_controller_notification("project.updated", project.asdict())
+    return project.asdict()
 
 
 @router.get(

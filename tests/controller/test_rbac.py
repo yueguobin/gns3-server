@@ -16,6 +16,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import asyncio
+import os
 import time
 import uuid
 from unittest.mock import MagicMock
@@ -29,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gns3server import schemas
 from gns3server.api.routes.controller import projects as projects_routes
-from gns3server.controller import Controller
+from gns3server.controller import Controller, qemu_overlay
 from gns3server.controller.controller_error import ControllerError
 from gns3server.controller.distribution import DistributionRegistry
 from gns3server.db.models import User
@@ -735,8 +736,33 @@ class TestProjectDistribution:
             )
             assert response.status_code == status.HTTP_200_OK
 
-        # the teacher's own project keeps the full role
+        # distributing froze the template: the teacher cannot rename (or
+        # otherwise modify) the source until every copy is deleted
         async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.get(app.url_path_for("get_project", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["frozen"] is True
+
+            response = await teacher_client.put(
+                app.url_path_for("update_project", project_id=source_id), json={"name": "renamed-lab"}
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
+            # unfreezing needs the copies gone: while the copy exists it is a 409
+            response = await teacher_client.post(app.url_path_for("unfreeze_project", project_id=source_id))
+            assert response.status_code == status.HTTP_409_CONFLICT
+
+        # the recipient deletes their copy, then the teacher can unfreeze
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.delete(app.url_path_for("delete_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(app.url_path_for("unfreeze_project", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["frozen"] is False
+
+            # with the template unfrozen the full role is back
             response = await teacher_client.put(
                 app.url_path_for("update_project", project_id=source_id), json={"name": "renamed-lab"}
             )
@@ -1424,10 +1450,21 @@ class TestProjectDistribution:
     ) -> None:
         await TestProjectOwnership._seed_collection_ace(db_session)
         student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
-        source_id, _ = await self._distribute(app, test_user, student.username)
+        source_id, copy_id = await self._distribute(app, test_user, student.username)
 
         records_repo = DistributionRecordsRepository(db_session)
         assert await records_repo.get_records_for_project(UUID(source_id))
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            # a distributed template cannot be deleted while a copy exists:
+            # the copies' disks may be overlays of its files
+            response = await teacher_client.delete(app.url_path_for("delete_project", project_id=source_id))
+            assert response.status_code == status.HTTP_409_CONFLICT
+
+        # the recipient deletes their copy, then the template can go
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.delete(app.url_path_for("delete_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
 
         async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
             response = await teacher_client.delete(app.url_path_for("delete_project", project_id=source_id))
@@ -1665,6 +1702,160 @@ class TestProjectDistribution:
             assert interrupted["error"] is not None
             cancelled = entries[str(cancelling_id)]
             assert cancelled["status"] == "cancelled"
+
+    async def test_distribution_creates_thin_overlay_copies(
+        self,
+        app: FastAPI,
+        base_client: AsyncClient,
+        db_session: AsyncSession,
+        test_user: User,
+        controller,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+
+        # one QEMU node directory on the template: a disk image and a plain
+        # config file, plus an old snapshot the copy must not inherit
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+        source = controller.get_project(source_id)
+        node_id = "5e2f2b7c-0000-0000-0000-000000000002"
+        qemu_dir = os.path.join(source.path, "project-files", "qemu", node_id)
+        os.makedirs(qemu_dir)
+        with open(os.path.join(qemu_dir, "hda_disk.qcow2"), "w") as f:
+            f.write("template disk")
+        with open(os.path.join(qemu_dir, "config.txt"), "w") as f:
+            f.write("hostname r1")
+        snapshots_dir = os.path.join(source.path, "snapshots")
+        os.makedirs(snapshots_dir)
+        with open(os.path.join(snapshots_dir, "old-lab.gns3project"), "w") as f:
+            f.write("an old snapshot zip")
+
+        # stand-in disk plumbing: the overlay creation is unit-tested in
+        # test_qemu_overlay.py, here only its placement matters
+        created_overlays = []
+
+        def fake_image_info(qemu_img, path):
+            return {"format": "qcow2", "virtual-size": 42949632} if path.endswith(".qcow2") else None
+
+        def fake_create_overlay(qemu_img, backing_file, overlay_file, info):
+            created_overlays.append((backing_file, overlay_file))
+            with open(overlay_file, "w") as f:
+                f.write("thin overlay")
+
+        monkeypatch.setattr(qemu_overlay, "find_qemu_img", lambda: "/fake/qemu-img")
+        monkeypatch.setattr(qemu_overlay, "_image_info", fake_image_info)
+        monkeypatch.setattr(qemu_overlay, "_create_overlay", fake_create_overlay)
+
+        copy_id = await self._distribute_from(app, test_user, source_id, student.username)
+
+        # the copy's disk is a thin overlay pointing at the template's disk
+        assert len(created_overlays) == 1
+        backing_file, overlay_file = created_overlays[0]
+        assert backing_file == os.path.join(qemu_dir, "hda_disk.qcow2")
+        assert overlay_file.startswith(os.path.join(controller.get_project(copy_id).path, "project-files", "qemu"))
+        with open(overlay_file) as f:
+            assert f.read() == "thin overlay"
+
+        # the non-image files ride along verbatim
+        copy = controller.get_project(copy_id)
+        with open(os.path.join(copy.path, "project-files", "qemu", node_id, "config.txt")) as f:
+            assert f.read() == "hostname r1"
+
+        # the copy takes its own snapshot, it does not inherit the old ones
+        assert not os.path.exists(os.path.join(copy.path, "snapshots", "old-lab.gns3project"))
+
+        # the dependency is recorded on the copy, and the copy is not frozen
+        assert copy.distribution_master_id == source_id
+        assert copy.frozen is False
+        async with TestProjectOwnership._client_for(app, student) as student_client:
+            response = await student_client.get(app.url_path_for("get_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["distribution_master_id"] == source_id
+            assert response.json()["frozen"] is False
+
+    async def test_distributed_copy_cannot_be_duplicated_exported_or_distributed(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student = await TestProjectOwnership._create_user_in_users_group(db_session, f"student-{uuid.uuid4().hex[:8]}")
+        _, copy_id = await self._distribute(app, test_user, student.username)
+
+        # the superadmin bypasses the privilege checks, so these exercise the
+        # marker-based refusals, not the reduced role
+        admin = await UsersRepository(db_session).get_user_by_username("admin")
+        async with TestProjectOwnership._client_for(app, admin) as admin_client:
+            response = await admin_client.post(
+                app.url_path_for("duplicate_project", project_id=copy_id), json={"name": "derived"}
+            )
+            assert response.status_code == status.HTTP_409_CONFLICT
+
+            response = await admin_client.get(app.url_path_for("export_project", project_id=copy_id))
+            assert response.status_code == status.HTTP_409_CONFLICT
+
+            response = await admin_client.post(
+                app.url_path_for("distribute_project", project_id=copy_id),
+                json={"name": "re-distributed", "target_user": "admin"},
+            )
+            assert response.status_code == status.HTTP_409_CONFLICT
+
+    async def test_cleanup_endpoint_deletes_copies_and_enables_unfreeze(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User, controller
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+        student1 = await TestProjectOwnership._create_user_in_users_group(db_session, f"alice-{uuid.uuid4().hex[:8]}")
+        student2 = await TestProjectOwnership._create_user_in_users_group(db_session, f"bob-{uuid.uuid4().hex[:8]}")
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(
+                app.url_path_for("distribute_project", project_id=source_id),
+                json={"name": "lab1", "target_users": [student1.username, student2.username]},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            distribution_id = response.json()["distribution_id"]
+            job = await TestProjectDistribution._wait_for_distribution(app, teacher_client, source_id, distribution_id)
+            copy_ids = [result["project"]["project_id"] for result in job["results"]]
+            copy_paths = [controller.get_project(copy_id).path for copy_id in copy_ids]
+
+            # one recipient deletes their own copy on their side
+            async with TestProjectOwnership._client_for(app, student1) as student_client:
+                response = await student_client.delete(app.url_path_for("delete_project", project_id=copy_ids[0]))
+                assert response.status_code == status.HTTP_204_NO_CONTENT
+
+            # the cleanup takes the remaining copies and reports them gone
+            response = await teacher_client.delete(
+                app.url_path_for("delete_distribution_copies", project_id=source_id, distribution_id=distribution_id)
+            )
+            assert response.status_code == status.HTTP_200_OK
+            assert all(result["project_exists"] is False for result in response.json()["results"])
+            assert not os.path.exists(copy_paths[1])
+
+            # with every copy gone the template can be unfrozen, then deleted
+            response = await teacher_client.post(app.url_path_for("unfreeze_project", project_id=source_id))
+            assert response.status_code == status.HTTP_200_OK
+            response = await teacher_client.delete(app.url_path_for("delete_project", project_id=source_id))
+            assert response.status_code == status.HTTP_204_NO_CONTENT
+
+    async def test_unfreeze_a_project_that_is_not_frozen(
+        self, app: FastAPI, base_client: AsyncClient, db_session: AsyncSession, test_user: User
+    ) -> None:
+        await TestProjectOwnership._seed_collection_ace(db_session)
+
+        async with TestProjectOwnership._client_for(app, test_user) as teacher_client:
+            response = await teacher_client.post(
+                app.url_path_for("create_project"), json={"name": f"lab-{uuid.uuid4()}"}
+            )
+            source_id = response.json()["project_id"]
+            response = await teacher_client.post(app.url_path_for("unfreeze_project", project_id=source_id))
+            assert response.status_code == status.HTTP_409_CONFLICT
 
 
 class TestProjectShare:

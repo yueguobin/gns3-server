@@ -88,6 +88,8 @@ async def test_json():
         "variables": None,
         "marker_definitions": {},
         "created_by": None,
+        "frozen": False,
+        "distribution_master_id": None,
     }
 
 
@@ -1417,3 +1419,79 @@ async def test_restore_deferred_links(project):
 
     assert link._deferred is False
     assert link.create.called is True
+
+
+@pytest.mark.asyncio
+async def test_frozen_project_rejects_modifications(project, compute):
+    """
+    A distributed template is frozen: every modification path raises, viewing
+    paths (open, dump, snapshot creation) stay available.
+    """
+
+    response = MagicMock()
+    response.json = {"console": 2048}
+    compute.post = AsyncioMagicMock(return_value=response)
+    await project.add_node(compute, "n1", None, node_type="vpcs", properties={})
+
+    project.frozen = True
+    with patch("gns3server.controller.project.Project.emit_controller_notification"):
+        project.dump()
+
+    # topology edits are refused
+    with pytest.raises(ControllerForbiddenError):
+        await project.update(name="renamed")
+    with pytest.raises(ControllerForbiddenError):
+        await project.add_node(compute, "n2", None, node_type="vpcs", properties={})
+    with pytest.raises(ControllerForbiddenError):
+        project.lock()
+    with pytest.raises(ControllerForbiddenError):
+        project.unlock()
+    with pytest.raises(ControllerForbiddenError):
+        await project.start_all()
+
+    # power operations are refused too: a running node writes its disks
+    node = next(iter(project.nodes.values()))
+    with pytest.raises(ControllerForbiddenError):
+        await node.start()
+    with pytest.raises(ControllerForbiddenError):
+        await node.reload()
+    with pytest.raises(ControllerForbiddenError):
+        await node.update(name="hacked")
+    with pytest.raises(ControllerForbiddenError):
+        await node.suspend()
+
+    # opening (and its replay of the existing nodes) stays allowed
+    project._status = "closed"
+    with patch("gns3server.controller.project.Project.emit_controller_notification"):
+        await project.open()
+    assert project.status == "opened"
+
+    # unfreezing restores the normal behavior
+    project.frozen = False
+    with patch("gns3server.controller.project.Project.emit_controller_notification"):
+        await project.update(name="renamed")
+    assert project.name == "renamed"
+
+
+@pytest.mark.asyncio
+async def test_locked_node_cannot_be_duplicated(project, node):
+    """
+    Duplicating a node would bypass its lock (the copy comes out unlocked):
+    like deletion and update, duplication is refused on a locked node.
+    """
+
+    node.locked = True
+    with pytest.raises(ControllerError, match="cannot be duplicated because it is locked"):
+        await project.duplicate_node(node, 10, 20, 0)
+
+
+@pytest.mark.asyncio
+async def test_distributed_copy_cannot_be_duplicated(project, controller, tmp_path):
+    """
+    A distributed copy depends on its template (thin overlay disks): it must
+    not be duplicated, whatever privileges the caller holds.
+    """
+
+    project.distribution_master_id = str(uuid.uuid4())
+    with pytest.raises(ControllerForbiddenError, match="distributed copy cannot be duplicated"):
+        await project.duplicate(name="derived")

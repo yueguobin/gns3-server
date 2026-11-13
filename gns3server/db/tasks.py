@@ -154,6 +154,9 @@ async def connect_to_db(app: FastAPI) -> None:
                         from gns3server.db_migrations.versions.e2a7c9d4b601_add_cdrom_interfaces import (
                             upgrade as upgrade_cdrom_interfaces,
                         )
+                        from gns3server.db_migrations.versions.f6d3a9c2e8b1_add_duplicate_export_privileges import (
+                            upgrade as upgrade_duplicate_export,
+                        )
 
                         with Operations.context(MigrationContext.configure(connection)):
                             upgrade()
@@ -162,8 +165,10 @@ async def connect_to_db(app: FastAPI) -> None:
                             # this database is stamped to head without running the
                             # migrations: apply the consolidated multi-user
                             # migration (seed the default ACEs, the built-in
-                            # privileges and roles, and create the new tables)
+                            # privileges and roles, and create the new tables),
+                            # then the privileges added after it
                             upgrade_multiuser()
+                            upgrade_duplicate_export()
 
                     await conn.run_sync(upgrade_inventory)
                     await conn.run_sync(run_stamp, alembic_cfg)

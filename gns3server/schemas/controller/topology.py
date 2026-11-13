@@ -69,6 +69,10 @@ class Topology(BaseModel):
     supplier: Optional[Supplier] = Field(None, description="Supplier of the project")
     variables: Optional[List[Variable]] = Field(None, description="Variables required to run the project")
     created_by: Optional[str] = Field(None, description="Username of the user who created the project")
+    frozen: Optional[bool] = Field(None, description="The project is a distributed template frozen for modification")
+    distribution_master_id: Optional[UUID] = Field(
+        None, description="Project id of the template this distributed copy was created from"
+    )
 
 
 def main():

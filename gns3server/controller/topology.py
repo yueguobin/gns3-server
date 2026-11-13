@@ -98,6 +98,12 @@ def project_to_topology(project):
         "revision": GNS3_FILE_FORMAT_REVISION,
         "version": __version__,
     }
+    # the distribution markers only appear on distributed projects, so every
+    # other .gns3 file stays byte-identical to before
+    if project.frozen:
+        data["frozen"] = True
+    if project.distribution_master_id:
+        data["distribution_master_id"] = project.distribution_master_id
 
     for node in project.nodes.values():
         if isinstance(node, Node):
