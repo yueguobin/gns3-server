@@ -59,6 +59,24 @@ class TestProviderSchemaEndpoint:
         assert response.status_code == 200
         assert response.json() == {"providers": [], "total": 0}
 
+    async def test_base_url_and_context_limit_carry_defaults(self, client, app) -> None:
+        """The web UI pre-fills from field.default; placeholder is hint text only."""
+        response = await client.get(app.url_path_for("get_llm_provider_schemas"))
+
+        assert response.status_code == 200
+        for provider in response.json()["providers"]:
+            fields = {f["name"]: f for f in provider["fields"]}
+            assert fields["base_url"]["default"]
+            assert fields["context_limit"]["default"] == 1000
+
+    async def test_deepseek_model_is_enumerated_dropdown(self, client, app) -> None:
+        response = await client.get(app.url_path_for("get_llm_provider_schemas") + "?provider=deepseek")
+
+        assert response.status_code == 200
+        fields = {f["name"]: f for f in response.json()["providers"][0]["fields"]}
+        assert fields["model"]["type"] == "select"
+        assert fields["model"]["options"] == ["deepseek-flash", "deepseek-v4-pro"]
+
 
 class TestProviderValidationOnSave:
     # The table allows one config row per user (UNIQUE constraint), so the

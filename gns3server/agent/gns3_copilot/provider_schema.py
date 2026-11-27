@@ -78,8 +78,8 @@ _COMMON_FIELDS: list[dict[str, Any]] = [
         "type": "int",
         "required": True,
         "label": "Context limit (K tokens)",
-        "help": "Model context window in K tokens (128 = 128,000 tokens). Check the provider docs for the current value.",
-        "placeholder": "128",
+        "help": "Model context window in K tokens (1000 = 1,000,000 tokens). Check the provider docs for the current value.",
+        "default": 1000,
     },
     {
         "name": "context_strategy",
@@ -155,6 +155,18 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
             "model": "deepseek-flash",
             "base_url": "https://api.deepseek.com/v1",
         },
+        # Pre-filled values (placeholder is only greyed hint text, never data)
+        "defaults": {
+            "base_url": "https://api.deepseek.com/v1",
+        },
+        # Structural per-field patches: the catalog is short and stable
+        # enough to enumerate, so the web UI renders it as a dropdown.
+        "field_overrides": {
+            "model": {
+                "type": "select",
+                "options": ["deepseek-flash", "deepseek-v4-pro"],
+            },
+        },
     },
     "anthropic": {
         "display_name": "Anthropic",
@@ -168,6 +180,10 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         },
         "placeholders": {
             "model": "claude-opus-5-5",
+            "base_url": "https://api.anthropic.com",
+        },
+        # Pre-filled values (placeholder is only greyed hint text, never data)
+        "defaults": {
             "base_url": "https://api.anthropic.com",
         },
         "field_help": {
@@ -200,6 +216,8 @@ def provider_schema(provider: str) -> Optional[dict[str, Any]]:
     capabilities = entry["capabilities"]
     placeholders = entry.get("placeholders", {})
     field_help = entry.get("field_help", {})
+    defaults = entry.get("defaults", {})
+    field_overrides = entry.get("field_overrides", {})
 
     fields: list[dict[str, Any]] = []
     for field in _COMMON_FIELDS:
@@ -210,6 +228,10 @@ def provider_schema(provider: str) -> Optional[dict[str, Any]]:
             field["placeholder"] = placeholders[field["name"]]
         if field["name"] in field_help:
             field["help"] = field_help[field["name"]]
+        if field["name"] in defaults:
+            field["default"] = defaults[field["name"]]
+        if field["name"] in field_overrides:
+            field.update(field_overrides[field["name"]])
         fields.append(field)
 
     return {

@@ -23,7 +23,16 @@ def test_anthropic_hides_sampling_and_hints_bare_origin() -> None:
 
     base_url = next(f for f in schema["fields"] if f["name"] == "base_url")
     assert base_url["placeholder"] == "https://api.anthropic.com"
+    assert base_url["default"] == "https://api.anthropic.com"
     assert "Bare origin only" in (base_url["help"] or "")
+
+    context_limit = next(f for f in schema["fields"] if f["name"] == "context_limit")
+    assert context_limit["default"] == 1000
+
+    # Anthropic's catalog is larger, so model stays free text
+    model = next(f for f in schema["fields"] if f["name"] == "model")
+    assert model["type"] == "string"
+    assert "options" not in model
 
 
 def test_deepseek_keeps_temperature_and_documents_v1() -> None:
@@ -34,6 +43,15 @@ def test_deepseek_keeps_temperature_and_documents_v1() -> None:
     assert "temperature" in field_names
     base_url = next(f for f in schema["fields"] if f["name"] == "base_url")
     assert base_url["placeholder"] == "https://api.deepseek.com/v1"
+    assert base_url["default"] == "https://api.deepseek.com/v1"
+
+    # DeepSeek's two-model catalog is enumerated as a dropdown
+    model = next(f for f in schema["fields"] if f["name"] == "model")
+    assert model["type"] == "select"
+    assert model["options"] == ["deepseek-flash", "deepseek-v4-pro"]
+
+    context_limit = next(f for f in schema["fields"] if f["name"] == "context_limit")
+    assert context_limit["default"] == 1000
 
 
 def test_unknown_provider_has_no_schema() -> None:
