@@ -159,13 +159,11 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
         "defaults": {
             "base_url": "https://api.deepseek.com/v1",
         },
-        # Structural per-field patches: the catalog is short and stable
-        # enough to enumerate, so the web UI renders it as a dropdown.
-        "field_overrides": {
-            "model": {
-                "type": "select",
-                "options": ["deepseek-flash", "deepseek-v4-pro"],
-            },
+        # The live model catalog is fetched through this endpoint; model
+        # names are never hardcoded in this registry.
+        "models_api": {
+            "path": "/models",
+            "auth": "bearer",
         },
     },
     "anthropic": {
@@ -190,6 +188,10 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
             # The SDK appends the API path itself; a full endpoint URL
             # produces a doubled path and confusing failures.
             "base_url": "Bare origin only - the SDK appends the API path (e.g. /v1/messages). Do not include it.",
+        },
+        "models_api": {
+            "path": "/v1/models",
+            "auth": "x-api-key",
         },
     },
 }
@@ -217,7 +219,6 @@ def provider_schema(provider: str) -> Optional[dict[str, Any]]:
     placeholders = entry.get("placeholders", {})
     field_help = entry.get("field_help", {})
     defaults = entry.get("defaults", {})
-    field_overrides = entry.get("field_overrides", {})
 
     fields: list[dict[str, Any]] = []
     for field in _COMMON_FIELDS:
@@ -230,8 +231,6 @@ def provider_schema(provider: str) -> Optional[dict[str, Any]]:
             field["help"] = field_help[field["name"]]
         if field["name"] in defaults:
             field["default"] = defaults[field["name"]]
-        if field["name"] in field_overrides:
-            field.update(field_overrides[field["name"]])
         fields.append(field)
 
     return {
@@ -261,3 +260,55 @@ def available_provider_schemas(provider: Optional[str] = None) -> list[dict[str,
         if schema:
             schemas.append(schema)
     return schemas
+
+
+# API version used for the Anthropic models list call.
+ANTHROPIC_MODELS_API_VERSION = "2026-10-21"
+
+
+def build_models_request(
+    provider: str,
+    api_key: str,
+    base_url: Optional[str] = None,
+) -> Optional[tuple[str, dict[str, str]]]:
+    """Build the outbound request for a provider's live model catalog.
+
+    Returns (url, headers), or None when the provider is not declared or
+    publishes no models API. ``base_url`` from the configuration form
+    wins over the provider default. The API key only ever lands in the
+    request headers.
+    """
+    entry = PROVIDER_REGISTRY.get(provider)
+    if entry is None:
+        return None
+    models_api = entry.get("models_api")
+    if not models_api:
+        return None
+
+    origin = (base_url or entry.get("defaults", {}).get("base_url", "")).rstrip("/")
+    headers: dict[str, str] = {"Accept": "application/json"}
+    if models_api["auth"] == "x-api-key":
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = ANTHROPIC_MODELS_API_VERSION
+    else:  # bearer: OpenAI-style catalogs (e.g. DeepSeek)
+        headers["Authorization"] = f"Bearer {api_key}"
+    return f"{origin}{models_api['path']}", headers
+
+
+def normalize_models_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten a provider models payload into UI-friendly descriptors.
+
+    Handles the Anthropic shape (id/display_name/max_input_tokens) and
+    the OpenAI shape (id only). Entries without an id are skipped.
+    """
+    models: list[dict[str, Any]] = []
+    for item in payload.get("data", []):
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        model: dict[str, Any] = {"id": str(item["id"])}
+        if item.get("display_name"):
+            model["display_name"] = str(item["display_name"])
+        if item.get("max_input_tokens"):
+            model["max_input_tokens"] = int(item["max_input_tokens"])
+        models.append(model)
+    return models

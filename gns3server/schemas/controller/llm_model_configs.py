@@ -330,3 +330,31 @@ class ProviderSchemaListResponse(BaseModel):
 
     providers: list[ProviderSchemaInfo]
     total: int
+
+
+class ProviderModelsRequest(BaseModel):
+    """Request for a provider's live model catalog.
+
+    The API key is request-scoped: it is forwarded to the provider for
+    this one call and never stored or logged.
+    """
+
+    provider: str = Field(..., description="LLM provider")
+    base_url: Optional[str] = Field(None, description="Provider API base URL; defaults to the provider's known origin")
+    api_key: Optional[str] = Field(None, description="Provider API key (request-scoped, not stored)")
+
+
+class ProviderModelInfo(BaseModel):
+    """One model of a provider's catalog."""
+
+    id: str
+    display_name: Optional[str] = None
+    max_input_tokens: Optional[int] = Field(None, description="Context window in tokens, when the provider reports it")
+
+
+class ProviderModelsResponse(BaseModel):
+    """Model catalog fetched live from one provider."""
+
+    provider: str
+    models: list[ProviderModelInfo]
+    total: int

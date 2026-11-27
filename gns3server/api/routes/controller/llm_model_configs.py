@@ -23,12 +23,15 @@ import logging
 from typing import List, Optional
 from uuid import UUID
 
+import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from gns3server import schemas
 from gns3server.agent.gns3_copilot.provider_schema import (
     available_provider_schemas,
+    build_models_request,
     declared_provider_names,
+    normalize_models_payload,
 )
 from gns3server.controller.controller_error import (
     ControllerBadRequestError,
@@ -85,6 +88,71 @@ async def get_llm_provider_schemas(
     """
     provider_schemas = available_provider_schemas(provider)
     return schemas.ProviderSchemaListResponse(providers=provider_schemas, total=len(provider_schemas))
+
+
+# ============================================================================
+# Provider Models Endpoint
+# ============================================================================
+
+# A silent connection must fail fast; model listing is an interactive,
+# form-filling call, not a long-running request.
+_MODELS_FETCH_TIMEOUT_S = 10
+
+
+async def _fetch_provider_models(url: str, headers: dict[str, str]) -> dict:
+    """Call the provider's models endpoint.
+
+    The API key only ever lives in the request headers: it is not logged
+    and never echoed back.
+    """
+    timeout = aiohttp.ClientTimeout(total=_MODELS_FETCH_TIMEOUT_S)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as response:
+                if response.status != 200:
+                    if response.status in (401, 403):
+                        raise ControllerBadRequestError("Could not list models: the provider rejected the API key")
+                    raise ControllerBadRequestError(
+                        f"Could not list models: the provider returned HTTP {response.status}"
+                    )
+                return await response.json()
+    except ControllerBadRequestError:
+        raise
+    except (aiohttp.ClientError, TimeoutError) as e:
+        raise ControllerBadRequestError(f"Could not reach the provider to list models: {e}") from e
+
+
+@router.post(
+    "/llm-model-configs/provider-models",
+    response_model=schemas.ProviderModelsResponse,
+    dependencies=[Depends(has_privilege("LLMConfig.Audit"))],
+)
+async def fetch_llm_provider_models(request: schemas.ProviderModelsRequest) -> schemas.ProviderModelsResponse:
+    """
+    Fetch a provider's model catalog live through the server, so the web
+    UI can offer a model dropdown without hardcoding model names.
+
+    The API key from the request body is forwarded to the provider for
+    this one call; it is never stored or logged. Model fields in the
+    schema stay free text so a failed fetch can still be typed by hand.
+
+    Required privilege: LLMConfig.Audit
+    """
+    if request.provider not in declared_provider_names():
+        raise ControllerBadRequestError(
+            f"Unsupported LLM provider '{request.provider}'. Declared providers: {', '.join(declared_provider_names())}"
+        )
+    if not request.api_key:
+        raise ControllerBadRequestError("An API key is required to fetch the provider's model list")
+
+    built = build_models_request(request.provider, request.api_key, request.base_url)
+    if built is None:
+        raise ControllerBadRequestError(f"Provider '{request.provider}' does not publish a model list API")
+    url, headers = built
+
+    payload = await _fetch_provider_models(url, headers)
+    models = normalize_models_payload(payload)
+    return schemas.ProviderModelsResponse(provider=request.provider, models=models, total=len(models))
 
 
 # ============================================================================

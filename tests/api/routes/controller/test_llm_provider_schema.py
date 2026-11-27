@@ -12,7 +12,9 @@ import os
 import pytest
 import pytest_asyncio
 
+from gns3server.api.routes.controller import llm_model_configs as llm_routes
 from gns3server.config import Config
+from gns3server.controller.controller_error import ControllerBadRequestError
 from gns3server.services.authentication import DEFAULT_JWT_SECRET_KEY
 
 pytestmark = pytest.mark.asyncio
@@ -69,13 +71,17 @@ class TestProviderSchemaEndpoint:
             assert fields["base_url"]["default"]
             assert fields["context_limit"]["default"] == 1000
 
-    async def test_deepseek_model_is_enumerated_dropdown(self, client, app) -> None:
-        response = await client.get(app.url_path_for("get_llm_provider_schemas") + "?provider=deepseek")
+    async def test_model_field_is_free_text(self, client, app) -> None:
+        """Model names are never hardcoded; the catalog comes from the
+        live fetch endpoint, with free text as the fallback."""
+        response = await client.get(app.url_path_for("get_llm_provider_schemas"))
 
         assert response.status_code == 200
-        fields = {f["name"]: f for f in response.json()["providers"][0]["fields"]}
-        assert fields["model"]["type"] == "select"
-        assert fields["model"]["options"] == ["deepseek-flash", "deepseek-v4-pro"]
+        for provider in response.json()["providers"]:
+            fields = {f["name"]: f for f in provider["fields"]}
+            assert fields["model"]["type"] == "string"
+            # Serialized ProviderField always carries the key; unset is null
+            assert fields["model"]["options"] is None
 
 
 class TestProviderValidationOnSave:
@@ -159,3 +165,78 @@ class TestProviderValidationOnSave:
         )
 
         assert response.status_code == 200, response.text
+
+
+class TestProviderModelsEndpoint:
+    async def test_rejects_undeclared_provider(self, client, app) -> None:
+        url = app.url_path_for("fetch_llm_provider_models")
+        response = await client.post(url, json={"provider": "ollama", "api_key": "k"})
+
+        assert response.status_code == 400
+        assert "Unsupported LLM provider" in response.json()["message"]
+
+    async def test_requires_api_key(self, client, app) -> None:
+        url = app.url_path_for("fetch_llm_provider_models")
+        response = await client.post(url, json={"provider": "deepseek"})
+
+        assert response.status_code == 400
+        assert "API key" in response.json()["message"]
+
+    async def test_returns_live_catalog(self, client, app, monkeypatch) -> None:
+        async def fake_fetch(url: str, headers: dict) -> dict:
+            assert "api.deepseek.com" in url
+            assert headers["Authorization"] == "Bearer k-test"
+            return {"data": [{"id": "deepseek-flash"}, {"id": "deepseek-v4-pro"}]}
+
+        monkeypatch.setattr(llm_routes, "_fetch_provider_models", fake_fetch)
+        url = app.url_path_for("fetch_llm_provider_models")
+        response = await client.post(url, json={"provider": "deepseek", "api_key": "k-test"})
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["provider"] == "deepseek"
+        assert [m["id"] for m in data["models"]] == ["deepseek-flash", "deepseek-v4-pro"]
+        assert data["total"] == 2
+
+    async def test_provider_auth_error_maps_to_400(self, client, app, monkeypatch) -> None:
+        async def fake_fetch(url: str, headers: dict) -> dict:
+            raise ControllerBadRequestError("Could not list models: the provider rejected the API key")
+
+        monkeypatch.setattr(llm_routes, "_fetch_provider_models", fake_fetch)
+        url = app.url_path_for("fetch_llm_provider_models")
+        response = await client.post(url, json={"provider": "anthropic", "api_key": "bad"})
+
+        assert response.status_code == 400
+        assert "rejected the API key" in response.json()["message"]
+
+    async def test_fetch_maps_http_status(self, monkeypatch) -> None:
+        class FakeResponse:
+            def __init__(self, status_code: int) -> None:
+                self.status = status_code
+
+            async def json(self) -> dict:
+                return {}
+
+            async def __aenter__(self) -> "FakeResponse":
+                return self
+
+            async def __aexit__(self, *exc: object) -> bool:
+                return False
+
+        class FakeSession:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> "FakeSession":
+                return self
+
+            async def __aexit__(self, *exc: object) -> bool:
+                return False
+
+            def get(self, url: str, headers: dict | None = None) -> FakeResponse:
+                return FakeResponse(401)
+
+        monkeypatch.setattr(llm_routes.aiohttp, "ClientSession", FakeSession)
+        with pytest.raises(ControllerBadRequestError) as exc_info:
+            await llm_routes._fetch_provider_models("https://example.com/models", {})
+        assert "rejected the API key" in str(exc_info.value)
