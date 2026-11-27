@@ -75,3 +75,47 @@ def test_title_model_gets_the_same_controls(captured: dict[str, Any]) -> None:
     assert captured["timeout"] == model_factory.DEFAULT_REQUEST_TIMEOUT_S
     assert captured["max_retries"] == model_factory.DEFAULT_MAX_RETRIES
     assert captured["stream_usage"] is True
+
+
+def test_base_model_keeps_configured_temperature(captured: dict[str, Any]) -> None:
+    model_factory.create_base_model(_config())
+    assert captured["temperature"] == "0.3"
+
+
+def test_missing_temperature_defaults_to_zero(captured: dict[str, Any]) -> None:
+    config = _config()
+    del config["temperature"]
+    model_factory.create_base_model(config)
+    assert captured["temperature"] == "0"
+
+
+def test_anthropic_base_model_gets_no_temperature(captured: dict[str, Any]) -> None:
+    """The Anthropic API rejects sampling parameters on every model."""
+    model_factory.create_base_model(
+        _config(provider="anthropic", model="claude-opus-5-5", base_url="https://api.anthropic.com")
+    )
+    assert captured["temperature"] is None
+
+
+def test_anthropic_title_model_gets_no_temperature(captured: dict[str, Any]) -> None:
+    model_factory.create_title_model(
+        _config(provider="anthropic", model="claude-opus-5-5", base_url="https://api.anthropic.com")
+    )
+    assert captured["temperature"] is None
+
+
+def test_title_model_keeps_creative_temperature_for_other_providers(
+    captured: dict[str, Any],
+) -> None:
+    model_factory.create_title_model(_config())
+    assert captured["temperature"] == "1.0"
+
+
+def test_anthropic_temperature_override_is_disabled() -> None:
+    """No runtime configurable override, or the constructor None is undone."""
+    assert model_factory.temperature_override(_config(provider="anthropic")) is None
+
+
+def test_other_providers_keep_temperature_override() -> None:
+    override = model_factory.temperature_override(_config())
+    assert override == {"configurable": {"foo_temperature": "1.0"}}

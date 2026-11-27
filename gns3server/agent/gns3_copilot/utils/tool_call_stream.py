@@ -166,8 +166,12 @@ class ToolCallStreamAccumulator:
                     # Clear the current tool call state
                     self._current_tool_call = None
 
-            # Also handle regular content (when not in tool call mode)
-            content = getattr(chunk, "content", "")
+            # Also handle regular content (when not in tool call mode).
+            # Streaming chunks carry content as plain text or as a list of
+            # content blocks (the langchain block format); the .text property
+            # flattens both to plain text so the str-typed API chunk
+            # validates (thinking/tool_use blocks are not exposed).
+            content = getattr(chunk, "text", "") or ""
             if content and not self._current_tool_call:
                 chunks.append(
                     {

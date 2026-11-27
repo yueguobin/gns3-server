@@ -43,6 +43,12 @@ logger = logging.getLogger(__name__)
 # construction time, so the parameters are added only where they work.
 _REQUEST_CONTROL_PROVIDERS = frozenset({"openai", "deepseek", "anthropic", "xai"})
 
+# The Anthropic API (2026-10-21+) rejects sampling parameters
+# (temperature/top_p/top_k) on every model with a 400 "`temperature` is
+# deprecated for this model", so temperature is never sent to Anthropic -
+# neither at construction time nor as a runtime configurable override.
+_NO_SAMPLING_PARAMS_PROVIDERS = frozenset({"anthropic"})
+
 # Without a timeout a wedged connection waits for the SDK default of 600s
 # (seen in the field: one request stayed silent for 10 minutes, then the
 # SDK retried on a fresh connection and got 200 OK in under a second).
@@ -73,7 +79,7 @@ def _request_controls(llm_config: Optional[dict[str, Any]]) -> dict[str, Any]:
 
 def _load_llm_config(
     llm_config: Optional[dict[str, Any]] = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """
     Convert llm_config dict to model factory format.
 
@@ -81,7 +87,8 @@ def _load_llm_config(
         llm_config: Configuration dictionary from database
 
     Returns:
-        Dictionary containing model configuration.
+        Dictionary containing model configuration. ``temperature`` is None
+        for providers that reject sampling parameters (anthropic).
 
     Raises:
         ValueError: If configuration is missing or invalid.
@@ -95,13 +102,33 @@ def _load_llm_config(
         llm_config.get("model"),
     )
 
+    temperature: Optional[str] = str(llm_config.get("temperature", "0"))
+    if llm_config.get("provider") in _NO_SAMPLING_PARAMS_PROVIDERS:
+        temperature = None
+
     return {
         "model_name": llm_config.get("model", ""),
         "model_provider": llm_config.get("provider", ""),
         "api_key": llm_config.get("api_key", ""),
         "base_url": llm_config.get("base_url", ""),
-        "temperature": str(llm_config.get("temperature", "0")),
+        "temperature": temperature,
     }
+
+
+def temperature_override(
+    llm_config: Optional[dict[str, Any]] = None,
+    temperature: Optional[str] = "1.0",
+) -> Optional[dict[str, Any]]:
+    """Configurable temperature for ``invoke(config=...)`` calls.
+
+    With ``configurable_fields="any"`` this runtime value overrides the
+    constructor default. Returns None for providers that reject sampling
+    parameters, so their (unset) constructor value is used as is.
+    """
+    provider = (llm_config or {}).get("provider")
+    if provider in _NO_SAMPLING_PARAMS_PROVIDERS:
+        return None
+    return {"configurable": {"foo_temperature": temperature}}
 
 
 def create_base_model(
@@ -129,7 +156,7 @@ def create_base_model(
         config_vars["model_name"],
         config_vars["model_provider"],
         config_vars["base_url"] if config_vars["base_url"] else "default",
-        config_vars["temperature"],
+        config_vars["temperature"] if config_vars["temperature"] is not None else "not sent",
     )
 
     # Validate required fields
@@ -178,7 +205,8 @@ def create_title_model(
 
     This creates a model instance suitable for generating conversation titles.
     It uses the same configuration as the base model but with a higher
-    temperature for more creative output.
+    temperature for more creative output (temperature is not sent for
+    providers that reject sampling parameters).
 
     Args:
         llm_config: Configuration dictionary from database
@@ -193,11 +221,16 @@ def create_title_model(
     """
     config_vars = _load_llm_config(llm_config)
 
+    title_temperature: Optional[str] = "1.0"  # Higher temperature for more creative titles
+    if config_vars["model_provider"] in _NO_SAMPLING_PARAMS_PROVIDERS:
+        title_temperature = None
+
     logger.info(
-        "Creating title model: name=%s, provider=%s, base_url=%s, temperature=1.0",
+        "Creating title model: name=%s, provider=%s, base_url=%s, temperature=%s",
         config_vars["model_name"],
         config_vars["model_provider"],
         config_vars["base_url"] if config_vars["base_url"] else "default",
+        title_temperature if title_temperature is not None else "not sent",
     )
 
     # Validate required fields
@@ -214,7 +247,7 @@ def create_title_model(
             "model_provider": config_vars["model_provider"],
             "api_key": config_vars["api_key"],
             "base_url": config_vars["base_url"],
-            "temperature": "1.0",  # Higher temperature for more creative titles
+            "temperature": title_temperature,
             "configurable_fields": "any",
             "config_prefix": "foo",
             **_request_controls(llm_config),

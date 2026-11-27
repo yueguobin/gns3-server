@@ -54,7 +54,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 # Third-party imports
-from langchain.messages import AnyMessage, SystemMessage, ToolMessage
+from langchain.messages import AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.managed.is_last_step import RemainingSteps
@@ -68,6 +68,7 @@ from gns3server.agent.gns3_copilot.agent.model_factory import (
     create_base_model,
     create_base_model_with_tools,
     create_title_model,
+    temperature_override,
 )
 from gns3server.agent.gns3_copilot.gns3_client import GNS3TopologyTool
 from gns3server.agent.gns3_copilot.gns3_client.context_helpers import (
@@ -467,6 +468,11 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     prepared_messages = prepared_state["messages"]
     logger.info("Messages prepared: %d → %d", len(messages), len(prepared_messages))
 
+    # Replay must not carry thinking blocks: their signatures are bound to
+    # the system prompt of the call that produced them, and this agent
+    # re-injects a fresh topology snapshot on every call.
+    prepared_messages = _strip_replayed_thinking(prepared_messages)
+
     if budget_exhausted:
         prepared_messages = [*prepared_messages, SystemMessage(content=BUDGET_WRAPUP_INSTRUCTION)]
 
@@ -505,6 +511,35 @@ def llm_call(state: dict, config: RunnableConfig | None = None):
     }
 
 
+def _strip_replayed_thinking(messages: list[AnyMessage]) -> list[AnyMessage]:
+    """
+    Drop thinking blocks from replayed history.
+
+    Claude 5.x thinking blocks carry a signature bound to the exact
+    conversation prefix (system prompt included) they were produced with.
+    This agent re-injects a live topology snapshot into the system prompt
+    on every call, so that prefix always drifts and replayed thinking
+    blocks fail signature validation with a 400. Removing the blocks is
+    the API's own sanctioned remedy; the model re-thinks when none are
+    present. Providers without block-style thinking are unaffected.
+    """
+    stripped: list[AnyMessage] = []
+    for message in messages:
+        content = message.content
+        if isinstance(content, list):
+            kept = [
+                block
+                for block in content
+                if not (isinstance(block, dict) and block.get("type") in ("thinking", "redacted_thinking"))
+            ]
+            if len(kept) != len(content):
+                if not kept:
+                    kept = [{"type": "text", "text": ""}]
+                message = message.model_copy(update={"content": kept})
+        stripped.append(message)
+    return stripped
+
+
 # Define generate title node
 def generate_title(state: MessagesState, config: RunnableConfig | None = None) -> dict:
     """
@@ -532,11 +567,16 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
             logger.error("Title prompt not found in external repository")
             return {"conversation_title": UNTITLED_SESSION_FALLBACK, "session_id": state.get("session_id")}
 
-        # Build the prompt for title generation
+        # Build the prompt for title generation. The transcript goes into a
+        # single trailing user message: the current Anthropic models reject
+        # assistant-message prefill (the request must end with a user
+        # message), and the stored message contents may be block lists
+        # rather than plain strings (the .text property flattens both).
         title_prompt_messages = [
             SystemMessage(content=title_prompt),
-            messages[0],  # User's first message
-            messages[-1],  # Assistant's final response in this turn
+            HumanMessage(
+                content=(f"User: {messages[0].text}\n\nAssistant: {messages[-1].text}\n\nGenerate the title now.")
+            ),
         ]
 
         # Call the title generation model (create fresh instance for each call)
@@ -544,9 +584,9 @@ def generate_title(state: MessagesState, config: RunnableConfig | None = None) -
             title_model = create_title_model(llm_config=llm_config)
             response = title_model.invoke(
                 title_prompt_messages,
-                config={"configurable": {"foo_temperature": 1.0}},
+                config=temperature_override(llm_config),
             )
-            raw_content = response.content
+            raw_content = response.text
 
             new_title = raw_content.strip()
 
