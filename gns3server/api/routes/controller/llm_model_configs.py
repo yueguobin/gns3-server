@@ -20,12 +20,16 @@ API routes for LLM model configurations.
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from gns3server import schemas
+from gns3server.agent.gns3_copilot.provider_schema import (
+    available_provider_schemas,
+    declared_provider_names,
+)
 from gns3server.controller.controller_error import (
     ControllerBadRequestError,
     ControllerNotFoundError,
@@ -53,6 +57,34 @@ def _filter_api_key_from_config(config: dict) -> dict:
     if "api_key" in filtered:
         filtered["api_key"] = None
     return filtered
+
+
+# ============================================================================
+# Provider Schema Endpoint
+# ============================================================================
+
+
+@router.get(
+    "/llm-model-configs/provider-schema",
+    response_model=schemas.ProviderSchemaListResponse,
+    dependencies=[Depends(has_privilege("LLMConfig.Audit"))],
+)
+async def get_llm_provider_schemas(
+    provider: Optional[str] = None,
+) -> schemas.ProviderSchemaListResponse:
+    """
+    Field descriptors for the supported LLM providers, so the web UI can
+    render the configuration form dynamically instead of hardcoding
+    provider differences.
+
+    Returns the intersection of providers declared in the registry
+    (gns3server/agent/gns3_copilot/provider_schema.py) and langchain
+    integration packages installed on this server.
+
+    Required privilege: LLMConfig.Audit
+    """
+    provider_schemas = available_provider_schemas(provider)
+    return schemas.ProviderSchemaListResponse(providers=provider_schemas, total=len(provider_schemas))
 
 
 # ============================================================================
@@ -201,6 +233,14 @@ async def create_user_llm_model_config(
             "and specify it in the configuration."
         )
 
+    # The provider must have declared metadata so the web UI can render a
+    # form for it
+    if config_create.provider not in declared_provider_names():
+        raise ControllerBadRequestError(
+            f"Unsupported LLM provider '{config_create.provider}'. "
+            f"Declared providers: {', '.join(declared_provider_names())}"
+        )
+
     try:
         # Extract config fields (excluding table-level fields)
         config_fields = config_create.model_dump(exclude={"name", "model_type", "is_default"})
@@ -250,6 +290,23 @@ async def update_user_llm_model_config(
 
     Required privilege: LLMConfig.Modify
     """
+
+    # Reject switching to a provider without declared metadata. A legacy
+    # config with an unknown provider may still be saved unchanged.
+    stored_config = await llm_repo.get_user_config(config_id)
+    if stored_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"LLM model configuration '{config_id}' not found"
+        )
+    new_provider = config_update.provider
+    if (
+        new_provider
+        and new_provider != (stored_config.config or {}).get("provider")
+        and new_provider not in declared_provider_names()
+    ):
+        raise ControllerBadRequestError(
+            f"Unsupported LLM provider '{new_provider}'. Declared providers: {', '.join(declared_provider_names())}"
+        )
 
     try:
         # Build updates dict with only non-None values
@@ -509,6 +566,14 @@ async def create_group_llm_model_config(
             "and specify it in the configuration."
         )
 
+    # The provider must have declared metadata so the web UI can render a
+    # form for it
+    if config_create.provider not in declared_provider_names():
+        raise ControllerBadRequestError(
+            f"Unsupported LLM provider '{config_create.provider}'. "
+            f"Declared providers: {', '.join(declared_provider_names())}"
+        )
+
     try:
         # Extract config fields (excluding table-level fields)
         config_fields = config_create.model_dump(exclude={"name", "model_type", "is_default"})
@@ -558,6 +623,23 @@ async def update_group_llm_model_config(
 
     Required privilege: Group.Modify
     """
+
+    # Reject switching to a provider without declared metadata. A legacy
+    # config with an unknown provider may still be saved unchanged.
+    stored_config = await llm_repo.get_group_config(config_id)
+    if stored_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"LLM model configuration '{config_id}' not found"
+        )
+    new_provider = config_update.provider
+    if (
+        new_provider
+        and new_provider != (stored_config.config or {}).get("provider")
+        and new_provider not in declared_provider_names()
+    ):
+        raise ControllerBadRequestError(
+            f"Unsupported LLM provider '{new_provider}'. Declared providers: {', '.join(declared_provider_names())}"
+        )
 
     try:
         # Build updates dict with only non-None values

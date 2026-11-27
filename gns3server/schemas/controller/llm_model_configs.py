@@ -186,6 +186,18 @@ class LLMModelConfigUpdate(BaseModel):
             return int(v)
         return v
 
+    @field_validator("max_steps", "request_timeout", mode="before")
+    @classmethod
+    def validate_optional_numbers(cls, v):
+        """Handle string 'null' values for the other optional numbers.
+
+        The web UI serializes empty form fields as the string 'null';
+        max_tokens already tolerates this, the remaining fields must too.
+        """
+        if v == "null" or v == "":
+            return None
+        return v
+
 
 # Response schema without API key (for security)
 class LLMModelConfigDataWithoutSecret(BaseModel):
@@ -276,4 +288,45 @@ class LLMModelConfigListResponse(BaseModel):
 
     configs: list[LLMModelConfigResponse]
     default_config: Optional[LLMModelConfigResponse] = None
+    total: int
+
+
+class ProviderCapabilities(BaseModel):
+    """What a provider supports. Drives which UI blocks are rendered."""
+
+    sampling: bool = Field(True, description="Provider accepts temperature; False hides the temperature field")
+    request_controls: bool = Field(
+        False, description="Provider chat model accepts timeout/retry controls; False hides request_timeout"
+    )
+    reasoning_toggle: bool = Field(False, description="Provider has a reasoning/thinking mode toggle")
+
+
+class ProviderField(BaseModel):
+    """One configuration field descriptor for dynamic form rendering."""
+
+    name: str
+    type: Literal["string", "int", "float", "bool", "secret", "select"]
+    required: bool = False
+    label: str
+    help: Optional[str] = None
+    placeholder: Optional[str] = None
+    default: Optional[Union[str, int, float]] = None
+    options: Optional[list[str]] = None
+    advanced: bool = Field(False, description="Fold into the advanced section of the form")
+
+
+class ProviderSchemaInfo(BaseModel):
+    """Renderable schema for one provider."""
+
+    provider: str
+    display_name: str
+    integration_module: str = Field(..., description="Langchain integration package this provider requires")
+    capabilities: ProviderCapabilities
+    fields: list[ProviderField]
+
+
+class ProviderSchemaListResponse(BaseModel):
+    """Provider schemas the web UI may render (declared AND installed)."""
+
+    providers: list[ProviderSchemaInfo]
     total: int

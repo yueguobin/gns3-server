@@ -119,6 +119,10 @@ try:
         LLMModelConfigResponse,
         LLMModelConfigUpdate,
         LLMModelConfigWithSource,
+        ProviderCapabilities,
+        ProviderField,
+        ProviderSchemaInfo,
+        ProviderSchemaListResponse,
     )
 except ImportError:
     # AI schemas are not available (should not happen as they don't depend on external libs)
@@ -384,6 +388,10 @@ __all__ = [
     "ProjectShareResult",
     "ProjectStats",
     "ProjectUpdate",
+    "ProviderCapabilities",
+    "ProviderField",
+    "ProviderSchemaInfo",
+    "ProviderSchemaListResponse",
     "Qemu",
     "QemuCreate",
     "QemuDiskImageCreate",
