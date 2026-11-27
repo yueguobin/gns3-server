@@ -58,7 +58,7 @@ _COMMON_FIELDS: list[dict[str, Any]] = [
         "type": "string",
         "required": True,
         "label": "Model",
-        "help": "Model name as spelled by the provider, e.g. deepseek-chat, claude-opus-5-5",
+        "help": "Model name as spelled by the provider, e.g. deepseek-flash, claude-opus-5-5",
     },
     {
         "name": "api_key",
@@ -152,7 +152,7 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
             "reasoning_toggle": True,
         },
         "placeholders": {
-            "model": "deepseek-chat",
+            "model": "deepseek-flash",
             "base_url": "https://api.deepseek.com/v1",
         },
     },

@@ -24,7 +24,7 @@ def _config_payload(provider: str) -> dict:
         "model_type": "text",
         "provider": provider,
         "base_url": "https://api.deepseek.com/v1" if provider == "deepseek" else "https://api.example.com",
-        "model": "deepseek-chat",
+        "model": "deepseek-flash",
         "api_key": "test-key",
         "context_limit": 128,
     }
